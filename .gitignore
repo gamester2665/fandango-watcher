@@ -1,0 +1,28 @@
+# Secrets & local overrides
+.env
+config.yaml
+
+# Runtime artifacts (volume-mounted in Docker; local-only otherwise)
+artifacts/
+state/
+browser-profile/
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,100 @@
+# =============================================================================
+# fandango_watcher — local + VPS portable compose file.
+#
+# Usage:
+#   cp .env.example .env && edit .env
+#   cp config.example.yaml config.yaml && edit config.yaml (seats, targets)
+#
+#   # One-time headed login (uses host display; see README for platform notes):
+#   docker compose run --rm login
+#
+#   # Long-running watcher + purchaser:
+#   docker compose up -d
+#
+#   # Tail logs:
+#   docker compose logs -f watcher
+# =============================================================================
+
+x-common-env: &common-env
+  env_file:
+    - .env
+  environment:
+    - WATCHER_CONFIG=/app/config.yaml
+
+x-common-volumes: &common-volumes
+  volumes:
+    - fandango_profile:/app/browser-profile
+    - fandango_artifacts:/app/artifacts
+    - fandango_state:/app/state
+    # Mount the user's real config over the bundled example so edits to
+    # config.yaml on the host apply without a rebuild.
+    - ./config.yaml:/app/config.yaml:ro
+
+services:
+  # ---------------------------------------------------------------------------
+  # Long-running watcher (polls Fandango, notifies, purchases on transition).
+  # This is the default service brought up by `docker compose up -d`.
+  # ---------------------------------------------------------------------------
+  watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fandango_watcher:latest
+    container_name: fandango_watcher
+    restart: unless-stopped
+    <<: [*common-env, *common-volumes]
+    environment:
+      - WATCHER_CONFIG=/app/config.yaml
+      - WATCHER_MODE=watch
+    ports:
+      - "127.0.0.1:8787:8787"          # healthz only bound to loopback by default
+    command: ["watch"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/healthz"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # ---------------------------------------------------------------------------
+  # One-shot headed Chromium for the initial Fandango + AMC Stubs login.
+  # Profile persists to the `fandango_profile` volume and is reused by watcher.
+  #
+  # Linux hosts: forward X11 with `xhost +local:root` and the DISPLAY env.
+  # macOS/Windows hosts: run an X server (XQuartz / VcXsrv) or use headed on
+  #   your host directly via `uv run playwright codegen` and import the
+  #   resulting storage state (see README for details).
+  # ---------------------------------------------------------------------------
+  login:
+    image: fandango_watcher:latest
+    profiles: ["tools"]                  # only started when explicitly requested
+    <<: [*common-env, *common-volumes]
+    environment:
+      - WATCHER_CONFIG=/app/config.yaml
+      - WATCHER_MODE=once
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - fandango_profile:/app/browser-profile
+      - fandango_artifacts:/app/artifacts
+      - fandango_state:/app/state
+      - ./config.yaml:/app/config.yaml:ro
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw # Linux X11 socket (ignored elsewhere)
+    command: ["login"]
+
+  # ---------------------------------------------------------------------------
+  # One-shot single-crawl runner for manual testing of the detection pipeline.
+  # Never sends notifications; never clicks "Complete Reservation."
+  # ---------------------------------------------------------------------------
+  once:
+    image: fandango_watcher:latest
+    profiles: ["tools"]
+    <<: [*common-env, *common-volumes]
+    environment:
+      - WATCHER_CONFIG=/app/config.yaml
+      - WATCHER_MODE=dry-run
+    command: ["once", "--dry-run"]
+
+volumes:
+  fandango_profile:                      # warmed browser session (cookies, A-List)
+  fandango_artifacts:                    # screenshots + purchase-attempt traces
+  fandango_state:                        # state.json / SQLite

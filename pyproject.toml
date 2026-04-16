@@ -1,0 +1,38 @@
+[project]
+name = "fandango-watcher"
+version = "0.1.0"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "playwright>=1.58.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.13.1",
+    "pyyaml>=6.0.3",
+    "twilio>=9.10.5",
+]
+
+[project.scripts]
+fandango-watcher = "fandango_watcher:main"
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:pydantic._internal._config",
+    # http.server on Windows + Python 3.13 occasionally finalizes a closed
+    # socket with a harmless ResourceWarning that pytest re-raises as
+    # PytestUnraisableExceptionWarning. Our healthz integration tests hit
+    # this every run; suppress to keep the suite deterministic.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]

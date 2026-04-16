@@ -1,0 +1,40 @@
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# Local venvs and caches
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Secrets and local config
+.env
+config.yaml
+
+# Runtime artifacts (these are volume-mounted at runtime)
+artifacts/
+state/
+browser-profile/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Docs / scratch
+*.log
+*.tmp
+PLAN.md
+README.md

@@ -1,0 +1,163 @@
+# =============================================================================
+# fandango_watcher — example config. Copy to `config.yaml` and customize.
+#
+# `config.yaml` is mounted read-only into the container at /app/config.yaml
+# via docker-compose.yml. Secrets (Twilio, SMTP, Anthropic) live in .env.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# URLs to crawl on each tick. The first entry is primary; additional entries
+# act as backups for format-filtered routes or alternate slugs.
+# -----------------------------------------------------------------------------
+targets:
+  - name: odyssey-imax-70mm
+    url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview?format=IMAX%2070MM
+    wait_until: domcontentloaded
+    timeout_ms: 30000
+
+  - name: odyssey-overview
+    url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview
+    wait_until: domcontentloaded
+    timeout_ms: 30000
+
+# -----------------------------------------------------------------------------
+# Theater identity. We only alert / purchase when this theater's card shows
+# populated bookable showtimes.
+# -----------------------------------------------------------------------------
+theater:
+  display_name: "AMC Universal CityWalk 19 + IMAX"
+  # Substring matched against theater-card headings on Fandango.
+  fandango_theater_anchor: "AMC Universal CityWalk"
+
+# -----------------------------------------------------------------------------
+# Which formats trigger alerts vs. auto-purchase. Values map to FormatTag
+# enum values in src/fandango_watcher/models.py.
+# -----------------------------------------------------------------------------
+formats:
+  # Fire SMS + email + purchaser on these.
+  require: [IMAX, IMAX_70MM]
+  # Also auto-purchase if these drop; no separate alert scheduling.
+  include: [DOLBY, LASER_RECLINER]
+
+# -----------------------------------------------------------------------------
+# Polling cadence. Defaults target ~5 min with small jitter; increase if
+# Fandango starts pushing back (403s, throttling, empty DOMs).
+# -----------------------------------------------------------------------------
+poll:
+  min_seconds: 270
+  max_seconds: 330
+  error_backoff_multiplier: 2
+  error_backoff_cap_seconds: 1800
+
+# -----------------------------------------------------------------------------
+# Positive-ticketing heuristic inputs used by the Schema A/B/C classifier.
+# Prefer evidence of real theater cards over bare text matches.
+# -----------------------------------------------------------------------------
+signal:
+  page_text_contains_any:
+    - "Get Tickets"
+    - "Buy Tickets"
+    - "Reserve Seats"
+  require_theater_card_for: "AMC Universal CityWalk"
+
+# -----------------------------------------------------------------------------
+# Purchase tier. `mode: full_auto` is the default because A-List reduces the
+# blast radius of a mistake to near zero, and the $0.00 invariant below is
+# the hard kill switch that prevents any non-free purchase.
+# -----------------------------------------------------------------------------
+purchase:
+  enabled: true
+  # full_auto | hold_and_confirm | notify_only
+  mode: full_auto
+
+  # The $0.00 invariant: "Complete Reservation" is clicked ONLY when every
+  # check here passes on the review page. Python re-reads the DOM directly.
+  invariant:
+    require_total_equals: "$0.00"
+    require_benefit_phrase_any:
+      - "AMC Stubs A-List"
+      - "A-List Benefit"
+      - "Stubs A-List"
+    # These are cross-checked against what the watcher enqueued.
+    require_theater_match: true
+    require_showtime_match: true
+    require_seat_match: true
+
+  # Format -> auditorium -> priority-ordered seat list. The purchaser picks
+  # the first available seat from the list.
+  seat_priority:
+    IMAX_70MM:
+      auditorium: 19
+      seats: [N10, N11, N12, N13, N14, N15, N16, N17]
+    IMAX:
+      auditorium: 19
+      seats: [N10, N11, N12, N13, N14, N15, N16, N17]
+    DOLBY:                            # "Prime" at CityWalk
+      auditorium: 1
+      seats: [E9, E10, E11, E12]
+    LASER_RECLINER:
+      auditorium: 14
+      seats: [H8]                     # balcony Row H, seat 8
+
+  # If none of the preferred seats in `seat_priority[format]` are available,
+  # what do we do? v1 = stop and SMS the human (do NOT grab any random seat).
+  on_preferred_sold_out: notify_only  # notify_only | try_next_showtime
+  max_quantity: 1
+
+# -----------------------------------------------------------------------------
+# Computer-use fallback. Runs only when the scripted purchaser fails
+# mid-checkout. The Python $0.00 invariant still gates the final click.
+# -----------------------------------------------------------------------------
+agent_fallback:
+  enabled: true
+  model: claude-sonnet-4-5
+  invoke_only_on:
+    - scripted_selector_failure
+    - scripted_step_timeout
+  max_steps: 40
+  max_cost_usd: 2.00                  # hard ceiling per invocation
+
+# -----------------------------------------------------------------------------
+# Notifications. Both channels fire in parallel on every listed event.
+# -----------------------------------------------------------------------------
+notify:
+  channels: [twilio, smtp]
+  on_events:
+    - release_transition_bad_to_good
+    - purchase_succeeded
+    - purchase_held_for_confirm
+    - purchase_halted_invariant
+    - purchase_halted_preferred_sold_out
+    - purchase_failed_scripted
+    - watcher_stuck_on_error_streak
+
+# -----------------------------------------------------------------------------
+# Screenshot retention. Every crawl writes a timestamped PNG; each purchase
+# attempt writes a labeled PNG per step under purchase-attempts/<ts>/.
+# -----------------------------------------------------------------------------
+screenshots:
+  dir: /app/artifacts/screenshots
+  max_age_days: 7
+  per_purchase_dir: /app/artifacts/purchase-attempts
+  # Optional safety net on top of max_age_days.
+  keep_last_n: 200
+
+# -----------------------------------------------------------------------------
+# Per-target state persistence. The watch loop writes one JSON per target
+# so a restart resumes cleanly (no duplicate "tickets live" alerts).
+# -----------------------------------------------------------------------------
+state:
+  dir: /app/state
+
+# -----------------------------------------------------------------------------
+# Browser. Headless in production; the `login` compose service overrides to
+# headed for the one-time Fandango + AMC Stubs login.
+# -----------------------------------------------------------------------------
+browser:
+  headless: true
+  user_data_dir: /app/browser-profile
+  locale: en-US
+  timezone: America/Los_Angeles
+  viewport:
+    width: 1440
+    height: 900
