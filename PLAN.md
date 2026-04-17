@@ -655,6 +655,39 @@ remains the **sole** gate on the final "Complete Reservation" click.
 
 ---
 
+## Field notes (real drops & UI behavior)
+
+Observed around **The Mandalorian and Grogu** (Fandango / IMAX context; confirm
+timezone vs. your machine — likely Pacific if tied to CityWalk Hollywood).
+
+**On-sale window**
+
+- Tickets actually became purchasable in a **narrow morning window**, roughly
+  **6:00–6:30 AM** (same calendar day as the drop).
+
+**External signals (email), same morning**
+
+- **6:10 AM** — email from `fandango@movies.fandango.com` (Fandango).
+- **6:30 AM** — email from `noreply@imax.com` (IMAX partner blast).
+
+These are useful **correlates** for human triage or a future optional inbox
+watcher; they must **not** replace DOM-based truth in this repo (Fandango can
+email before/after the exact moment CityWalk cards flip).
+
+**Pre-sale UI trap (day before)**
+
+- **All day the prior day:** showtimes **appeared** in the UI, but choosing a
+  time only surfaced **"Coming soon"** (no real booking path).
+- **Implication for detection:** "has showtime labels" is weaker than "can
+  reach a bookable seat map / checkout." Our three-schema model should treat
+  this as a risk case: either extend parsing to detect **coming-soon / blocked
+  click** states, or tighten `partial_release` / `full_release` criteria so we
+  do not treat placeholder listings as `watchable` until the click path proves
+  bookable. Logged here for Phase 2 classifier calibration and Phase 3
+  notification gating.
+
+---
+
 ## Open questions
 
 1. **A-List coverage proof per format:** capture one real $0.00 Fandango review screenshot for IMAX 70mm, Dolby (Prime), and Laser-at-Recliner at CityWalk so the `require_benefit_phrase_any` list is grounded in actual copy rather than guesses.
