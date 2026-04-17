@@ -185,7 +185,8 @@ class TestSettings:
             "TZ",
             "WATCHER_MODE",
             "TWILIO_ACCOUNT_SID",
-            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.chdir(tmp_path)
@@ -194,7 +195,8 @@ class TestSettings:
         assert s.tz == "America/Los_Angeles"
         assert s.watcher_mode == "watch"
         assert s.twilio_account_sid == ""
-        assert s.anthropic_api_key == ""
+        assert s.openai_api_key == ""
+        assert s.openrouter_api_key == ""
 
     def test_reads_from_environment(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

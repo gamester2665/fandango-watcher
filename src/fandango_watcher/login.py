@@ -87,6 +87,7 @@ def run_login(
                 "width": browser_cfg.viewport.width,
                 "height": browser_cfg.viewport.height,
             },
+            **browser_cfg.playwright_video_options(),
         )
         try:
             # Reuse an existing tab if Playwright opened one (persistent

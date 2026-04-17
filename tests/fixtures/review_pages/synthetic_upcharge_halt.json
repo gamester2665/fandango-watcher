@@ -1,0 +1,32 @@
+{
+  "name": "synthetic_upcharge_halt",
+  "captured_at": "2026-04-16T00:00:00+00:00",
+  "source_url": "synthetic://example",
+  "final_url": "synthetic://example",
+  "screenshot": null,
+  "_comment": "NEGATIVE fixture: a $5.99 upcharge surfaced (e.g. event-screening 70mm fall outside A-List). The invariant MUST halt. Locks in the kill-switch behavior.",
+  "snapshot": {
+    "title": "Order Review - Fandango",
+    "bodyText": "Order Review\nThe Odyssey (2026)\nIMAX 70MM Special Event\nAMC Universal CityWalk\nAuditorium 19\nWed, May 13 - 7:00p\nSeat N12\nSubtotal: $25.98\nA-List Discount: -$19.99\nOrder Total: $5.99\nComplete Reservation"
+  },
+  "expected": {
+    "should_pass_invariant": false,
+    "plan": {
+      "target_name": "synthetic-odyssey-imax70mm-upcharge",
+      "theater_name": "AMC Universal CityWalk",
+      "showtime_label": "7:00p",
+      "showtime_url": "synthetic://example",
+      "format_tag": "IMAX_70MM",
+      "auditorium": 19,
+      "seat_priority": ["N12"],
+      "quantity": 1
+    },
+    "invariant": {
+      "require_total_equals": "$0.00",
+      "require_benefit_phrase_any": [],
+      "require_theater_match": true,
+      "require_showtime_match": true,
+      "require_seat_match": true
+    }
+  }
+}

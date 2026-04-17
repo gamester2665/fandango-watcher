@@ -2,7 +2,7 @@
 # fandango_watcher — example config. Copy to `config.yaml` and customize.
 #
 # `config.yaml` is mounted read-only into the container at /app/config.yaml
-# via docker-compose.yml. Secrets (Twilio, SMTP, Anthropic) live in .env.
+# via docker-compose.yml. Secrets (Twilio, SMTP, OpenAI-compat key) live in .env.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -105,12 +105,36 @@ purchase:
   max_quantity: 1
 
 # -----------------------------------------------------------------------------
-# Computer-use fallback. Runs only when the scripted purchaser fails
-# mid-checkout. The Python $0.00 invariant still gates the final click.
+# Agent fallback. Runs only when the scripted purchaser fails mid-checkout.
+# The Python $0.00 invariant ALWAYS re-runs after the agent returns and
+# remains the sole gate on the final "Complete Reservation" click.
+#
+# Default provider is the open-source `browser_use` (browser-use library
+# driving any OpenAI-compatible vision LLM). To use it:
+#   1. Install the optional dep:   uv sync --extra agent
+#   2. Set keys in .env: OPENROUTER_API_KEY when base_url is OpenRouter;
+#      OPENAI_API_KEY for OpenAI / Together / Fireworks / vLLM (non-OpenRouter).
+#      You can set both; the correct one is picked from base_url.
+#   3. Tune model + base_url below (OpenRouter is the default example).
+#
 # -----------------------------------------------------------------------------
 agent_fallback:
   enabled: true
-  model: claude-sonnet-4-5
+  provider: browser_use               # browser_use | noop
+  # ANY OpenAI-compatible chat-completions model id is valid here. The
+  # value is passed straight through to the endpoint at `base_url`.
+  # Recommended (OpenRouter, ranked cheapest-to-most-capable):
+  #   * "qwen/qwen2.5-vl-72b-instruct"   (~$0.40 in / $1.20 out per 1M tok; best OSS GUI grounding)
+  #   * "z-ai/glm-4.6v"                  (~$0.30 in / $0.90 out; competitive with Qwen)
+  #   * "google/gemini-2.5-flash"        (~$0.30 in / $2.50 out; closed weights but very fast)
+  # Self-hosted vLLM:  use the model id you loaded, e.g. "qwen2.5-vl-72b-instruct".
+  model: qwen/qwen2.5-vl-72b-instruct
+  # OpenAI-compatible endpoint. Leave null for OpenAI proper. Examples:
+  #   base_url: https://openrouter.ai/api/v1            # OpenRouter (recommended — pay-per-token, no commitment)
+  #   base_url: http://localhost:8000/v1                # self-hosted vLLM
+  #   base_url: https://api.together.xyz/v1             # Together AI
+  #   base_url: https://api.fireworks.ai/inference/v1   # Fireworks
+  base_url: https://openrouter.ai/api/v1
   invoke_only_on:
     - scripted_selector_failure
     - scripted_step_timeout
@@ -122,6 +146,13 @@ agent_fallback:
 # -----------------------------------------------------------------------------
 notify:
   channels: [twilio, smtp]
+  # When true, SMTP emails attach crawl / purchase PNGs (and .webm if you
+  # enable browser.record_video). Twilio SMS stays plain text — open the
+  # email on your phone to see screenshots. Large files are skipped per
+  # email_max_attachment_bytes.
+  attach_screenshots_to_email: false
+  email_max_attachments: 5
+  email_max_attachment_bytes: 6000000
   on_events:
     - release_transition_bad_to_good
     - purchase_succeeded
@@ -130,6 +161,11 @@ notify:
     - purchase_halted_preferred_sold_out
     - purchase_failed_scripted
     - watcher_stuck_on_error_streak
+    # Soft hint from the X / Twitter poller (Phase 2.5). Pre-wired so it
+    # fires the moment you flip `social_x.enabled: true` below; remove
+    # this line if you would rather suppress X notifications without
+    # disabling polling itself.
+    - social_x_match
 
 # -----------------------------------------------------------------------------
 # Screenshot retention. Every crawl writes a timestamped PNG; each purchase
@@ -161,3 +197,93 @@ browser:
   viewport:
     width: 1440
     height: 900
+  # Playwright saves one .webm per browser context when true (file appears
+  # after the crawl or purchase closes the context). Disk-heavy — default off.
+  record_video: false
+  record_video_dir: /app/artifacts/videos
+
+# -----------------------------------------------------------------------------
+# Social signals: X / Twitter (Phase 2.5 — ADVISORY ONLY).
+#
+# Polls a small set of official movie / studio accounts for early "tickets
+# soon" hints. Matches fire `social_x_match` events (must be listed under
+# notify.on_events to actually send). Fandango remains the single source of
+# truth for `release_transition_bad_to_good`.
+#
+# Requires X_BEARER_TOKEN in .env. Disabled by default.
+# -----------------------------------------------------------------------------
+social_x:
+  enabled: false
+  # ~15 min cadence with jitter. Stays well inside X v2 free/basic-tier
+  # read budgets even with several handles. Increase if you add more.
+  min_seconds: 900
+  max_seconds: 1200
+  max_results_per_handle: 10
+
+  # Fallback keyword list applied when an X handle (either here or under
+  # a movie below) declares no keywords of its own.
+  default_keywords:
+    - "tickets"
+    - "on sale"
+    - "presale"
+    - "now available"
+    - "imax"
+
+  # OPTIONAL: free-form X handles that aren't tied to a single movie.
+  # Most users should leave this empty and define accounts under the
+  # `movies:` block below instead -- that way every match is auto-labeled
+  # with the movie title and deep-links the right Fandango target.
+  handles: []
+
+# -----------------------------------------------------------------------------
+# Movies registry (Phase 2.5).
+#
+# Acts as the join table between Fandango targets and X / Twitter accounts.
+# When a tweet from any handle in `x_handles` matches this movie's
+# `x_keywords`, the resulting `social_x_match` notification is auto-labeled
+# with `title` and (when `fandango_targets` is non-empty) deep-links the
+# first listed Fandango target so you go from "X hint" to "buy" in one tap.
+#
+# Same handle can appear under multiple movies (e.g. `IMAX` under both
+# Odyssey and Dune); the poller dedupes API calls but emits one match per
+# movie context that the tweet hits.
+# -----------------------------------------------------------------------------
+movies:
+  - key: odyssey
+    title: "The Odyssey (2026)"
+    fandango_targets: [odyssey-imax-70mm, odyssey-overview]
+    preferred_formats: [IMAX_70MM, IMAX]
+    reference_page_key: the_odyssey_imax_70mm
+    x_handles:
+      - "TheOdysseyFilm"
+      - "UniversalPictures"
+      - "IMAX"
+    # Combine movie-specific terms (title, premium-format hints) with the
+    # generic ticket-vocab so we catch both "Odyssey IMAX 70mm tickets..."
+    # and a plain "Odyssey now on sale".
+    x_keywords:
+      - "odyssey"
+      - "tickets"
+      - "on sale"
+      - "presale"
+      - "imax"
+      - "70mm"
+
+  # Example second movie -- not currently being watched by Fandango (no
+  # fandango_targets), but its X handles still poll for early hints so we
+  # know when to ADD a Fandango target later.
+  - key: dune_part_three
+    title: "Dune: Part Three"
+    fandango_targets: []
+    preferred_formats: [IMAX_70MM, IMAX]
+    reference_page_key: dune_part_three_imax_70mm
+    x_handles:
+      - "dunemovie"
+      - "IMAX"
+    x_keywords:
+      - "dune"
+      - "tickets"
+      - "on sale"
+      - "presale"
+      - "imax"
+      - "70mm"

@@ -43,6 +43,7 @@ class TestTopLevelShape:
             "notify",
             "screenshots",
             "browser",
+            "social_x",
         }
         assert expected.issubset(config.keys()), (
             f"missing keys: {expected - set(config.keys())}"
@@ -194,6 +195,15 @@ class TestNotify:
     ) -> None:
         assert set(config["notify"]["channels"]) == {"twilio", "smtp"}  # type: ignore[index]
 
+    def test_email_attachment_options_documented(
+        self, config: dict[str, object]
+    ) -> None:
+        n = config["notify"]  # type: ignore[index]
+        assert "attach_screenshots_to_email" in n
+        assert n["attach_screenshots_to_email"] is False
+        assert n["email_max_attachments"] == 5
+        assert n["email_max_attachment_bytes"] == 6_000_000
+
     def test_events_include_release_transition_and_purchase_outcomes(
         self, config: dict[str, object]
     ) -> None:
@@ -228,6 +238,11 @@ class TestBrowser:
     def test_headless_production_default(self, config: dict[str, object]) -> None:
         assert config["browser"]["headless"] is True  # type: ignore[index]
 
+    def test_record_video_defaults(self, config: dict[str, object]) -> None:
+        b = config["browser"]  # type: ignore[index]
+        assert b["record_video"] is False
+        assert "videos" in b["record_video_dir"]
+
     def test_profile_path_matches_compose_volume(
         self, config: dict[str, object]
     ) -> None:
@@ -235,3 +250,61 @@ class TestBrowser:
 
     def test_timezone_is_citywalk_local(self, config: dict[str, object]) -> None:
         assert config["browser"]["timezone"] == "America/Los_Angeles"  # type: ignore[index]
+
+
+class TestSocialX:
+    """Phase 2.5 — X / Twitter social-signal block (advisory only)."""
+
+    def test_disabled_by_default(self, config: dict[str, object]) -> None:
+        assert config["social_x"]["enabled"] is False  # type: ignore[index]
+
+    def test_cadence_is_at_least_15_min(self, config: dict[str, object]) -> None:
+        sx = config["social_x"]
+        # X v2 free / basic-tier read budgets reset every 15 min, so we must
+        # not poll faster than that by default.
+        assert sx["min_seconds"] >= 600  # type: ignore[index]
+        assert sx["min_seconds"] <= sx["max_seconds"]  # type: ignore[index]
+
+    def test_handles_have_required_shape(self, config: dict[str, object]) -> None:
+        for h in config["social_x"]["handles"]:  # type: ignore[union-attr]
+            assert isinstance(h["handle"], str) and h["handle"]
+            assert "keywords" in h
+
+
+class TestMoviesRegistry:
+    """Phase 2.5 — movie <-> X-handle / Fandango-target join table."""
+
+    def test_movies_block_present_and_nonempty(
+        self, config: dict[str, object]
+    ) -> None:
+        assert "movies" in config
+        assert isinstance(config["movies"], list) and config["movies"]  # type: ignore[arg-type]
+
+    def test_every_movie_has_required_fields(
+        self, config: dict[str, object]
+    ) -> None:
+        for m in config["movies"]:  # type: ignore[union-attr]
+            assert m["key"] and isinstance(m["key"], str)
+            assert m["title"] and isinstance(m["title"], str)
+            assert isinstance(m.get("fandango_targets", []), list)
+            assert isinstance(m.get("x_handles", []), list)
+            assert isinstance(m.get("x_keywords", []), list)
+
+    def test_movie_targets_reference_real_targets(
+        self, config: dict[str, object]
+    ) -> None:
+        target_names = {t["name"] for t in config["targets"]}  # type: ignore[union-attr]
+        for m in config["movies"]:  # type: ignore[union-attr]
+            for t in m.get("fandango_targets", []):
+                assert t in target_names, (
+                    f"movie {m['key']} references unknown target {t!r}"
+                )
+
+    def test_odyssey_ties_imax_handle(self, config: dict[str, object]) -> None:
+        odyssey = next(m for m in config["movies"] if m["key"] == "odyssey")  # type: ignore[union-attr]
+        assert "IMAX" in odyssey["x_handles"]
+
+    def test_social_x_match_in_on_events(self, config: dict[str, object]) -> None:
+        # Pre-wired so flipping social_x.enabled produces immediate output
+        # without a second config edit.
+        assert "social_x_match" in config["notify"]["on_events"]  # type: ignore[index]

@@ -259,6 +259,7 @@ def crawl_target(
             "width": browser_cfg.viewport.width,
             "height": browser_cfg.viewport.height,
         },
+        **browser_cfg.playwright_video_options(),
     }
 
     with sync_playwright() as pw:
@@ -272,6 +273,10 @@ def crawl_target(
         else:
             browser = pw.chromium.launch(headless=browser_cfg.headless)
             context = browser.new_context(**context_kwargs)
+
+        trace_dir = browser_cfg.trace_dir_path()
+        if trace_dir is not None:
+            context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
         try:
             page = context.new_page()
@@ -292,6 +297,13 @@ def crawl_target(
                 page=page, url=target.url, screenshot_path=screenshot_path
             )
         finally:
+            if trace_dir is not None:
+                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                trace_path = trace_dir / f"{target.name}-{stamp}.zip"
+                try:
+                    context.tracing.stop(path=str(trace_path))
+                except Exception:  # noqa: BLE001 — never let tracing kill the crawl
+                    pass
             context.close()
             if browser is not None:
                 browser.close()

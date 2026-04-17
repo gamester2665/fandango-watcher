@@ -31,7 +31,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .config import PurchaseConfig, Settings, WatcherConfig
+from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig
 from .healthz import Heartbeat, HealthzContext, start_healthz_server
 from .models import ParsedPageData
 from .notify import (
@@ -42,6 +42,7 @@ from .notify import (
 )
 from .purchase import PurchaseAttempt, PurchaseOutcome, plan_purchase
 from .purchaser import run_scripted_purchase
+from .social_x import XSignalMatch, check_x_signals
 from .state import (
     Event,
     TargetState,
@@ -69,6 +70,24 @@ PurchaseFn = Callable[..., PurchaseAttempt]
 # -----------------------------------------------------------------------------
 
 
+def _email_attachments_from_paths(
+    paths: list[str],
+    *,
+    max_n: int,
+    max_bytes: int,
+) -> list[tuple[str, Path]]:
+    """Pick existing files under ``max_bytes`` for SMTP MIME attachments."""
+    out: list[tuple[str, Path]] = []
+    for raw in paths[:max_n]:
+        p = Path(raw)
+        try:
+            if p.is_file() and p.stat().st_size <= max_bytes:
+                out.append((p.name, p))
+        except OSError:
+            continue
+    return out
+
+
 def _schema_value(parsed: ParsedPageData) -> str:
     # ``release_schema`` may be a StrEnum or plain str depending on
     # ``use_enum_values``; normalize for display.
@@ -85,6 +104,7 @@ def build_notification(
     error: BaseException | None = None,
     error_streak: int | None = None,
     purchase_cfg: PurchaseConfig | None = None,
+    notify: NotifyConfig | None = None,
 ) -> NotificationMessage:
     """Pure formatter. Kept separate from the loop so tests can assert on
     exact notification contents without running the orchestrator.
@@ -134,8 +154,23 @@ def build_notification(
                     "Plan: no CityWalk showtime matched seat_priority "
                     "(check formats / sold out?)",
                 ])
+        attachments: list[tuple[str, Path]] = []
+        if (
+            notify is not None
+            and notify.attach_screenshots_to_email
+            and parsed.screenshot_path
+        ):
+            p = Path(parsed.screenshot_path)
+            try:
+                if p.is_file() and p.stat().st_size <= notify.email_max_attachment_bytes:
+                    attachments.append((p.name, p))
+            except OSError:
+                pass
         return NotificationMessage(
-            event=event, subject=subject, body="\n".join(body_lines)
+            event=event,
+            subject=subject,
+            body="\n".join(body_lines),
+            email_attachments=attachments,
         )
 
     if event == Event.WATCHER_STUCK_ON_ERROR_STREAK:
@@ -151,6 +186,42 @@ def build_notification(
     return NotificationMessage(event=event, subject=event, body=event)
 
 
+def build_social_x_notification(
+    match: XSignalMatch,
+    *,
+    target_url: str | None = None,
+) -> NotificationMessage:
+    """Format one X tweet match into a soft-hint notification.
+
+    Explicitly labeled "X HINT" so a reader of the SMS / email can never
+    confuse this with a hard ``Tickets live`` Fandango alert.
+    """
+    label = match.label or f"@{match.handle}"
+    subject = f"X hint: {label}"
+    body_lines = [
+        f"X HINT (advisory only — Fandango is still source of truth)",
+        f"Account: @{match.handle}{f' ({match.label})' if match.label else ''}",
+        f"Matched: {', '.join(match.matched_keywords)}",
+    ]
+    if match.created_at:
+        body_lines.append(f"Posted: {match.created_at}")
+    body_lines.extend([
+        f"Tweet: {match.url}",
+        "",
+        match.text,
+    ])
+    if target_url:
+        body_lines.extend([
+            "",
+            f"Watching: {target_url}",
+        ])
+    return NotificationMessage(
+        event=Event.SOCIAL_X_MATCH,
+        subject=subject,
+        body="\n".join(body_lines),
+    )
+
+
 def _outcome_str(outcome: PurchaseOutcome | str) -> str:
     return outcome if isinstance(outcome, str) else outcome.value
 
@@ -160,6 +231,7 @@ def build_purchase_outcome_notification(
     *,
     target_name: str,
     target_url: str,
+    notify: NotifyConfig | None = None,
 ) -> tuple[str, NotificationMessage]:
     """Map a finished :class:`~.purchase.PurchaseAttempt` to ``(event, msg)``."""
     ov = _outcome_str(attempt.outcome)
@@ -201,8 +273,23 @@ def build_purchase_outcome_notification(
         body_lines.append(f"Screenshots ({len(attempt.screenshots)}): see purchase-attempts/")
         body_lines.extend(attempt.screenshots[:5])
 
+    attachments: list[tuple[str, Path]] = []
+    if (
+        notify is not None
+        and notify.attach_screenshots_to_email
+        and attempt.screenshots
+    ):
+        attachments = _email_attachments_from_paths(
+            list(attempt.screenshots),
+            max_n=notify.email_max_attachments,
+            max_bytes=notify.email_max_attachment_bytes,
+        )
+
     return event, NotificationMessage(
-        event=event, subject=subject, body="\n".join(body_lines)
+        event=event,
+        subject=subject,
+        body="\n".join(body_lines),
+        email_attachments=attachments,
     )
 
 
@@ -234,6 +321,7 @@ def _emit_events(
             error=error,
             error_streak=result.state.consecutive_errors,
             purchase_cfg=cfg.purchase,
+            notify=cfg.notify,
         )
         logger.info(
             "notifying event=%s target=%s channels=%s",
@@ -254,7 +342,10 @@ def _emit_purchase_outcome(
     target_url: str,
 ) -> list[ChannelResult]:
     event, msg = build_purchase_outcome_notification(
-        attempt, target_name=target_name, target_url=target_url
+        attempt,
+        target_name=target_name,
+        target_url=target_url,
+        notify=cfg.notify,
     )
     if event not in cfg.notify.on_events:
         logger.debug("purchase event %s not in notify.on_events; skipping", event)
@@ -271,6 +362,94 @@ def _emit_purchase_outcome(
 # -----------------------------------------------------------------------------
 # Sleep / backoff
 # -----------------------------------------------------------------------------
+
+
+def _emit_social_x_matches(
+    notifier: FanOutNotifier,
+    cfg: WatcherConfig,
+    matches: list[XSignalMatch],
+) -> list[ChannelResult]:
+    if Event.SOCIAL_X_MATCH not in cfg.notify.on_events:
+        if matches:
+            logger.debug(
+                "social_x produced %d matches but social_x_match not in on_events",
+                len(matches),
+            )
+        return []
+    target_by_name = {t.name: t for t in cfg.targets}
+    results: list[ChannelResult] = []
+    for m in matches:
+        url = (
+            target_by_name[m.target_name].url
+            if m.target_name and m.target_name in target_by_name
+            else None
+        )
+        msg = build_social_x_notification(m, target_url=url)
+        logger.info(
+            "notifying social_x event handle=@%s tweet=%s channels=%s",
+            m.handle,
+            m.tweet_id,
+            notifier.channel_names,
+        )
+        results.extend(notifier.send(msg))
+    return results
+
+
+def _maybe_poll_social_x(
+    *,
+    cfg: WatcherConfig,
+    settings: Settings,
+    state_dir: Path,
+    notifier: FanOutNotifier,
+    next_poll_at: datetime,
+    rng: random.Random,
+    now: datetime,
+    poll_fn: Callable[..., object] | None = None,
+) -> datetime:
+    """If due, run one X poll and emit notifications. Returns next due time.
+
+    All exceptions are swallowed (logged) — a failing X poll must never
+    interfere with the Fandango watch tick. ``poll_fn`` is injected by
+    tests; default is :func:`check_x_signals`.
+    """
+    if not cfg.social_x.enabled:
+        # Push the marker far enough into the future that we don't even
+        # check on every tick when X is off.
+        return now + _x_interval(cfg, rng)
+    if now < next_poll_at:
+        return next_poll_at
+
+    impl = poll_fn if poll_fn is not None else check_x_signals
+    try:
+        # ``effective_social_x`` merges movies[].x_handles into the poll set
+        # so the user only has to declare each handle once (under its movie).
+        result = impl(  # type: ignore[misc]
+            cfg.effective_social_x(),
+            settings.x_bearer_token,
+            state_dir,
+            now=now,
+        )
+    except Exception:  # noqa: BLE001 — must never break the Fandango loop
+        logger.exception("social_x poll raised; will retry next interval")
+        return now + _x_interval(cfg, rng)
+
+    matches = getattr(result, "matches", []) or []
+    logger.info(
+        "social_x poll done: %d matches, %d handles polled, %d failed",
+        len(matches),
+        getattr(result, "handles_polled", 0),
+        getattr(result, "handles_failed", 0),
+    )
+    if matches:
+        _emit_social_x_matches(notifier, cfg, matches)
+    return now + _x_interval(cfg, rng)
+
+
+def _x_interval(cfg: WatcherConfig, rng: random.Random) -> "timedelta":
+    from datetime import timedelta
+
+    seconds = rng.uniform(cfg.social_x.min_seconds, cfg.social_x.max_seconds)
+    return timedelta(seconds=seconds)
 
 
 def _next_sleep_seconds(
@@ -344,6 +523,7 @@ def run_watch(
     heartbeat: Heartbeat | None = None,
     purchase_fn: PurchaseFn | None = None,
     purchase_artifacts_dir: Path | None = None,
+    social_x_poll_fn: Callable[..., object] | None = None,
 ) -> int:
     """Run the watch loop until ``stop_event`` is set or ``max_ticks`` is hit.
 
@@ -372,6 +552,11 @@ def run_watch(
     target_states: dict[str, TargetState] = {
         t.name: load_target_state(state_dir, t.name) for t in cfg.targets
     }
+
+    # First X poll runs on the very first tick (so a manual `watch` invocation
+    # immediately surfaces any pending hints), then settles into the jittered
+    # ``social_x.{min,max}_seconds`` cadence.
+    next_x_poll_at: datetime = datetime.now(UTC)
 
     healthz_ctx: HealthzContext | None = None
     if healthz_port is not None:
@@ -468,6 +653,8 @@ def run_watch(
                                 hold_for_confirm=(
                                     cfg.purchase.mode == "hold_and_confirm"
                                 ),
+                                settings=settings,
+                                agent_fallback_cfg=cfg.agent_fallback,
                             )
                         except Exception as e:  # noqa: BLE001
                             logger.exception(
@@ -487,6 +674,17 @@ def run_watch(
                             target_name=target.name,
                             target_url=target.url,
                         )
+
+            next_x_poll_at = _maybe_poll_social_x(
+                cfg=cfg,
+                settings=settings,
+                state_dir=state_dir,
+                notifier=notify_impl,
+                next_poll_at=next_x_poll_at,
+                rng=rng_impl,
+                now=datetime.now(UTC),
+                poll_fn=social_x_poll_fn,
+            )
 
             if max_ticks is not None and tick >= max_ticks:
                 logger.info("max_ticks=%d reached; stopping", max_ticks)

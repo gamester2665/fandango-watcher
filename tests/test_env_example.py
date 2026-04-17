@@ -62,16 +62,33 @@ class TestSmtpKeys:
         assert required.issubset(env_keys), f"missing: {required - env_keys}"
 
 
-class TestAnthropicKey:
-    def test_key_present_for_cu_fallback(self, env_keys: set[str]) -> None:
-        assert "ANTHROPIC_API_KEY" in env_keys
+class TestAgentFallbackKey:
+    def test_openai_and_openrouter_keys_documented(self, env_keys: set[str]) -> None:
+        assert "OPENAI_API_KEY" in env_keys
+        assert "OPENROUTER_API_KEY" in env_keys
+
+    def test_no_anthropic_key(self, env_keys: set[str]) -> None:
+        # Anthropic Computer Use was dropped in favor of the OSS browser-use
+        # provider; the legacy key must not reappear.
+        assert "ANTHROPIC_API_KEY" not in env_keys
 
 
 class TestLegacyCruftRemoved:
-    def test_no_xai_or_grok_keys(self, env_keys: set[str]) -> None:
-        forbidden = {"X_API_KEY", "X_API_KEY_SECRET", "X_BEARER_TOKEN", "XAI_API_KEY"}
+    def test_no_xai_grok_keys(self, env_keys: set[str]) -> None:
+        # XAI_* (xAI / Grok) was a leftover from the scaffolding seed and
+        # is now decisively unused. The X_* keys (Twitter Developer API)
+        # ARE expected and tested in :class:`TestSocialXKeys` below.
+        forbidden = {"XAI_API_KEY", "XAI_API_SECRET", "XAI_API_BEARER_TOKEN"}
         leaked = forbidden & env_keys
-        assert not leaked, f"leftover legacy keys in .env.example: {leaked}"
+        assert not leaked, f"leftover xAI keys in .env.example: {leaked}"
+
+
+class TestSocialXKeys:
+    """Phase 2.5 — X / Twitter Developer API credentials for social signals."""
+
+    def test_bearer_and_app_keys_present(self, env_keys: set[str]) -> None:
+        required = {"X_API_KEY", "X_API_KEY_SECRET", "X_BEARER_TOKEN"}
+        assert required.issubset(env_keys), f"missing: {required - env_keys}"
 
 
 class TestNoSecretValuesLeaked:

@@ -164,7 +164,8 @@ def _settings() -> Settings:
         smtp_password="",
         smtp_from="",
         notify_to_email="",
-        anthropic_api_key="",
+        openai_api_key="",
+        openrouter_api_key="",
     )
 
 
@@ -428,6 +429,27 @@ class TestBuildNotification:
         assert "https://fandango.com/ticketing/abc" in msg.body
         assert "CityWalk" in msg.body or "citywalk" in msg.body.lower()
 
+    def test_release_attaches_screenshot_when_notify_flag_on(
+        self, tmp_path: Path
+    ) -> None:
+        png = tmp_path / "crawl.png"
+        png.write_bytes(b"x" * 300)
+        parsed = _parsed_partial().model_copy(update={"screenshot_path": str(png)})
+        notify = NotifyConfig(
+            channels=["smtp"],
+            on_events=[],
+            attach_screenshots_to_email=True,
+        )
+        msg = build_notification(
+            Event.RELEASE_TRANSITION_BAD_TO_GOOD,
+            target_name="odyssey",
+            target_url="https://fandango.com/x",
+            parsed=parsed,
+            notify=notify,
+        )
+        assert len(msg.email_attachments) == 1
+        assert msg.email_attachments[0][1] == png
+
     def test_release_transition_appends_plan_when_purchase_cfg_supplied(
         self,
     ) -> None:
@@ -602,6 +624,41 @@ class TestBuildPurchaseOutcomeNotification:
         assert ev == Event.PURCHASE_SUCCEEDED
         assert "succeeded" in msg.subject.lower()
         assert "buy/z" in msg.body
+
+    def test_purchase_outcome_attaches_screenshots_when_enabled(
+        self, tmp_path: Path
+    ) -> None:
+        png = tmp_path / "step01.png"
+        png.write_bytes(b"z" * 400)
+        plan = PurchasePlan(
+            target_name="t",
+            theater_name="AMC Universal CityWalk 19",
+            showtime_label="7p",
+            showtime_url="https://fandango.com/buy/z",
+            format_tag=FormatTag.IMAX_70MM,
+            auditorium=19,
+            seat_priority=["N10"],
+        )
+        att = PurchaseAttempt(
+            plan=plan,
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            outcome=PurchaseOutcome.SUCCESS,
+            screenshots=[str(png)],
+        )
+        notify = NotifyConfig(
+            attach_screenshots_to_email=True,
+            channels=["smtp"],
+            on_events=[],
+        )
+        _ev, msg = build_purchase_outcome_notification(
+            att,
+            target_name="odyssey",
+            target_url="https://fandango.com/x",
+            notify=notify,
+        )
+        assert len(msg.email_attachments) == 1
+        assert msg.email_attachments[0][1] == png
 
 
 class TestRunWatchPurchaseHook:

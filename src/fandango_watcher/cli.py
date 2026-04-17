@@ -8,6 +8,7 @@ Subcommands mirror the phased plan:
 * ``login``        -- Phase 5: headed first-run login (warms the persistent profile)
 * ``test-purchase``-- Phase 4: dry-run the purchase planner against a live URL or
                        a saved JSON fixture, prints the resulting ``PurchasePlan``
+* ``refs``         -- print bundled development reference Fandango URLs (Schema A/B/C)
 
 The end-to-end click flow (``purchaser.py``) is intentionally not yet wired —
 ``test-purchase`` validates the planner + invariant in isolation so we can
@@ -22,7 +23,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .config import (
     BrowserConfig,
@@ -94,6 +95,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force headed Chromium (overrides config.browser.headless).",
     )
+    p_once.add_argument(
+        "--video",
+        action="store_true",
+        help=(
+            "Record a .webm of the crawl into ./artifacts/videos/ "
+            "(or browser.record_video_dir)."
+        ),
+    )
+    p_once.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Record a Playwright trace .zip you can open with "
+            "`npx playwright show-trace <file>` (DOM + screenshots + network)."
+        ),
+    )
 
     # -- watch --------------------------------------------------------------
     p_watch = subparsers.add_parser(
@@ -117,6 +134,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Exit after N ticks (useful for smoke tests).",
+    )
+    p_watch.add_argument(
+        "--headed",
+        action="store_true",
+        help=(
+            "Force headed Chromium so you can watch the crawl + purchase flow "
+            "in a real window. Overrides config.browser.headless."
+        ),
+    )
+    p_watch.add_argument(
+        "--video",
+        action="store_true",
+        help="Record a .webm per crawl/purchase context (artifacts/videos/).",
+    )
+    p_watch.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Record a Playwright trace .zip per crawl/purchase context. "
+            "Open with `npx playwright show-trace <file>` for time-travel "
+            "debugging (DOM + screenshots + network + console)."
+        ),
     )
 
     # -- login --------------------------------------------------------------
@@ -182,6 +221,123 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the PNG screenshot for the live-crawl path.",
     )
 
+    # -- x-poll -------------------------------------------------------------
+    p_xpoll = subparsers.add_parser(
+        "x-poll",
+        help=(
+            "Phase 2.5 — one-shot poll of configured X (Twitter) handles "
+            "for early ticket-release hints. Prints matches as JSON. "
+            "Advances state/social_x.json so subsequent calls are incremental."
+        ),
+    )
+    p_xpoll.add_argument("--config", default=None)
+    p_xpoll.add_argument(
+        "--state-dir",
+        default=None,
+        help="Override config.state.dir (defaults to config value).",
+    )
+    p_xpoll.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Wipe state/social_x.json before polling so the next poll "
+            "re-evaluates the latest tweets even if we've already seen them."
+        ),
+    )
+    p_xpoll.add_argument(
+        "--check-bearer",
+        action="store_true",
+        help=(
+            "Validate X_BEARER_TOKEN by resolving the first configured "
+            "handle (one cheap users/by/username call). Does NOT consume "
+            "tweet quota or advance state. Exit 0 on success."
+        ),
+    )
+
+    # -- dump-review --------------------------------------------------------
+    p_dump = subparsers.add_parser(
+        "dump-review",
+        help=(
+            "Capture a Fandango review-page DOM snapshot to a JSON fixture "
+            "(plus a screenshot) so the invariant test corpus can grow from "
+            "real $0.00 review pages. Pair with `tests/test_review_fixtures.py`."
+        ),
+    )
+    p_dump.add_argument("--config", default=None)
+    p_dump.add_argument(
+        "--url",
+        required=True,
+        help="Fandango review-page URL to capture (must already be reachable).",
+    )
+    p_dump.add_argument(
+        "--name",
+        required=True,
+        help=(
+            "Fixture filename stem, e.g. 'odyssey_imax_70mm_alist_2026'. "
+            "Output: tests/fixtures/review_pages/<name>.json + .png"
+        ),
+    )
+    p_dump.add_argument(
+        "--out-dir",
+        default="tests/fixtures/review_pages",
+        help="Directory to write fixtures into.",
+    )
+    p_dump.add_argument(
+        "--wait-ms",
+        type=int,
+        default=4000,
+        help="Extra dwell time after page load before snapshotting (default 4000).",
+    )
+    p_dump.add_argument(
+        "--headed",
+        action="store_true",
+        help="Force headed Chromium (recommended — Fandango sometimes "
+        "behaves differently headless).",
+    )
+
+    # -- movies -------------------------------------------------------------
+    p_movies = subparsers.add_parser(
+        "movies",
+        help=(
+            "Print the configured movie registry (movie -> Fandango targets "
+            "+ X handles + keywords). Useful for verifying movie<->handle "
+            "matching before flipping social_x.enabled. No network access."
+        ),
+    )
+    p_movies.add_argument("--config", default=None)
+    p_movies.add_argument(
+        "--key",
+        default=None,
+        help="Print a single movie by key.",
+    )
+    p_movies.add_argument(
+        "--output",
+        choices=["json", "table"],
+        default="table",
+        help="Output format (default: table).",
+    )
+
+    # -- refs ---------------------------------------------------------------
+    p_refs = subparsers.add_parser(
+        "refs",
+        help=(
+            "Print bundled development reference pages (URLs + expected schema). "
+            "No network access."
+        ),
+    )
+    p_refs.add_argument(
+        "--key",
+        default=None,
+        help="Print a single reference entry by key (see REFERENCE_PAGE_KEYS).",
+    )
+    p_refs.add_argument(
+        "--output",
+        dest="output",
+        choices=["json", "table"],
+        default="json",
+        help="Output format (default: json).",
+    )
+
     return parser
 
 
@@ -208,6 +364,8 @@ def _run_once(args: argparse.Namespace) -> int:
             headless=not args.headed,
             user_data_dir="./browser-profile",
             viewport=ViewportConfig(),
+            record_video=bool(args.video),
+            record_trace=bool(args.trace),
         )
         citywalk_anchor = "AMC Universal CityWalk"
         screenshot_dir: Path | None = (
@@ -237,8 +395,15 @@ def _run_once(args: argparse.Namespace) -> int:
             target = cfg.targets[0]
 
         browser_cfg = cfg.browser
+        overrides: dict[str, Any] = {}
         if args.headed:
-            browser_cfg = browser_cfg.model_copy(update={"headless": False})
+            overrides["headless"] = False
+        if args.video:
+            overrides["record_video"] = True
+        if args.trace:
+            overrides["record_trace"] = True
+        if overrides:
+            browser_cfg = browser_cfg.model_copy(update=overrides)
 
         citywalk_anchor = cfg.theater.fandango_theater_anchor
         screenshot_dir = (
@@ -278,6 +443,16 @@ def _run_watch(args: argparse.Namespace) -> int:
 
     cfg = load_config(config_path)
     settings = Settings()
+
+    overrides: dict[str, Any] = {}
+    if args.headed:
+        overrides["headless"] = False
+    if args.video:
+        overrides["record_video"] = True
+    if args.trace:
+        overrides["record_trace"] = True
+    if overrides:
+        cfg = cfg.model_copy(update={"browser": cfg.browser.model_copy(update=overrides)})
 
     state_dir = Path(cfg.state.dir)
     screenshot_dir = Path(cfg.screenshots.dir)
@@ -454,6 +629,284 @@ def _run_test_purchase(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_movies(args: argparse.Namespace) -> int:
+    config_path = _resolve_config_path(args.config)
+    if not config_path.is_file():
+        print(f"error: config file not found: {config_path}", file=sys.stderr)
+        return 1
+    cfg = load_config(config_path)
+
+    movies = cfg.movies
+    if args.key:
+        movies = [m for m in movies if m.key == args.key]
+        if not movies:
+            print(
+                f"error: no movie with key {args.key!r}. "
+                f"known: {[m.key for m in cfg.movies]}",
+                file=sys.stderr,
+            )
+            return 1
+
+    if args.output == "json":
+        payload = [m.model_dump(mode="json") for m in movies]
+        json.dump(payload if not args.key else payload[0], sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    if not movies:
+        print("(no movies configured)")
+        return 0
+    for m in movies:
+        targets = ",".join(m.fandango_targets) or "-"
+        handles = ",".join(f"@{h}" for h in m.x_handles) or "-"
+        kw = ",".join(m.x_keywords) or "-"
+        print(f"{m.key}\t{m.title}")
+        print(f"  fandango_targets: {targets}")
+        print(f"  x_handles:        {handles}")
+        print(f"  x_keywords:       {kw}")
+    return 0
+
+
+def _run_x_poll(args: argparse.Namespace) -> int:
+    from .social_x import check_x_signals, matches_to_jsonable
+
+    config_path = _resolve_config_path(args.config)
+    if not config_path.is_file():
+        print(f"error: config file not found: {config_path}", file=sys.stderr)
+        return 1
+    cfg = load_config(config_path)
+    settings = Settings()
+
+    if not cfg.social_x.enabled:
+        print(
+            "error: social_x.enabled=false in config. Set it to true and "
+            "configure social_x.handles before running x-poll.",
+            file=sys.stderr,
+        )
+        return 1
+    if not settings.x_bearer_token:
+        print(
+            "error: X_BEARER_TOKEN missing from .env. "
+            "Get one at https://developer.x.com/en/portal/dashboard.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.check_bearer:
+        return _check_x_bearer(cfg, settings)
+
+    state_dir = Path(args.state_dir or cfg.state.dir)
+    if args.reset:
+        state_file = state_dir / "social_x.json"
+        if state_file.exists():
+            logger.warning("removing %s for --reset", state_file)
+            state_file.unlink()
+
+    effective = cfg.effective_social_x()
+    if not effective.handles:
+        print(
+            "error: social_x.enabled=true but no handles found after expanding "
+            "movies[].x_handles. Add at least one handle (under social_x.handles "
+            "or under a movie's x_handles).",
+            file=sys.stderr,
+        )
+        return 1
+
+    logger.info(
+        "polling %d expanded x handle entries (deduped per-handle inside)",
+        len(effective.handles),
+    )
+    result = check_x_signals(
+        effective,
+        settings.x_bearer_token,
+        state_dir,
+    )
+
+    payload = {
+        "handles_polled": result.handles_polled,
+        "handles_failed": result.handles_failed,
+        "errors": result.errors,
+        "matches": matches_to_jsonable(result.matches),
+    }
+    json.dump(payload, sys.stdout, indent=2, default=str)
+    sys.stdout.write("\n")
+    return 0 if result.handles_failed == 0 else 1
+
+
+def _check_x_bearer(cfg: Any, settings: Any) -> int:  # type: ignore[misc]
+    """Validate X_BEARER_TOKEN with one cheap users/by/username call.
+
+    Picks the first expanded handle from the effective social_x config so
+    we exercise the same auth path the watcher uses, without touching the
+    tweets endpoint (which is the rate-limited expensive one).
+    """
+    from .social_x import XApiError, XClient
+
+    effective = cfg.effective_social_x()
+    if not effective.handles:
+        print(
+            "error: --check-bearer needs at least one configured handle "
+            "(social_x.handles[] or movies[].x_handles[]).",
+            file=sys.stderr,
+        )
+        return 1
+    handle = effective.handles[0].handle.lstrip("@")
+
+    try:
+        client = XClient(settings.x_bearer_token)
+        user_id = client.get_user_id(handle)
+    except XApiError as e:
+        print(f"X API rejected the lookup: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 — surface httpx + auth errors verbatim
+        print(
+            f"X bearer check failed: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"OK: bearer token resolved @{handle} -> user_id={user_id}")
+    return 0
+
+
+def _run_dump_review(args: argparse.Namespace) -> int:
+    """Capture a review-page DOM + screenshot to a JSON fixture.
+
+    Reuses the purchaser's browser-session helper so the captured DOM
+    matches what ``run_scripted_purchase`` would actually see (same
+    persistent profile, same headless mode, same viewport). The fixture
+    file is consumed by ``tests/test_review_fixtures.py`` to lock the
+    invariant against real Fandango copy.
+    """
+    from datetime import UTC, datetime
+
+    from .purchaser import _REVIEW_SNAPSHOT_JS, _browser_session
+
+    config_path = _resolve_config_path(args.config)
+    if config_path.is_file():
+        cfg = load_config(config_path)
+        browser_cfg = cfg.browser
+    else:
+        logger.warning(
+            "no config found at %s; using default BrowserConfig",
+            config_path,
+        )
+        browser_cfg = BrowserConfig(
+            headless=False,
+            user_data_dir="./browser-profile",
+            viewport=ViewportConfig(),
+        )
+    if args.headed:
+        browser_cfg = browser_cfg.model_copy(update={"headless": False})
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / f"{args.name}.json"
+    png_path = out_dir / f"{args.name}.png"
+
+    if json_path.exists():
+        print(
+            f"error: fixture already exists: {json_path}. Pick a different "
+            f"--name or delete the file first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    logger.info(
+        "navigating to %s headless=%s wait_ms=%d",
+        args.url,
+        browser_cfg.headless,
+        args.wait_ms,
+    )
+
+    with _browser_session(browser_cfg) as (_pw, context, _browser):
+        page = context.new_page()
+        page.goto(args.url, wait_until="domcontentloaded", timeout=90_000)
+        page.wait_for_timeout(args.wait_ms)
+
+        snapshot_raw = page.evaluate(_REVIEW_SNAPSHOT_JS)
+        snapshot = snapshot_raw if isinstance(snapshot_raw, dict) else {}
+        page_url = page.url
+        page.screenshot(path=str(png_path), full_page=True)
+
+    fixture = {
+        "name": args.name,
+        "captured_at": datetime.now(UTC).isoformat(),
+        "source_url": args.url,
+        "final_url": page_url,
+        "screenshot": png_path.name,
+        "snapshot": {
+            "title": snapshot.get("title", ""),
+            "bodyText": snapshot.get("bodyText", ""),
+        },
+        # Filled in by the human after capture: the plan-shaped expectations
+        # the invariant test will assert against. See test_review_fixtures.py
+        # for the schema.
+        "expected": {
+            "should_pass_invariant": True,
+            "plan": {
+                "target_name": "TODO",
+                "theater_name": "TODO",
+                "showtime_label": "TODO",
+                "showtime_url": args.url,
+                "format_tag": "IMAX_70MM",
+                "auditorium": 1,
+                "seat_priority": ["TODO"],
+                "quantity": 1,
+            },
+            "invariant": {
+                "require_total_equals": "$0.00",
+                "require_benefit_phrase_any": [],
+                "require_theater_match": True,
+                "require_showtime_match": True,
+                "require_seat_match": False,
+            },
+        },
+    }
+    json_path.write_text(
+        json.dumps(fixture, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print(f"wrote fixture: {json_path}")
+    print(f"wrote screenshot: {png_path}")
+    print(
+        "next: edit the 'expected' block in the JSON to reflect the actual "
+        "plan + invariant rules; then `uv run pytest "
+        "tests/test_review_fixtures.py` will gate on it."
+    )
+    return 0
+
+
+def _run_refs(args: argparse.Namespace) -> int:
+    from .reference_pages import REFERENCE_PAGE_KEYS, REFERENCE_PAGES, get_reference_page
+
+    if args.key is not None:
+        if args.key not in REFERENCE_PAGE_KEYS:
+            print(
+                f"error: unknown reference key {args.key!r}. "
+                f"known: {list(REFERENCE_PAGE_KEYS)}",
+                file=sys.stderr,
+            )
+            return 1
+        pages = [get_reference_page(args.key)]
+    else:
+        pages = [REFERENCE_PAGES[k] for k in REFERENCE_PAGE_KEYS]
+
+    if args.output == "json":
+        payload = [p.model_dump(mode="json") for p in pages]
+        json.dump(payload if args.key is None else payload[0], sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    for p in pages:
+        cw = "citywalk" if p.citywalk_priority else "-"
+        print(
+            f"{p.key}\t{p.expected_schema}\t{cw}\t{p.url}",
+        )
+    return 0
+
+
 # -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
@@ -478,6 +931,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_login(args)
     if args.command == "test-purchase":
         return _run_test_purchase(args)
+    if args.command == "refs":
+        return _run_refs(args)
+    if args.command == "x-poll":
+        return _run_x_poll(args)
+    if args.command == "movies":
+        return _run_movies(args)
+    if args.command == "dump-review":
+        return _run_dump_review(args)
 
     parser.error(f"unknown command: {args.command}")
     return 2  # unreachable; argparse.error exits

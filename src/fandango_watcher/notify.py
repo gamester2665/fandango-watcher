@@ -15,8 +15,9 @@ from __future__ import annotations
 import logging
 import smtplib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.message import EmailMessage
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import NotifyConfig, Settings
@@ -39,6 +40,8 @@ class NotificationMessage:
     event: str
     subject: str
     body: str
+    # (filename, path) pairs for :class:`SmtpNotifier` only — Twilio ignores them.
+    email_attachments: list[tuple[str, Path]] = field(default_factory=list)
 
 
 class Notifier(ABC):
@@ -88,6 +91,11 @@ class TwilioNotifier(Notifier):
         return "twilio"
 
     def send(self, msg: NotificationMessage) -> None:
+        if msg.email_attachments:
+            logger.debug(
+                "twilio: ignoring %d attachment(s) (SMS is text-only)",
+                len(msg.email_attachments),
+            )
         body = f"[{msg.event}] {msg.subject}\n\n{msg.body}"
         if len(body) > _SMS_MAX_CHARS:
             body = body[: _SMS_MAX_CHARS - 3] + "..."
@@ -147,6 +155,23 @@ class SmtpNotifier(Notifier):
         em["To"] = self._to
         em["Subject"] = f"[fandango_watcher] {msg.subject}"
         em.set_content(f"Event: {msg.event}\n\n{msg.body}\n")
+        for filename, path in msg.email_attachments:
+            if not path.is_file():
+                logger.warning("skip missing email attachment %s", path)
+                continue
+            data = path.read_bytes()
+            suf = path.suffix.lower()
+            if suf == ".png":
+                main, sub = "image", "png"
+            elif suf in (".jpg", ".jpeg"):
+                main, sub = "image", "jpeg"
+            elif suf == ".webm":
+                main, sub = "video", "webm"
+            else:
+                main, sub = "application", "octet-stream"
+            em.add_attachment(
+                data, maintype=main, subtype=sub, filename=filename or path.name
+            )
         return em
 
     def send(self, msg: NotificationMessage) -> None:

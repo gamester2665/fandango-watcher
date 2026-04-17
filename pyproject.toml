@@ -12,6 +12,17 @@ dependencies = [
     "twilio>=9.10.5",
 ]
 
+[project.optional-dependencies]
+# Phase 6 — open-source agent fallback (browser-use + an OpenAI-compatible
+# vision LLM). Install with:  uv sync --extra agent
+# Pin loosely on purpose: browser-use is iterating fast and we lazy-import
+# it from agent_fallback.py so a missing/incompatible install fails clean
+# at first invocation rather than at module load time.
+agent = [
+    "browser-use>=0.1.40",
+    "langchain-openai>=0.3.0",
+]
+
 [project.scripts]
 fandango-watcher = "fandango_watcher:main"
 

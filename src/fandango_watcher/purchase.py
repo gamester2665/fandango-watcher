@@ -119,6 +119,9 @@ class PurchaseAttempt(_PurchaseModelBase):
     halt_reason: str | None = None
     screenshots: list[str] = Field(default_factory=list)
     error_message: str | None = None
+    agent_rescue_attempted: bool = False
+    agent_rescue_outcome: str | None = None
+    agent_rescue_notes: str | None = None
 
 
 # -----------------------------------------------------------------------------

@@ -9,6 +9,7 @@ Covers:
 * ``test-purchase --from-fixture`` runs the planner end-to-end without
   touching Playwright
 * ``login`` forwards the resolved browser config + URL to ``run_login``
+* ``refs`` prints bundled reference URLs without touching the network
 """
 
 from __future__ import annotations
@@ -45,7 +46,17 @@ class TestBuildParser:
             if a.__class__.__name__ == "_SubParsersAction"
         )
         names = set(subparsers_action.choices)
-        assert names == {"once", "watch", "login", "test-notify", "test-purchase"}
+        assert names == {
+            "once",
+            "watch",
+            "login",
+            "test-notify",
+            "test-purchase",
+            "refs",
+            "x-poll",
+            "movies",
+            "dump-review",
+        }
 
     def test_once_accepts_expected_flags(self) -> None:
         parser = cli.build_parser()
@@ -127,6 +138,93 @@ class TestTestPurchaseParser:
         assert ns.no_screenshot is True
 
 
+class TestDumpReviewParser:
+    def test_dump_review_accepts_expected_flags(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(
+            [
+                "dump-review",
+                "--url",
+                "https://www.fandango.com/checkout/foo",
+                "--name",
+                "odyssey_imax_70mm_2026",
+                "--out-dir",
+                "tests/fixtures/review_pages",
+                "--wait-ms",
+                "5000",
+                "--headed",
+            ],
+        )
+        assert ns.command == "dump-review"
+        assert ns.url == "https://www.fandango.com/checkout/foo"
+        assert ns.name == "odyssey_imax_70mm_2026"
+        assert ns.out_dir == "tests/fixtures/review_pages"
+        assert ns.wait_ms == 5000
+        assert ns.headed is True
+
+    def test_dump_review_requires_url_and_name(self) -> None:
+        parser = cli.build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["dump-review"])
+
+
+class TestXPollCheckBearerFlag:
+    def test_check_bearer_flag_parses(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(["x-poll", "--check-bearer"])
+        assert ns.command == "x-poll"
+        assert ns.check_bearer is True
+
+    def test_check_bearer_defaults_false(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(["x-poll"])
+        assert ns.check_bearer is False
+
+
+class TestRefsParser:
+    def test_refs_accepts_expected_flags(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(
+            ["refs", "--key", "project_hail_mary", "--output", "table"],
+        )
+        assert ns.command == "refs"
+        assert ns.key == "project_hail_mary"
+        assert ns.output == "table"
+
+
+class TestRefsCommand:
+    def test_refs_json_lists_all_keys(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = cli.main(["refs"])
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert isinstance(data, list)
+        keys = {d["key"] for d in data}
+        assert keys == {
+            "the_odyssey_imax_70mm",
+            "dune_part_three_imax_70mm",
+            "the_mandalorian_and_grogu",
+            "project_hail_mary",
+        }
+
+    def test_refs_single_key_emits_one_object(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        rc = cli.main(["refs", "--key", "the_odyssey_imax_70mm"])
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["key"] == "the_odyssey_imax_70mm"
+        assert "movie-overview" in data["url"]
+
+    def test_refs_unknown_key_errors(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        rc = cli.main(["refs", "--key", "nope"])
+        assert rc == 1
+        assert "unknown reference key" in capsys.readouterr().err
+
+
 # -----------------------------------------------------------------------------
 # `once` routing
 # -----------------------------------------------------------------------------
@@ -176,6 +274,35 @@ class TestOnceAdHocUrl:
 
         out = capsys.readouterr().out
         assert '"release_schema": "not_on_sale"' in out
+
+    def test_video_and_trace_flags_set_browser_cfg(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_crawl(target, *, browser_cfg, citywalk_anchor, screenshot_dir):  # type: ignore[no-untyped-def]
+            captured["record_video"] = browser_cfg.record_video
+            captured["record_trace"] = browser_cfg.record_trace
+            return _make_stub_result()
+
+        monkeypatch.setattr("fandango_watcher.watcher.crawl_target", fake_crawl)
+
+        rc = cli.main(
+            [
+                "once",
+                "--url",
+                "https://www.fandango.com/x",
+                "--no-screenshot",
+                "--video",
+                "--trace",
+            ]
+        )
+        assert rc == 0
+        assert captured["record_video"] is True
+        assert captured["record_trace"] is True
+        capsys.readouterr()  # drain stdout
 
 
 class TestOnceConfigMissing:

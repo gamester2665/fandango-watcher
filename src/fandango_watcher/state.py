@@ -50,6 +50,7 @@ class Event:
     )
     PURCHASE_HELD_FOR_CONFIRM: ClassVar[str] = "purchase_held_for_confirm"
     PURCHASE_FAILED_SCRIPTED: ClassVar[str] = "purchase_failed_scripted"
+    SOCIAL_X_MATCH: ClassVar[str] = "social_x_match"
 
 
 # -----------------------------------------------------------------------------

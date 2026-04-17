@@ -1,11 +1,11 @@
 # Fandango ticket watcher — Dockerized watcher + A-List auto-purchase
 
-**Intent:** Run a **single Docker image** on your home PC (portable to a VPS later) that (1) watches Fandango's Universal CityWalk Hollywood pages on a ~5-minute cadence for IMAX / IMAX 70mm / Dolby (Prime) / Laser-at-AMC-Recliners release drops, (2) classifies the release schema, (3) sends simultaneous SMS + email on every meaningful transition, and (4) **races a scripted Playwright purchaser** into Fandango's checkout using your pre-mapped preferred seats per auditorium, applying **AMC Stubs A-List** and **refusing to complete the reservation unless the displayed total is exactly `$0.00`**. A **computer-use (Claude) fallback** rescues the purchase flow *only* when the scripted selectors break mid-checkout.
+**Intent:** Run a **single Docker image** on your home PC (portable to a VPS later) that (1) watches Fandango's Universal CityWalk Hollywood pages on a ~5-minute cadence for IMAX / IMAX 70mm / Dolby (Prime) / Laser-at-AMC-Recliners release drops, (2) classifies the release schema, (3) sends simultaneous SMS + email on every meaningful transition, and (4) **races a scripted Playwright purchaser** into Fandango's checkout using your pre-mapped preferred seats per auditorium, applying **AMC Stubs A-List** and **refusing to complete the reservation unless the displayed total is exactly `$0.00`**. An **open-source vision-LLM agent fallback** (browser-use + Qwen2.5-VL or any OpenAI-compatible model) rescues the purchase flow *only* when the scripted selectors break mid-checkout.
 
 **Why this shape:**
 
-- **Deterministic scripted Playwright** is the only path fast enough to win seats on a hype IMAX 70mm drop (5–15 seconds end-to-end vs. 1–3 minutes for a computer-use agent).
-- **Computer-use (CU) models excel at rescue**, not racing: when Fandango A/B-tests a button label on release day, CU can still recognize and click it instead of crashing the whole flow.
+- **Deterministic scripted Playwright** is the only path fast enough to win seats on a hype IMAX 70mm drop (5–15 seconds end-to-end vs. 1–3 minutes for a vision-LLM agent).
+- **Vision-LLM browser agents excel at rescue**, not racing: when Fandango A/B-tests a button label on release day, the agent can still recognize and click it instead of crashing the whole flow.
 - **AMC Stubs A-List makes auto-buy safe** because the economic blast radius of a mistake is near zero — A-List reservations are free to cancel and rebook before showtime — **provided we enforce the `$0.00` invariant** as the only gate to "Complete Reservation."
 - **Docker** collapses "home PC now / VPS later" into the same artifact. Named volumes keep the logged-in Fandango + AMC Stubs browser profile, screenshots, and state durable across container rebuilds.
 
@@ -37,16 +37,16 @@
                        │                 └── scripted failure mid-flow    │
                        │                         │                        │
                        │                         ▼                        │
-                       │               3. CU fallback (Claude)            │
+                       │      3. Agent fallback (browser-use + VLM)       │
                        │                 vision-driven recovery           │
                        │                 ($0.00 invariant still gates)    │
                        └─────────────────────────────────────────────────┘
 
   Volumes:  browser-profile/   artifacts/screenshots/   artifacts/purchase-attempts/   state/
-  Secrets:  TWILIO_*, SMTP_*, ANTHROPIC_API_KEY (only if CU fallback enabled)
+  Secrets:  TWILIO_*, SMTP_*, OPENROUTER_API_KEY / OPENAI_API_KEY (agent fallback; pick by base_url)
 ```
 
-The scripted purchaser handles the common case in ~5–15 seconds at near-zero cost. The CU fallback only fires when Fandango changes markup on release day — exactly when a brittle scripted flow would otherwise fail.
+The scripted purchaser handles the common case in ~5–15 seconds at near-zero cost. The agent fallback only fires when Fandango changes markup on release day — exactly when a brittle scripted flow would otherwise fail.
 
 ---
 
@@ -80,7 +80,7 @@ The scripted purchaser handles the common case in ~5–15 seconds at near-zero c
 - **Seat preference map** in config per format → auditorium → ordered seat list (your real preferences wired in as defaults).
 - **Notifications:** Twilio SMS + SMTP email in parallel on release transition AND on purchase outcomes.
 - **Purchaser tier:** scripted Playwright flow clicking detection → seat pick → review → complete, gated by the `$0.00` invariant.
-- **CU fallback:** Claude Computer Use invoked only when the scripted flow errors mid-checkout; same `$0.00` invariant.
+- **Agent fallback:** open-source `browser-use` + a vision LLM invoked only when the scripted flow errors mid-checkout; same `$0.00` invariant, and the agent is explicitly forbidden from clicking the final Complete button itself.
 - Persistent Fandango + AMC Stubs session stored in the mounted browser profile volume.
 - Structured logging (console + file), screenshot artifacts on every crawl and every purchase step.
 
@@ -112,9 +112,9 @@ fandango_watcher/
   Dockerfile
   docker-compose.yml
   .dockerignore
-  .env.example                   # Twilio + SMTP + ANTHROPIC_API_KEY
+  .env.example                   # Twilio + SMTP + OPENROUTER_API_KEY / OPENAI_API_KEY
   config.example.yaml            # routes, format policy, seat priority, poll
-  pyproject.toml                 # deps (playwright, twilio, pyyaml, anthropic, pydantic)
+  pyproject.toml                 # deps (playwright, twilio, pyyaml, pydantic; browser-use as optional extra)
   uv.lock
   artifacts/
     screenshots/                 # gitignored, mounted as volume
@@ -135,7 +135,7 @@ fandango_watcher/
       scripted.py                # deterministic Playwright checkout flow
       seats.py                   # seat-priority resolver
       invariants.py              # $0.00 + A-List benefit detection (kill switch)
-      agent_fallback.py          # Claude Computer Use wrapper (invoked only on failure)
+      agent_fallback.py          # browser-use + VLM wrapper (invoked only on failure)
 ```
 
 ---
@@ -162,7 +162,7 @@ fandango_watcher/
 - `TZ=America/Los_Angeles`
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `NOTIFY_TO_E164`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `NOTIFY_TO_EMAIL`
-- `ANTHROPIC_API_KEY` (required only if `agent_fallback.enabled: true`)
+- `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (bearers for the vision LLM; `resolve_llm_api_key_for_agent` in `agent_fallback.py` picks `OPENROUTER_API_KEY` when `agent_fallback.base_url` is OpenRouter, otherwise `OPENAI_API_KEY` first. Set both if you use both providers. Leave both empty for self-hosted vLLM with no auth.)
 - `WATCHER_MODE=watch|once|dry-run`
 
 **Home PC → VPS migration:** same image, same compose file, same volumes (either use Docker named volumes end-to-end or back up / restore as tarballs). Expect fraud-detection behavior to differ (residential → data-center IP); plan a one-time headed re-login via VNC on the VPS.
@@ -226,7 +226,9 @@ purchase:
 
 agent_fallback:
   enabled: true
-  model: claude-sonnet-4-5
+  provider: browser_use                  # browser_use | noop
+  model: qwen2.5-vl-72b-instruct         # any chat-completions model id your endpoint serves
+  base_url: null                         # e.g. https://openrouter.ai/api/v1 or http://localhost:8000/v1
   invoke_only_on:
     - scripted_selector_failure
     - scripted_step_timeout
@@ -453,20 +455,21 @@ stateDiagram-v2
 6. Picks the first available seat from `seat_priority[format]`.
 7. Proceeds to review. Re-reads movie / theater / showtime / seat; runs the `$0.00` invariant.
 8. **Invariant passes:** click Complete. Re-read the confirmation page. Write success screenshots + "Purchased" SMS.
-9. **Invariant fails OR any step errors:** attempt scripted retry once (refresh seat map); still broken → escalate to CU fallback.
+9. **Invariant fails OR any step errors:** attempt scripted retry once (refresh seat map); still broken → escalate to agent fallback.
 
 ---
 
-## Computer-use fallback (Claude Computer Use)
+## Agent fallback (browser-use + open-source VLM)
 
 - Invoked **only** when the scripted flow fails inside an already-open purchase flow. Never runs the polling loop. Never starts a purchase from scratch if scripted didn't at least navigate partway.
-- Given a tight system prompt containing:
+- Driven by [browser-use](https://github.com/browser-use/browser-use) talking to any OpenAI-compatible chat-completions endpoint — Qwen2.5-VL via self-hosted vLLM, OpenRouter, Together AI, Fireworks, etc.
+- Given a tight task prompt containing:
   - The `intended_*` targets (movie, format, showtime, seat priority list).
-  - The `$0.00` invariant rules (for the model's own sanity check).
+  - **Hard rule that the agent must never click Complete Reservation / Place Order / Confirm Purchase itself.** It stops at the review page; the scripted purchaser re-validates the invariant and owns the final click.
   - Hard instructions to stop and hand control back on CAPTCHA, 3DS, password re-prompt, or any popup requesting data it wasn't given.
 - Enforced hard budgets: `agent_fallback.max_steps` and `agent_fallback.max_cost_usd`. Exceed → halt.
-- Returns a structured outcome (`succeeded | failed | needs_human`) to the scripted purchaser, which then re-runs the invariant **in Python** before allowing any "Complete" click the model proposes.
-- Typical cost: a 30-step rescue with screenshot + DOM per step is ~$0.50–$2.00 at current Sonnet pricing — acceptable on a release day, unacceptable as the polling mechanism.
+- Returns a structured outcome (`succeeded | failed | needs_human | budget_exhausted | disabled`) to the scripted purchaser, which then re-runs the invariant **in Python** before allowing any "Complete" click.
+- Typical cost: depends on endpoint. ~$0 on a self-hosted vLLM; ~$0.10–$0.50 per 30-step rescue on Together / Fireworks at Qwen2.5-VL-72B pricing — acceptable on a release day, unacceptable as the polling mechanism.
 
 ---
 
@@ -481,7 +484,7 @@ stateDiagram-v2
 | Backoff on consecutive failures (2× up to 30 min cap) | Survive transient blocks / outages |
 | Screenshot every crawl and every purchase step | Audit trail for markup changes and seat-race post-mortems |
 | Short page timeouts + clear error logs | Fail fast; last visible state still captured |
-| Scripted-first, CU-fallback | Scripted wins races; CU fixes drift; cheapest split |
+| Scripted-first, agent-fallback | Scripted wins races; VLM agent fixes drift; cheapest split |
 | `$0.00` invariant as deterministic Python | No model can convince us to buy a non-free item |
 
 **Optional later:** Playwright "stealth" or patched Chromium only if consistent headless detection appears — avoid dependency creep for MVP.
@@ -494,8 +497,8 @@ stateDiagram-v2
 - **Selector not found during crawl:** treat as "signal = false" or "unknown" explicitly — document the choice per signal type.
 - **Notification send failure:** per-channel retry with small limit; persist per-channel pending flag so a transition is not lost if one provider is down.
 - **Purchase enqueued but session expired:** notify "session expired," do not attempt; require `docker compose run login` to re-warm.
-- **Scripted step timeout or selector miss:** one retry, then CU fallback.
-- **CU fallback budget exhausted:** halt; SMS + email with the review URL; no auto-retry.
+- **Scripted step timeout or selector miss:** one retry, then agent fallback.
+- **Agent fallback budget exhausted:** halt; SMS + email with the review URL; no auto-retry.
 - **Invariant failure at review:** halt permanently for that attempt; manual reset to try again (avoids loops where we keep clicking into a broken review).
 - **Confirmation-page parse failure after an apparent success click:** treat as "purchase outcome unknown" — loud SMS + email with screenshot; do not auto-retry (prevents double-purchase).
 
@@ -508,10 +511,10 @@ stateDiagram-v2
 | Watcher polling (Playwright only) | ~$0 (electricity) | — | — |
 | Notifications (Twilio SMS + SMTP) | ~$0.01 per drop | — | seconds |
 | Scripted purchaser | ~$0 | ~$0 | 5–15s |
-| CU fallback (rare) | $0 most days | $0.50–$2.00 per rescue | 30–180s |
-| Anthropic API hard cap | — | `max_cost_usd: 2.00` | — |
+| Agent fallback (rare) | $0 most days | $0–$0.50 per rescue (depends on endpoint) | 30–180s |
+| Endpoint hard cap | — | `max_cost_usd: 2.00` | — |
 
-Expected pattern: scripted purchaser handles the common case for months at near-zero cost; CU fires only when Fandango redesigns a page or A/B-tests a button — exactly when scripted selectors break.
+Expected pattern: scripted purchaser handles the common case for months at near-zero cost; the agent fires only when Fandango redesigns a page or A/B-tests a button — exactly when scripted selectors break.
 
 ---
 
@@ -533,18 +536,52 @@ Not required for v1 (home PC). Docker makes the migration a matter of moving vol
 
 - [ ] Verify Fandango surfaces AMC Stubs A-List benefits consistently on IMAX 70mm / Dolby / Laser-Recliner checkouts at CityWalk Hollywood (capture one $0.00 review screenshot per format as invariant fixtures).
 - [ ] Add `Dockerfile` on `mcr.microsoft.com/playwright/python` base; add `docker-compose.yml` with named volumes for profile / artifacts / state.
-- [ ] **Replace `.env.example`** (currently leftover X/Twitter keys only) with Twilio + SMTP + `ANTHROPIC_API_KEY` placeholders.
+- [ ] **Replace `.env.example`** (currently leftover X/Twitter keys only) with Twilio + SMTP + `OPENROUTER_API_KEY` / `OPENAI_API_KEY` placeholders.
 - [ ] Add `config.example.yaml` matching the structure above (seat priority per format wired to your real preferences).
 - [ ] Lock the first watched route and the positive-ticketing rule for CityWalk.
 
 ### Phase 2 — Watcher & classifier (detection only, no purchase)
 
-- [ ] Scaffold uv deps (Playwright, Pydantic already present, pyyaml, twilio, anthropic) and `uv run playwright install chromium` in the image build.
+- [ ] Scaffold uv deps (Playwright, Pydantic already present, pyyaml, twilio; browser-use as optional `[agent]` extra) and `uv run playwright install chromium` in the image build.
 - [ ] Implement `watcher.py` + `detect.py` using existing Pydantic models; classify Schema A/B/C on real pages.
 - [ ] Add `--once` CLI subcommand; write screenshot + parse JSON each run.
 - [ ] Add `state.py` so restarts do not re-alert.
 - [ ] Add poll loop with jitter + conservative error backoff; prune screenshots by `max_age_days: 7`.
 - [ ] Run overnight in `notify_only` mode to measure selector drift and error rates.
+
+### Phase 2.5 — Social signals: X / Twitter (advisory only)
+
+Goal: surface "tickets soon" hints from official movie/studio X accounts
+**before or alongside** Fandango's own state changes — without ever blocking
+or replacing the Fandango watcher as the source of truth for "can I buy?".
+
+- [x] Add `social_x` block to `config.py` (`SocialXConfig`, `SocialXHandleConfig`) and `config.example.yaml` (disabled by default).
+- [x] Add `X_API_KEY`, `X_API_KEY_SECRET`, `X_BEARER_TOKEN` (+ optional access tokens) to `Settings` / `.env.example`.
+- [x] Implement `src/fandango_watcher/social_x.py`:
+  - `XClient` (httpx + Bearer) wrapping `users/by/username` + `users/:id/tweets`.
+  - `match_tweet` pure substring matcher with case-insensitive dedupe.
+  - `check_x_signals` orchestrator with per-handle error isolation.
+  - `state/social_x.json` persistence (resolved user_id + last_seen_tweet_id per handle).
+- [x] Add `Event.SOCIAL_X_MATCH = "social_x_match"`.
+- [x] Wire `_maybe_poll_social_x` into the watch loop on its own jittered
+  cadence (`social_x.{min,max}_seconds`, default 15-20 min). Failures are
+  swallowed so they cannot interfere with Fandango polling.
+- [x] Build a clearly-labeled "X HINT" notification message distinct from
+  the hard `release_transition_bad_to_good` alert.
+- [x] Add `fandango-watcher x-poll` CLI subcommand for one-shot debugging.
+- [x] Add `social_x_match` to `notify.on_events` in `config.example.yaml`
+  so flipping `social_x.enabled: true` is a one-line activation.
+- [x] **Movie ↔ X-handle registry**: top-level `movies:` config block ties
+  each movie to its Fandango target(s) AND its X handles + keywords; the
+  poller auto-expands movies into the X-handle list and labels every
+  match with the movie title + Fandango deep-link.
+- [x] Per-handle API-call dedupe: a handle shared by N movies (e.g.
+  `@IMAX` watched by both Odyssey and Dune Part Three) hits X exactly
+  once per poll, then emits one match per movie context.
+- [x] `fandango-watcher movies` CLI subcommand prints the registry for
+  pre-flight verification (no network access).
+- [ ] Validate against a live handle (e.g. `@IMAX` or `@TheOdysseyFilm`)
+  with real bearer token; capture rate-limit headroom on a 15 min cadence.
 
 ### Phase 3 — Notifications
 
@@ -566,12 +603,48 @@ Not required for v1 (home PC). Docker makes the migration a matter of moving vol
 - [ ] Cover error paths: session expired, preferred seat lost mid-flow, review page missing benefit phrase, invariant mismatch.
 - [ ] Wire purchase-outcome notifications (`purchase_succeeded`, `purchase_halted_invariant`, `purchase_halted_preferred_sold_out`).
 
-### Phase 6 — Computer-use fallback
+### Phase 6 — Agent fallback (vision-LLM rescue)
 
-- [ ] Implement `purchaser/agent_fallback.py` using Claude Computer Use; pass `intended_*` context + invariant instructions.
-- [ ] Enforce hard step + cost caps.
-- [ ] Inject a synthetic scripted failure (rename a selector in a test branch) to verify the fallback actually rescues the flow.
-- [ ] Confirm the Python invariant still gates the final click regardless of what the model attempts.
+Goal: when the scripted purchaser breaks mid-checkout (selector miss,
+layout drift, surprise modal), a vision-LLM browser agent navigates the
+already-open Playwright page back to a usable review state. The Python
+`$0.00` invariant in `purchase.py` always re-runs after rescue and
+remains the **sole** gate on the final "Complete Reservation" click.
+**No agent ever attests the invariant itself.**
+
+- [x] Provider-agnostic abstraction in `src/fandango_watcher/agent_fallback.py`:
+  `AgentFallback` Protocol, `RescueRequest` / `RescueResult`,
+  `FallbackOutcome` enum, `build_agent_fallback()` factory, `NoopFallback`.
+- [x] Default provider = open-source `browser_use` (browser-use library
+  driving any OpenAI-compatible vision LLM — Qwen2.5-VL via self-hosted
+  vLLM, OpenRouter, Together AI, Fireworks, or OpenAI proper).
+  Lazy-imports `browser_use` so the dep stays optional
+  (`uv sync --extra agent`); missing dep returns clean `FAILED` with hint
+  instead of crashing the watch loop.
+- [x] Hard safety rules baked into the task prompt: never click
+  Complete/Place Order/Confirm, never enter payment data, escalate on
+  CAPTCHA / 3DS / password re-prompt, never substitute alternate seats.
+- [x] Config: `agent_fallback.{provider, model, base_url, max_steps,
+  max_cost_usd, invoke_only_on}` + `OPENROUTER_API_KEY` / `OPENAI_API_KEY` env vars.
+- [x] Wire `build_agent_fallback(...).rescue(page, ...)` into
+  `run_scripted_purchase` on **Complete-button miss** (invariant already
+  passed): re-extract review DOM, re-validate `$0.00` invariant in Python,
+  retry scripted Complete once. ``invoke_only_on`` empty → default
+  reasons ``scripted_selector_failure`` + ``scripted_step_timeout`` (the
+  latter reserved for future broader rescue). Broad Playwright exceptions
+  **outside** this path still return ``FAILED_SCRIPTED`` without rescue
+  (safe until a retry envelope exists). Watch loop passes ``settings`` +
+  ``cfg.agent_fallback``. Audit fields on ``PurchaseAttempt``:
+  ``agent_rescue_attempted``, ``agent_rescue_outcome``, ``agent_rescue_notes``.
+  Stubbed flow: ``tests/test_purchaser_rescue.py``.
+- [ ] Enforce `max_cost_usd` (current `max_steps` is enforced by
+  browser-use; cost accounting needs a per-provider token-usage hook).
+- [ ] Calibrate rescue prompt + optional rescue-on-exception against a
+  real Fandango failure fixture (see ``dump-review`` + ``review_pages/``).
+- [ ] Confirm the Python invariant still gates the final click
+  regardless of what the model attempts (golden test with a
+  fixture-based `Page` stub that the agent "succeeds" on but whose DOM
+  shows `$5.99` — must halt).
 
 ### Phase 7 — Hardening & VPS readiness
 
@@ -590,15 +663,32 @@ Not required for v1 (home PC). Docker makes the migration a matter of moving vol
 
 ---
 
-## Future: social signals (Twitter / X)
+## Social signals (Twitter / X) — implemented in Phase 2.5
 
-**Goal:** Optional **early** hints from **official movie studio or title accounts** (teasers like "tickets soon," trailer drops tied to on-sale, etc.) *before* or *alongside* Fandango changes.
+**Status:** Shipped (see Phase 2.5 checklist above).
 
-**Reality check:** X's automation and scraping rules and API pricing change often; timeline UIs may require login or fingerprint differently than Fandango. Treat as Phase 2+:
+**Shape:**
 
-- Prefer **documented** approaches (official API with your own keys, or studio-provided RSS/alerts).
-- If using Playwright against X: **separate** crawl budget, **separate** state keys, and **do not** tie Fandango success to X availability (Fandango remains source of truth for "can I buy?").
-- Config sketch: `social[]` entries with `platform: twitter`, `profile_url`, poll interval slower than Fandango (e.g. 15–30 min), keyword/regex matchers, optional "notify on match" using the same `notify` channels.
+- Module: `src/fandango_watcher/social_x.py`. Read-only X API v2 via Bearer.
+- Config: `social_x:` block in `config.yaml` (disabled by default).
+- State: `state/social_x.json` (separate from per-target Fandango state).
+- Cadence: own jittered interval (`social_x.{min,max}_seconds`, default ~15 min).
+- Event: `social_x_match`. Notifications are explicitly labeled "X HINT" so
+  no reader can confuse them with a hard `release_transition_bad_to_good`.
+- Isolation: any X poll failure is logged and swallowed — Fandango polling
+  is never blocked or delayed by X API issues.
+- CLI: `fandango-watcher x-poll` for one-shot debugging.
+
+**Operational notes:**
+
+- Bearer token only. OAuth1 user-context tokens (`X_ACCESS_TOKEN`,
+  `X_ACCESS_TOKEN_SECRET`) are reserved for a future posting flow; the
+  read-only poller does not need them.
+- X API v2 free / basic tier is rate-limited per 15 min; the default
+  ~15-20 min jittered cadence keeps a small handle list comfortably inside
+  read budgets. Increase `social_x.min_seconds` if you add many handles.
+- `since_id` is persisted per handle so polls are incremental — steady
+  state with no new tweets = a single empty-data response per handle.
 
 ---
 
@@ -608,5 +698,6 @@ Not required for v1 (home PC). Docker makes the migration a matter of moving vol
 - Playwright Python: https://playwright.dev/python/
 - Playwright Docker images: https://mcr.microsoft.com/en-us/product/playwright/python
 - Twilio SMS API: https://www.twilio.com/docs/sms
-- Anthropic Computer Use: https://docs.anthropic.com/en/docs/agents-and-tools/computer-use
+- browser-use: https://github.com/browser-use/browser-use
+- Qwen2.5-VL: https://github.com/QwenLM/Qwen2.5-VL
 - Fabric Origin / Fandango partner APIs: only if pursuing a commercial integration

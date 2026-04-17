@@ -1,0 +1,32 @@
+{
+  "name": "synthetic_imax70mm_alist_pass",
+  "captured_at": "2026-04-16T00:00:00+00:00",
+  "source_url": "synthetic://example",
+  "final_url": "synthetic://example",
+  "screenshot": null,
+  "_comment": "Synthetic seed fixture so the fixture-driven invariant test isn't a no-op before the first real dump-review capture. Replace with real Fandango captures via `fandango-watcher dump-review`.",
+  "snapshot": {
+    "title": "Order Review - Fandango",
+    "bodyText": "Order Review\nThe Odyssey (2026)\nIMAX 70MM\nAMC Universal CityWalk\nAuditorium 19\nWed, May 13 - 7:00p\nSeat N12\nAMC A-List Reservation\nOrder Total: $0.00\nComplete Reservation"
+  },
+  "expected": {
+    "should_pass_invariant": true,
+    "plan": {
+      "target_name": "synthetic-odyssey-imax70mm",
+      "theater_name": "AMC Universal CityWalk",
+      "showtime_label": "7:00p",
+      "showtime_url": "synthetic://example",
+      "format_tag": "IMAX_70MM",
+      "auditorium": 19,
+      "seat_priority": ["N12", "N13"],
+      "quantity": 1
+    },
+    "invariant": {
+      "require_total_equals": "$0.00",
+      "require_benefit_phrase_any": ["A-List"],
+      "require_theater_match": true,
+      "require_showtime_match": true,
+      "require_seat_match": true
+    }
+  }
+}

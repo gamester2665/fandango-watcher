@@ -10,6 +10,7 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -177,6 +178,27 @@ class TestTwilioNotifier:
         assert len(sent_body) <= 1400
         assert sent_body.endswith("...")
 
+    def test_ignores_email_attachments_on_sms(self, tmp_path: Path) -> None:
+        fake = _FakeTwilioClient()
+        t = TwilioNotifier(
+            account_sid="sid",
+            auth_token="tok",
+            from_number="+1",
+            to_number="+2",
+            client=fake,
+        )
+        p = tmp_path / "nope.png"
+        p.write_bytes(b"hi")
+        t.send(
+            NotificationMessage(
+                event="ev",
+                subject="s",
+                body="b",
+                email_attachments=[("nope.png", p)],
+            )
+        )
+        assert len(fake.messages.created) == 1
+
 
 # -----------------------------------------------------------------------------
 # SmtpNotifier
@@ -248,6 +270,28 @@ class TestSmtpNotifier:
         assert "login" not in op_names
         assert "send_message" in op_names
 
+    def test_build_message_adds_png_attachment(self, tmp_path: Path) -> None:
+        png = tmp_path / "snap.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n\x00" * 3)
+        n = SmtpNotifier(
+            host="smtp.example.com",
+            port=465,
+            user="u",
+            password="p",
+            from_addr="f@x",
+            to_addr="t@x",
+            smtp_ssl_cls=_make_fake_smtp_cls([]),
+        )
+        msg = NotificationMessage(
+            event="e",
+            subject="s",
+            body="hello",
+            email_attachments=[("snap.png", png)],
+        )
+        em = n._build_message(msg)
+        names = [p.get_filename() for p in em.iter_attachments()]
+        assert "snap.png" in names
+
 
 # -----------------------------------------------------------------------------
 # build_notifier
@@ -272,7 +316,8 @@ class TestBuildNotifier:
             "smtp_password": "",
             "smtp_from": "",
             "notify_to_email": "",
-            "anthropic_api_key": "",
+            "openai_api_key": "",
+            "openrouter_api_key": "",
         }
         base.update(overrides)
         return Settings(**base)

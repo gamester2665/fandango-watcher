@@ -7,6 +7,9 @@ this module never bypasses it.
 
 ``run_scripted_purchase`` is dependency-injected at the watch-loop boundary
 (``purchase_fn=``) so unit tests can substitute a stub without Playwright.
+The watch loop passes ``settings`` + ``agent_fallback_cfg`` for optional
+vision-agent rescue on a failed *Complete* click; omit both in tests to
+skip rescue entirely.
 """
 
 from __future__ import annotations
@@ -22,7 +25,14 @@ from typing import Any
 from playwright.sync_api import Browser, BrowserContext, Page
 from playwright.sync_api import sync_playwright
 
-from .config import BrowserConfig, PurchaseConfig
+from .agent_fallback import (
+    AgentFallback,
+    FallbackOutcome,
+    RescueRequest,
+    RescueResult,
+    build_agent_fallback,
+)
+from .config import AgentFallbackConfig, BrowserConfig, PurchaseConfig, Settings
 from .purchase import (
     InvariantResult,
     PurchaseAttempt,
@@ -34,6 +44,34 @@ from .purchase import (
 )
 
 logger = logging.getLogger(__name__)
+
+# When ``AgentFallbackConfig.invoke_only_on`` is empty, only these scripted
+# failure classes trigger a vision-agent rescue (conservative default).
+_DEFAULT_AGENT_INVOKE_REASONS: frozenset[str] = frozenset(
+    ("scripted_selector_failure", "scripted_step_timeout")
+)
+
+
+def _classify_scripted_failure_for_agent(
+    *, err: str | None, complete_button_failed: bool
+) -> str:
+    """Map a scripted failure to a key in ``agent_fallback.invoke_only_on``."""
+    if complete_button_failed:
+        return "scripted_selector_failure"
+    err_l = (err or "").lower()
+    if "timeout" in err_l or "timeouterror" in err_l:
+        return "scripted_step_timeout"
+    return "scripted_selector_failure"
+
+
+def _should_invoke_agent_fallback(invoke_only_on: list[str], reason: str) -> bool:
+    allowed = (
+        frozenset(invoke_only_on)
+        if invoke_only_on
+        else _DEFAULT_AGENT_INVOKE_REASONS
+    )
+    return reason in allowed
+
 
 _REVIEW_SNAPSHOT_JS = """
 () => ({
@@ -198,6 +236,7 @@ def _browser_session(
             "width": browser_cfg.viewport.width,
             "height": browser_cfg.viewport.height,
         },
+        **browser_cfg.playwright_video_options(),
     }
 
     with sync_playwright() as pw:
@@ -212,9 +251,20 @@ def _browser_session(
             browser = pw.chromium.launch(headless=browser_cfg.headless)
             context = browser.new_context(**context_kwargs)
 
+        trace_dir = browser_cfg.trace_dir_path()
+        if trace_dir is not None:
+            context.tracing.start(screenshots=True, snapshots=True, sources=True)
+
         try:
             yield pw, context, browser
         finally:
+            if trace_dir is not None:
+                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                trace_path = trace_dir / f"purchase-{stamp}.zip"
+                try:
+                    context.tracing.stop(path=str(trace_path))
+                except Exception:  # noqa: BLE001 — never break the purchase
+                    pass
             context.close()
             if browser is not None:
                 browser.close()
@@ -230,6 +280,8 @@ def run_scripted_purchase(
     navigate_timeout_ms: int = 90_000,
     seat_click_timeout_ms: int = 3_500,
     browser_session: Any | None = None,
+    settings: Settings | None = None,
+    agent_fallback_cfg: AgentFallbackConfig | None = None,
 ) -> PurchaseAttempt:
     """Run checkout for ``plan``; gate final click on :func:`~.purchase.validate_invariant`.
 
@@ -237,6 +289,15 @@ def run_scripted_purchase(
 
     ``browser_session`` is an optional context manager yielding
     ``(pw, context, browser)`` like :func:`_browser_session` for tests.
+
+    When ``settings`` + ``agent_fallback_cfg`` are provided and
+    ``agent_fallback_cfg.enabled`` is true, a scripted failure on the
+    final *Complete* click (with a passing pre-click invariant) can invoke
+    :func:`~.agent_fallback.build_agent_fallback` once, re-read the DOM in
+    Python, re-validate the invariant, then retry the scripted complete
+    click. Broader Playwright exceptions do **not** trigger rescue yet
+    because the page may be in an undefined state after ``context`` teardown
+    ordering — that can be added once we have a safe retry envelope.
     """
     started_at = datetime.now(UTC)
     shots: list[str] = []
@@ -249,6 +310,9 @@ def run_scripted_purchase(
         inv: InvariantResult | None = None,
         halt_reason: str | None = None,
         err: str | None = None,
+        agent_rescue_attempted: bool = False,
+        agent_rescue_outcome: str | None = None,
+        agent_rescue_notes: str | None = None,
     ) -> PurchaseAttempt:
         return PurchaseAttempt(
             plan=plan,
@@ -260,11 +324,18 @@ def run_scripted_purchase(
             halt_reason=halt_reason,
             screenshots=shots,
             error_message=err,
+            agent_rescue_attempted=agent_rescue_attempted,
+            agent_rescue_outcome=agent_rescue_outcome,
+            agent_rescue_notes=agent_rescue_notes,
         )
 
     session_cm = (
         browser_session if browser_session is not None else _browser_session(browser_cfg)
     )
+
+    agent_impl: AgentFallback | None = None
+    if settings is not None and agent_fallback_cfg is not None:
+        agent_impl = build_agent_fallback(agent_fallback_cfg, settings)
 
     try:
         with session_cm as (_pw, context, _browser):
@@ -278,6 +349,72 @@ def run_scripted_purchase(
                 step += 1
                 p = attempt_dir / f"{step:02d}-{label}.png"
                 shots.append(_screenshot(page, p))
+
+            def maybe_agent_rescue(
+                reason: str, failure_detail: str, pg: Page
+            ) -> RescueResult | None:
+                if agent_impl is None or agent_fallback_cfg is None:
+                    return None
+                if not _should_invoke_agent_fallback(
+                    agent_fallback_cfg.invoke_only_on, reason
+                ):
+                    return None
+                req = RescueRequest(
+                    plan=plan,
+                    current_url=getattr(pg, "url", "") or "",
+                    failure_reason=failure_detail,
+                    intended_movie_title=None,
+                    extra_context={"invoke_reason": reason},
+                )
+                return agent_impl.rescue(pg, req)
+
+            def after_successful_complete_click(
+                *,
+                agent_rescue_attempted: bool = False,
+                agent_rescue_outcome: str | None = None,
+                agent_rescue_notes: str | None = None,
+            ) -> PurchaseAttempt:
+                snap("after-complete-click")
+                page.wait_for_timeout(2000)
+                raw2 = page.evaluate(_REVIEW_SNAPSHOT_JS)
+                review2 = extract_review_state(
+                    plan, raw2 if isinstance(raw2, dict) else {}
+                )
+                inv2 = validate_invariant(plan, review2, purchase_cfg.invariant)
+                if inv2.ok:
+                    return _finish(
+                        PurchaseOutcome.SUCCESS,
+                        review=review2,
+                        inv=inv2,
+                        agent_rescue_attempted=agent_rescue_attempted,
+                        agent_rescue_outcome=agent_rescue_outcome,
+                        agent_rescue_notes=agent_rescue_notes,
+                    )
+                url = page.url.lower()
+                body = (raw2.get("bodyText") if isinstance(raw2, dict) else "") or ""
+                if (
+                    "confirmation" in url
+                    or "confirm" in url
+                    or "success" in body.lower()
+                ):
+                    return _finish(
+                        PurchaseOutcome.SUCCESS,
+                        review=review2,
+                        inv=inv2,
+                        agent_rescue_attempted=agent_rescue_attempted,
+                        agent_rescue_outcome=agent_rescue_outcome,
+                        agent_rescue_notes=agent_rescue_notes,
+                    )
+                return _finish(
+                    PurchaseOutcome.HALTED_INVARIANT,
+                    review=review2,
+                    inv=inv2,
+                    halt_reason="post-click invariant failed: "
+                    + "; ".join(inv2.reasons_failed),
+                    agent_rescue_attempted=agent_rescue_attempted,
+                    agent_rescue_outcome=agent_rescue_outcome,
+                    agent_rescue_notes=agent_rescue_notes,
+                )
 
             page.goto(
                 plan.showtime_url,
@@ -328,34 +465,74 @@ def run_scripted_purchase(
                 )
 
             if not _click_complete_reservation(page):
+                err0 = "complete reservation button not found or not clickable"
+                reason = _classify_scripted_failure_for_agent(
+                    err=None, complete_button_failed=True
+                )
+                rr = maybe_agent_rescue(reason, err0, page)
+                if rr is not None:
+                    snap("after-agent-rescue")
+                if rr is not None and rr.outcome == FallbackOutcome.SUCCEEDED:
+                    raw_r = page.evaluate(_REVIEW_SNAPSHOT_JS)
+                    review_r = extract_review_state(
+                        plan, raw_r if isinstance(raw_r, dict) else {}
+                    )
+                    inv_r = validate_invariant(
+                        plan, review_r, purchase_cfg.invariant
+                    )
+                    if not inv_r.ok:
+                        return _finish(
+                            PurchaseOutcome.HALTED_INVARIANT,
+                            review=review_r,
+                            inv=inv_r,
+                            halt_reason="; ".join(inv_r.reasons_failed),
+                            agent_rescue_attempted=True,
+                            agent_rescue_outcome=str(rr.outcome),
+                            agent_rescue_notes=rr.notes,
+                        )
+                    if hold_for_confirm:
+                        return _finish(
+                            PurchaseOutcome.HELD_FOR_CONFIRM,
+                            review=review_r,
+                            inv=inv_r,
+                            halt_reason=(
+                                "hold_for_confirm: invariant passed after agent "
+                                "rescue; complete manually"
+                            ),
+                            agent_rescue_attempted=True,
+                            agent_rescue_outcome=str(rr.outcome),
+                            agent_rescue_notes=rr.notes,
+                        )
+                    if _click_complete_reservation(page):
+                        return after_successful_complete_click(
+                            agent_rescue_attempted=True,
+                            agent_rescue_outcome=str(rr.outcome),
+                            agent_rescue_notes=rr.notes,
+                        )
+                    return _finish(
+                        PurchaseOutcome.FAILED_SCRIPTED,
+                        review=review_r,
+                        inv=inv_r,
+                        err=err0 + " (after agent rescue)",
+                        agent_rescue_attempted=True,
+                        agent_rescue_outcome=str(rr.outcome),
+                        agent_rescue_notes=rr.notes,
+                    )
+
+                extra = ""
+                if rr is not None:
+                    extra = f" | agent_rescue={rr.outcome}: {rr.notes}"
                 return _finish(
                     PurchaseOutcome.FAILED_SCRIPTED,
                     review=review,
                     inv=inv,
-                    err="complete reservation button not found or not clickable",
+                    err=err0 + extra,
+                    agent_rescue_attempted=rr is not None,
+                    agent_rescue_outcome=str(rr.outcome) if rr else None,
+                    agent_rescue_notes=rr.notes if rr else None,
                 )
-            snap("after-complete-click")
-            page.wait_for_timeout(2000)
 
-            raw2 = page.evaluate(_REVIEW_SNAPSHOT_JS)
-            review2 = extract_review_state(plan, raw2 if isinstance(raw2, dict) else {})
-            inv2 = validate_invariant(plan, review2, purchase_cfg.invariant)
-            if inv2.ok:
-                return _finish(PurchaseOutcome.SUCCESS, review=review2, inv=inv2)
-
-            # Post-click DOM drift: still treat as success if URL/title hints confirmation,
-            # but prefer a passing second invariant read.
-            url = page.url.lower()
-            body = (raw2.get("bodyText") if isinstance(raw2, dict) else "") or ""
-            if "confirmation" in url or "confirm" in url or "success" in body.lower():
-                return _finish(PurchaseOutcome.SUCCESS, review=review2, inv=inv2)
-
-            return _finish(
-                PurchaseOutcome.HALTED_INVARIANT,
-                review=review2,
-                inv=inv2,
-                halt_reason="post-click invariant failed: " + "; ".join(inv2.reasons_failed),
-            )
+            return after_successful_complete_click()
 
     except Exception as e:  # noqa: BLE001 — surface any Playwright failure
         logger.exception("scripted purchase crashed")
