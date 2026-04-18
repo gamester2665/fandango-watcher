@@ -657,18 +657,19 @@ remains the **sole** gate on the final "Complete Reservation" click.
 
 ## Field notes (real drops & UI behavior)
 
-Observed around **The Mandalorian and Grogu** (Fandango / IMAX context; confirm
-timezone vs. your machine — likely Pacific if tied to CityWalk Hollywood).
+Observed around **The Mandalorian and Grogu** (Fandango / IMAX context). All
+clock times below are **America/Los_Angeles (Pacific)** — aligns with CityWalk
+Hollywood and studio-style West Coast drops.
 
 **On-sale window**
 
 - Tickets actually became purchasable in a **narrow morning window**, roughly
-  **6:00–6:30 AM** (same calendar day as the drop).
+  **6:00–6:30 AM PT** (same calendar day as the drop).
 
 **External signals (email), same morning**
 
-- **6:10 AM** — email from `fandango@movies.fandango.com` (Fandango).
-- **6:30 AM** — email from `noreply@imax.com` (IMAX partner blast).
+- **6:10 AM PT** — email from `fandango@movies.fandango.com` (Fandango).
+- **6:30 AM PT** — email from `noreply@imax.com` (IMAX partner blast).
 
 These are useful **correlates** for human triage or a future optional inbox
 watcher; they must **not** replace DOM-based truth in this repo (Fandango can
