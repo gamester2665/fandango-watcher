@@ -58,6 +58,10 @@ uv run fandango-watcher x-poll --check-bearer    # validate X bearer without con
 
 # 4. Single live crawl (writes screenshot to ./artifacts/screenshots)
 uv run fandango-watcher once --config config.yaml --target odyssey-overview
+#    Optional: click a format chip before extract (e.g. IMAX 3D), or set
+#    format_filter_click_* on the target in config.yaml — see config.example.yaml.
+# uv run fandango-watcher once --config config.yaml --target odyssey-overview \
+#     --format-filter-label "IMAX 3D"
 #    Optional: also persist state/<target>.json like `watch` does:
 # uv run fandango-watcher once --config config.yaml --target odyssey-overview --write-state
 
@@ -88,6 +92,9 @@ uv run fandango-watcher test-notify --subject "smoke" --body "pipe is hot"
 
 # D. Plan-only purchase (NEVER clicks Complete; just classifies + plans)
 uv run fandango-watcher test-purchase --target odyssey-overview
+
+# E. Same crawl + plan as D, but click a format chip first (live crawl only)
+# uv run fandango-watcher test-purchase --target odyssey-overview --format-filter-label "IMAX 3D"
 ```
 
 Artifacts produced:
@@ -122,8 +129,9 @@ When the HTTP server is enabled (default for `watch`), the same process serves a
 
 | Route | Purpose |
 | ----- | ------- |
-| `/` | Auto-refreshing page (~10s): per-target cards with latest screenshot, **video** (`.webm`), and trace link; X poller table; movies registry. |
+| `/` | Dashboard: per-target cards (screenshot, **video**, trace link), X poller, movies registry. With JS enabled, polls `/api/revision` and reloads the same tab when crawl state or artifacts change; `<noscript>` falls back to periodic refresh (`--refresh-seconds` / `watch --dashboard-refresh-seconds`). |
 | `/api/status` | JSON snapshot (same data as the HTML page). |
+| `/api/revision` | `{"revision": "..."}` fingerprint for live tab reload (cheap poll vs. full `/api/status`). |
 | `/api/movies` | JSON list of `movies:` registry entries. |
 | `/healthz` | Liveness JSON (Docker healthcheck). |
 | `/artifacts/...` | Static files under your `artifacts/` tree (screenshots, videos, traces) — path-traversal safe. |

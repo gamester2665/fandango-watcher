@@ -27,6 +27,8 @@ targets:
     url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview
     wait_until: domcontentloaded
     timeout_ms: 30000
+    # Optional — uncomment for titles where Fandango needs a chip click (e.g. IMAX 3D):
+    # format_filter_click_label: "IMAX 3D"
 
 # -----------------------------------------------------------------------------
 # Theater identity. We only alert / purchase when this theater's card shows
