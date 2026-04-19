@@ -197,6 +197,8 @@ fandango-watcher <subcommand>
   login            Headed first-run to warm the persistent profile.
   test-notify      Fire one Twilio + SMTP message through the configured channels.
   test-purchase    Crawl + classify + plan + JSON. Never clicks Complete.
+                   Same optional --format-filter-* flags as ``once`` when
+                   crawling (ignored with --from-fixture).
   x-poll           One-shot poll of configured X handles. Use --check-bearer
                    to validate the bearer token without consuming tweet quota.
   movies           Print the movie ↔ X-handle ↔ Fandango-target registry.

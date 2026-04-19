@@ -174,12 +174,15 @@ class TestTestPurchaseParser:
             "--from-fixture",
             "fixtures/foo.json",
             "--no-screenshot",
+            "--format-filter-label",
+            "IMAX 3D",
         ])
         assert ns.command == "test-purchase"
         assert ns.config == "cfg.yaml"
         assert ns.target == "t1"
         assert ns.from_fixture == "fixtures/foo.json"
         assert ns.no_screenshot is True
+        assert ns.format_filter_label == "IMAX 3D"
 
 
 class TestDumpReviewParser:
@@ -760,3 +763,35 @@ class TestTestPurchaseFromFixture:
         assert rc == 1
         err = capsys.readouterr().err
         assert "config file not found" in err
+
+    def test_live_crawl_passes_format_filter_to_target(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        config_path = repo_root / "config.example.yaml"
+        captured: dict[str, Any] = {}
+
+        def fake_crawl(target, *, browser_cfg, citywalk_anchor, screenshot_dir):  # type: ignore[no-untyped-def]
+            captured["label"] = target.format_filter_click_label
+            return _make_stub_result()
+
+        monkeypatch.setattr("fandango_watcher.watcher.crawl_target", fake_crawl)
+
+        rc = cli.main(
+            [
+                "test-purchase",
+                "--config",
+                str(config_path),
+                "--target",
+                "odyssey-overview",
+                "--no-screenshot",
+                "--format-filter-label",
+                "IMAX 3D",
+            ]
+        )
+        assert rc == 0
+        assert captured["label"] == "IMAX 3D"
+        out = capsys.readouterr().out
+        assert '"plan": null' in out or '"plan": null,' in out

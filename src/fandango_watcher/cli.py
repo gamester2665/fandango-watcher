@@ -44,6 +44,34 @@ STUB_EXIT_CODE = 2
 # -----------------------------------------------------------------------------
 
 
+def _register_format_filter_cli_args(p: argparse.ArgumentParser) -> None:
+    """Shared ``--format-filter-*`` flags for commands that call ``crawl_target``."""
+    p.add_argument(
+        "--format-filter-selector",
+        default=None,
+        help=(
+            "CSS selector for a Fandango format chip to click before extract "
+            "(see config target format_filter_click_selector). Overrides YAML "
+            "when set."
+        ),
+    )
+    p.add_argument(
+        "--format-filter-label",
+        default=None,
+        help=(
+            "Format chip label substring, case-insensitive (e.g. 'IMAX 3D'). "
+            "Used if --format-filter-selector is unset. Overrides YAML when set."
+        ),
+    )
+    p.add_argument(
+        "--format-filter-timeout-ms",
+        type=int,
+        default=None,
+        metavar="MS",
+        help="Timeout ms for the format-chip click (default: 12000). Overrides YAML.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fandango-watcher",
@@ -121,30 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
             '{"parsed": ... , "state_write": ...}.'
         ),
     )
-    p_once.add_argument(
-        "--format-filter-selector",
-        default=None,
-        help=(
-            "CSS selector for a Fandango format chip to click before extract "
-            "(see config target format_filter_click_selector). Overrides YAML "
-            "when set."
-        ),
-    )
-    p_once.add_argument(
-        "--format-filter-label",
-        default=None,
-        help=(
-            "Format chip label substring, case-insensitive (e.g. 'IMAX 3D'). "
-            "Used if --format-filter-selector is unset. Overrides YAML when set."
-        ),
-    )
-    p_once.add_argument(
-        "--format-filter-timeout-ms",
-        type=int,
-        default=None,
-        metavar="MS",
-        help="Timeout ms for the format-chip click (default: 12000). Overrides YAML.",
-    )
+    _register_format_filter_cli_args(p_once)
 
     # -- watch --------------------------------------------------------------
     p_watch = subparsers.add_parser(
@@ -307,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the PNG screenshot for the live-crawl path.",
     )
+    _register_format_filter_cli_args(p_test_purchase)
 
     # -- x-poll -------------------------------------------------------------
     p_xpoll = subparsers.add_parser(
@@ -438,11 +444,11 @@ def _resolve_config_path(explicit: str | None) -> Path:
     return Path(candidate)
 
 
-def _apply_once_format_filter_cli(
+def _apply_format_filter_cli_overrides(
     target: TargetConfig,
     args: argparse.Namespace,
 ) -> TargetConfig:
-    """Merge ``once --format-filter-*`` overrides into a target (YAML or ad-hoc)."""
+    """Merge ``--format-filter-*`` CLI overrides into a target (YAML or ad-hoc)."""
     sel = args.format_filter_selector
     lab = args.format_filter_label
     timeout = args.format_filter_timeout_ms
@@ -475,7 +481,7 @@ def _run_once(args: argparse.Namespace) -> int:
     if args.url:
         # Ad-hoc mode: synthesize a minimal target + browser config so the
         # user can `fandango-watcher once --url <URL>` without a config file.
-        target = _apply_once_format_filter_cli(
+        target = _apply_format_filter_cli_overrides(
             TargetConfig(name="adhoc", url=args.url),
             args,
         )
@@ -513,7 +519,7 @@ def _run_once(args: argparse.Namespace) -> int:
         else:
             target = cfg.targets[0]
 
-        target = _apply_once_format_filter_cli(target, args)
+        target = _apply_format_filter_cli_overrides(target, args)
 
         browser_cfg = cfg.browser
         overrides: dict[str, Any] = {}
@@ -792,6 +798,7 @@ def _run_test_purchase(args: argparse.Namespace) -> int:
     else:
         from .watcher import crawl_target
 
+        target = _apply_format_filter_cli_overrides(target, args)
         screenshot_dir = (
             None if args.no_screenshot else Path(cfg.screenshots.dir)
         )
