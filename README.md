@@ -184,7 +184,10 @@ fandango-watcher <subcommand>
   once             Single crawl + classify + JSON to stdout. Flags:
                    --target / --url / --no-screenshot / --dry-run /
                    --headed / --video / --trace / --write-state (config only;
-                   updates state/<target>.json; stdout wraps parsed + metadata)
+                   updates state/<target>.json; stdout wraps parsed + metadata).
+                   Optional format-chip click (YAML or CLI override):
+                   --format-filter-selector / --format-filter-label /
+                   --format-filter-timeout-ms
   watch            Long poll loop (Twilio + SMTP + scripted purchaser).
                    Serves dashboard + /healthz unless --no-healthz.
                    Flags: --no-healthz / --healthz-port / --max-ticks /

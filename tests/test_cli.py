@@ -75,6 +75,12 @@ class TestBuildParser:
                 "--dry-run",
                 "--headed",
                 "--write-state",
+                "--format-filter-selector",
+                "#lazyload-format-filters li",
+                "--format-filter-label",
+                "IMAX 3D",
+                "--format-filter-timeout-ms",
+                "9000",
             ]
         )
         assert ns.command == "once"
@@ -85,6 +91,9 @@ class TestBuildParser:
         assert ns.dry_run is True
         assert ns.headed is True
         assert ns.write_state is True
+        assert ns.format_filter_selector == "#lazyload-format-filters li"
+        assert ns.format_filter_label == "IMAX 3D"
+        assert ns.format_filter_timeout_ms == 9000
 
     def test_log_level_choices_enforced(self) -> None:
         parser = cli.build_parser()
@@ -288,6 +297,8 @@ class TestOnceAdHocUrl:
             captured["headless"] = browser_cfg.headless
             captured["citywalk_anchor"] = citywalk_anchor
             captured["screenshot_dir"] = screenshot_dir
+            captured["format_label"] = target.format_filter_click_label
+            captured["format_selector"] = target.format_filter_click_selector
             return _make_stub_result()
 
         monkeypatch.setattr("fandango_watcher.watcher.crawl_target", fake_crawl)
@@ -299,6 +310,8 @@ class TestOnceAdHocUrl:
                 "https://www.fandango.com/x",
                 "--no-screenshot",
                 "--headed",
+                "--format-filter-label",
+                "IMAX 3D",
             ]
         )
         assert rc == 0
@@ -306,6 +319,8 @@ class TestOnceAdHocUrl:
         assert captured["target_url"] == "https://www.fandango.com/x"
         assert captured["headless"] is False  # --headed flips this off
         assert captured["screenshot_dir"] is None
+        assert captured["format_label"] == "IMAX 3D"
+        assert captured["format_selector"] is None
 
         out = capsys.readouterr().out
         assert '"release_schema": "not_on_sale"' in out
@@ -397,6 +412,40 @@ class TestOnceViaExampleConfig:
         assert rc == 0
         assert captured["target_name"] == "odyssey-overview"
         assert "CityWalk" in captured["citywalk_anchor"]
+
+    def test_format_filter_cli_overrides_config_target(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        config_path = repo_root / "config.example.yaml"
+
+        captured: dict[str, Any] = {}
+
+        def fake_crawl(target, *, browser_cfg, citywalk_anchor, screenshot_dir):  # type: ignore[no-untyped-def]
+            captured["label"] = target.format_filter_click_label
+            captured["selector"] = target.format_filter_click_selector
+            return _make_stub_result()
+
+        monkeypatch.setattr("fandango_watcher.watcher.crawl_target", fake_crawl)
+
+        rc = cli.main(
+            [
+                "once",
+                "--config",
+                str(config_path),
+                "--target",
+                "odyssey-overview",
+                "--no-screenshot",
+                "--format-filter-label",
+                "IMAX 3D",
+            ]
+        )
+        assert rc == 0
+        assert captured["label"] == "IMAX 3D"
+        assert captured["selector"] is None
+        capsys.readouterr()
 
     def test_unknown_target_name_reports_error(
         self,

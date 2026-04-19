@@ -121,6 +121,30 @@ def build_parser() -> argparse.ArgumentParser:
             '{"parsed": ... , "state_write": ...}.'
         ),
     )
+    p_once.add_argument(
+        "--format-filter-selector",
+        default=None,
+        help=(
+            "CSS selector for a Fandango format chip to click before extract "
+            "(see config target format_filter_click_selector). Overrides YAML "
+            "when set."
+        ),
+    )
+    p_once.add_argument(
+        "--format-filter-label",
+        default=None,
+        help=(
+            "Format chip label substring, case-insensitive (e.g. 'IMAX 3D'). "
+            "Used if --format-filter-selector is unset. Overrides YAML when set."
+        ),
+    )
+    p_once.add_argument(
+        "--format-filter-timeout-ms",
+        type=int,
+        default=None,
+        metavar="MS",
+        help="Timeout ms for the format-chip click (default: 12000). Overrides YAML.",
+    )
 
     # -- watch --------------------------------------------------------------
     p_watch = subparsers.add_parser(
@@ -414,6 +438,26 @@ def _resolve_config_path(explicit: str | None) -> Path:
     return Path(candidate)
 
 
+def _apply_once_format_filter_cli(
+    target: TargetConfig,
+    args: argparse.Namespace,
+) -> TargetConfig:
+    """Merge ``once --format-filter-*`` overrides into a target (YAML or ad-hoc)."""
+    sel = args.format_filter_selector
+    lab = args.format_filter_label
+    timeout = args.format_filter_timeout_ms
+    if sel is None and lab is None and timeout is None:
+        return target
+    updates: dict[str, Any] = {}
+    if sel is not None:
+        updates["format_filter_click_selector"] = sel
+    if lab is not None:
+        updates["format_filter_click_label"] = lab
+    if timeout is not None:
+        updates["format_filter_click_timeout_ms"] = timeout
+    return target.model_copy(update=updates)
+
+
 def _run_once(args: argparse.Namespace) -> int:
     # Imported lazily so `argparse --help` and stub subcommands don't pay the
     # cost of starting up Playwright.
@@ -431,7 +475,10 @@ def _run_once(args: argparse.Namespace) -> int:
     if args.url:
         # Ad-hoc mode: synthesize a minimal target + browser config so the
         # user can `fandango-watcher once --url <URL>` without a config file.
-        target = TargetConfig(name="adhoc", url=args.url)
+        target = _apply_once_format_filter_cli(
+            TargetConfig(name="adhoc", url=args.url),
+            args,
+        )
         browser_cfg = BrowserConfig(
             headless=not args.headed,
             user_data_dir="./browser-profile",
@@ -465,6 +512,8 @@ def _run_once(args: argparse.Namespace) -> int:
             target = matches[0]
         else:
             target = cfg.targets[0]
+
+        target = _apply_once_format_filter_cli(target, args)
 
         browser_cfg = cfg.browser
         overrides: dict[str, Any] = {}
