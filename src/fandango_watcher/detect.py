@@ -208,8 +208,13 @@ def _pick_release_schema(
     We deliberately do NOT read ``fanalert_present`` or
     ``Know When Tickets Go On Sale`` copy here — those headings can appear
     on Schema B pages even when tickets are live. See PLAN.md for the rule.
+
+    Theater DOM nodes without any parsed showtime rows (format-filtered or
+    slow-render pages) must not become ``partial_release`` — that schema
+    requires at least one showtime. Treat ``showtime_count == 0`` as
+    ``not_on_sale`` even when ``theater_count > 0``.
     """
-    if theater_count == 0 and showtime_count == 0:
+    if showtime_count == 0:
         return ReleaseSchema.NOT_ON_SALE
     if (
         theater_count >= FULL_RELEASE_MIN_THEATERS

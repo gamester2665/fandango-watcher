@@ -152,6 +152,24 @@ class TestNotOnSaleClassification:
         assert "loading_calendar_present" in result.schema_evidence
         assert "loading_format_filters_present" in result.schema_evidence
 
+    def test_theater_shells_without_showtimes_are_not_on_sale(self) -> None:
+        """DOM can list theaters (e.g. format-filter page) before times parse."""
+        snapshot = _empty_snapshot(
+            theaters=[
+                ExtractedTheater(
+                    name="AMC Example 10",
+                    format_sections=[
+                        ExtractedFormatSection(label="IMAX 70MM", showtimes=[]),
+                    ],
+                )
+            ],
+        )
+        result = classify(snapshot, citywalk_anchor=CITYWALK_ANCHOR)
+        assert isinstance(result, NotOnSalePageData)
+        assert result.release_schema == ReleaseSchema.NOT_ON_SALE
+        assert result.theater_count == 1
+        assert result.showtime_count == 0
+
 
 # -----------------------------------------------------------------------------
 # Schema B: partial_release

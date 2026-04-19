@@ -132,8 +132,9 @@ class NotOnSalePageData(PageDataBase):
 
     @model_validator(mode="after")
     def validate_not_on_sale(self) -> "NotOnSalePageData":
-        if self.theater_count != 0:
-            raise ValueError("not_on_sale pages should not include populated theater cards")
+        # ``theater_count`` may be > 0 when the extractor sees theater shells
+        # but no parseable showtime links (same positive-evidence rule as
+        # :func:`~fandango_watcher.detect._pick_release_schema`).
         if self.showtime_count != 0:
             raise ValueError("not_on_sale pages should not include real showtimes")
         if self.citywalk_showtime_count != 0:

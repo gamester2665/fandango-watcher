@@ -163,11 +163,12 @@ class TestNotOnSalePageData:
         assert page.release_schema == "not_on_sale"
         assert page.watch_status == "not_watchable"
 
-    def test_rejects_populated_theaters(self) -> None:
-        with pytest.raises(ValidationError, match="populated theater"):
-            NotOnSalePageData(
-                **_base_fields(theater_count=1, showtime_count=0)
-            )
+    def test_allows_theater_shells_without_showtimes(self) -> None:
+        page = NotOnSalePageData(
+            **_base_fields(theater_count=4, showtime_count=0)
+        )
+        assert page.release_schema == "not_on_sale"
+        assert page.watch_status == "not_watchable"
 
     def test_rejects_populated_showtimes(self) -> None:
         with pytest.raises(ValidationError, match="real showtimes"):
