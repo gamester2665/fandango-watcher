@@ -1,0 +1,8 @@
+{
+  "_comment": "Anonymized scripted_failure strings for RescueRequest.failure_reason. Add rows from real logs when calibrating the rescue prompt.",
+  "examples": [
+    "Timeout 30000ms exceeded waiting for locator(\"button:has-text('Complete Reservation')\")",
+    "scripted_step_timeout: review page seat map did not settle",
+    "ElementHandle.click: Timeout 30000ms exceeded (Complete Reservation visible but obscured)"
+  ]
+}

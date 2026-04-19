@@ -31,10 +31,10 @@ phased checklist.
 | 3     | Notifications (Twilio + SMTP)       | done — transition-only, with optional screenshot/video MIME attachments. |
 | 4     | Scripted purchaser (dry-run)        | done — `purchaser.py` + `$0.00` invariant + fixture-driven invariant tests. |
 | 5     | Full auto-buy                       | wired; defaulted to `notify_only` until calibrated against a live drop. |
-| 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced via browser-use usage summaries; real-failure calibration still pending. |
+| 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced; calibration workflow in `tests/fixtures/rescue/README.md`. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-393 unit tests; run `uv run pytest -q`.
+396 unit tests; run `uv run pytest -q`.
 
 ---
 
@@ -268,6 +268,7 @@ uv run pytest -q                               # full suite (~6s, 385 tests)
 uv run pytest tests/test_review_fixtures.py    # auto-discovered $0.00 invariant fixtures
 uv run pytest tests/test_agent_fallback_golden.py  # invariant must halt even if agent claims success
 uv run pytest tests/test_purchaser_rescue.py   # rescue is invoked + retried correctly
+uv run pytest tests/test_rescue_calibration.py # prompt safety vs example failure_reason strings
 ```
 
 Add a real-world Fandango review fixture with:

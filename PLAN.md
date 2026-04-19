@@ -641,8 +641,11 @@ remains the **sole** gate on the final "Complete Reservation" click.
   ``TokenCost.get_usage_summary().total_cost``, per-step ``on_step_end`` stop,
   and post-run mapping in ``_result_from_browser_use`` (LiteLLM pricing cache;
   set ``BROWSER_USE_CALCULATE_COST=true`` is optional — we pass ``calculate_cost`` explicitly when the cap applies).
-- [ ] Calibrate rescue prompt + optional rescue-on-exception against a
-  real Fandango failure fixture (see ``dump-review`` + ``review_pages/``).
+- [x] Calibrate rescue prompt + optional rescue-on-exception against a
+  real Fandango failure fixture — workflow + JSON examples in
+  ``tests/fixtures/rescue/README.md`` and regression coverage in
+  ``tests/test_rescue_calibration.py``; ``dump-review`` + ``review_pages/``
+  remain the invariant/DOM corpus (related but separate from rescue copy).
 - [x] Confirm the Python invariant still gates the final click
   regardless of what the model attempts — covered by
   ``tests/test_agent_fallback_golden.py`` (upcharge fixture + SUCCEEDED
