@@ -102,6 +102,71 @@ class TestLoadConfigHappyPath:
 
 
 # -----------------------------------------------------------------------------
+# Relative paths anchored to the config file (not cwd)
+# -----------------------------------------------------------------------------
+
+
+class TestLoadConfigAnchorsRelativePaths:
+    def test_state_dir_resolves_next_to_yaml_file(self, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "project" / "watcher.yaml"
+        cfg_path.parent.mkdir(parents=True)
+        cfg_path.write_text(
+            """
+targets:
+  - name: t1
+    url: https://www.fandango.com/x
+    wait_until: domcontentloaded
+    timeout_ms: 30000
+theater:
+  display_name: T
+  fandango_theater_anchor: AMC
+formats:
+  require: [IMAX]
+  include: [DOLBY]
+poll:
+  min_seconds: 30
+  max_seconds: 60
+  error_backoff_multiplier: 2
+  error_backoff_cap_seconds: 100
+purchase:
+  enabled: false
+  mode: notify_only
+  invariant:
+    require_total_equals: "$0.00"
+    require_benefit_phrase_any: ["A-List"]
+    require_theater_match: false
+    require_showtime_match: false
+    require_seat_match: false
+  seat_priority: {}
+  on_preferred_sold_out: notify_only
+  max_quantity: 1
+notify:
+  channels: []
+  on_events: []
+screenshots:
+  dir: art/shots
+  max_age_days: 7
+  per_purchase_dir: art/buy
+state:
+  dir: mystate
+browser:
+  headless: true
+  user_data_dir: bprof
+  locale: en-US
+  timezone: America/Los_Angeles
+movies: []
+""",
+            encoding="utf-8",
+        )
+        cfg = load_config(cfg_path)
+        assert cfg.state.dir == str((cfg_path.parent / "mystate").resolve())
+        assert cfg.browser.user_data_dir == str(
+            (cfg_path.parent / "bprof").resolve()
+        )
+        assert cfg.screenshots.dir == str((cfg_path.parent / "art" / "shots").resolve())
+
+
+# -----------------------------------------------------------------------------
 # Strict schema: unknown keys rejected
 # -----------------------------------------------------------------------------
 

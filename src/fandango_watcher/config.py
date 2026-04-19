@@ -388,13 +388,58 @@ class WatcherConfig(ConfigBase):
         return None
 
 
+def _resolve_paths_against_config_dir(
+    config_dir: Path, cfg: WatcherConfig
+) -> WatcherConfig:
+    """Resolve relative filesystem paths in ``cfg`` against ``config_dir``.
+
+    YAML often uses repo-relative paths like ``state: dir: state``. Those are
+    resolved from the **current working directory** unless we anchor them to
+    the config file. Without this, ``watch`` started from one cwd and a
+    ``dashboard``/inspector opened elsewhere can read/write different
+    ``state/*.json`` files than the operator expects.
+    """
+
+    def _abs(s: str) -> str:
+        # POSIX ``/app/...`` paths are absolute in Docker/Linux configs. On
+        # Windows, :func:`pathlib.Path.is_absolute` is false for ``/app/x``,
+        # so we must not anchor those to ``config_dir``.
+        if s.startswith("/"):
+            return s
+        p = Path(s)
+        if p.is_absolute():
+            return str(p)
+        return str((config_dir / p).resolve())
+
+    return cfg.model_copy(
+        update={
+            "state": cfg.state.model_copy(update={"dir": _abs(cfg.state.dir)}),
+            "screenshots": cfg.screenshots.model_copy(
+                update={
+                    "dir": _abs(cfg.screenshots.dir),
+                    "per_purchase_dir": _abs(cfg.screenshots.per_purchase_dir),
+                }
+            ),
+            "browser": cfg.browser.model_copy(
+                update={
+                    "user_data_dir": _abs(cfg.browser.user_data_dir),
+                    "record_video_dir": _abs(cfg.browser.record_video_dir),
+                    "record_trace_dir": _abs(cfg.browser.record_trace_dir),
+                }
+            ),
+        }
+    )
+
+
 def load_config(path: str | Path) -> WatcherConfig:
     """Load and validate a YAML config file."""
-    raw = Path(path).read_text(encoding="utf-8")
+    config_path = Path(path).resolve()
+    raw = config_path.read_text(encoding="utf-8")
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise ValueError(f"config root must be a mapping, got {type(data).__name__}")
-    return WatcherConfig.model_validate(data)
+    cfg = WatcherConfig.model_validate(data)
+    return _resolve_paths_against_config_dir(config_path.parent, cfg)
 
 
 # -----------------------------------------------------------------------------
