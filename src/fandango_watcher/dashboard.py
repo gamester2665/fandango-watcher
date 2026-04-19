@@ -181,18 +181,21 @@ def _render_release_intel_panel(
     """HTML for xAI-backed release summaries (one sub-card per movie)."""
     if not release_intel:
         return (
-            '<section class="panel intel-panel"><h2>Release news (xAI Grok)</h2>'
+            '<section class="panel intel-panel"><h2 class="section-label">Release intel</h2>'
+            '<p class="panel-tagline">xAI Grok</p>'
             '<p class="hint">No release intel payload (internal).</p></section>'
         )
     status = release_intel.get("status")
     if status == "disabled":
         return (
-            '<section class="panel intel-panel"><h2>Release news (xAI Grok)</h2>'
+            '<section class="panel intel-panel"><h2 class="section-label">Release intel</h2>'
+            '<p class="panel-tagline">xAI Grok</p>'
             f'<p class="hint">{html.escape(str(release_intel.get("reason") or "disabled"))}</p></section>'
         )
     if status == "unconfigured":
         return (
-            '<section class="panel intel-panel"><h2>Release news (xAI Grok)</h2>'
+            '<section class="panel intel-panel"><h2 class="section-label">Release intel</h2>'
+            '<p class="panel-tagline">xAI Grok · not configured</p>'
             '<p class="hint">Set <code>XAI_API_KEY</code> (or <code>GROK_API_KEY</code>) in '
             "<code>.env</code> with a key from <a href=\"https://console.x.ai\" "
             'target="_blank" rel="noopener">console.x.ai</a> — OpenAI keys do not work '
@@ -248,21 +251,27 @@ def _render_release_intel_panel(
 
         blocks.append(
             f"""
-<div class="intel-card">
+<article class="intel-card">
   <h3>{title}</h3>
   <p class="intel-headline">{headline}</p>
-  <p>{summary}</p>
-  <p><strong>Ticketing</strong>: {ticketing}</p>
-  {nd_line}
-  <p class="qualifier">{qual}</p>
-</div>
+  <details class="intel-expand">
+    <summary>Summary, ticketing &amp; notes</summary>
+    <div class="intel-expand-body">
+      <p>{summary}</p>
+      <p><strong>Ticketing</strong>: {ticketing}</p>
+      {nd_line}
+      <p class="qualifier">{qual}</p>
+    </div>
+  </details>
+</article>
 """
         )
 
     body = "".join(blocks) if blocks else "<p class=\"hint\">No movies in registry.</p>"
     return f"""
 <section class="panel intel-panel">
-  <h2>Release news (xAI Grok)</h2>
+  <h2 class="section-label">Release intel</h2>
+  <p class="panel-tagline">xAI Grok · advisory context (Fandango crawl is authoritative)</p>
   <p class="hint meta">{meta_line}</p>
   {err_html}
   <div class="intel-grid">{body}</div>
@@ -332,17 +341,23 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
                 f'<p><a href="{html.escape(tz)}">latest trace (.zip)</a></p>'
             )
 
+        media_inner = f"{img_html}{vid_html}{trace_html}"
+        media_block = ""
+        if media_inner.strip():
+            media_block = (
+                f'<details class="card-expand">'
+                f'<summary>Media &amp; traces</summary>'
+                f'<div class="card-expand-body">{media_inner}</div></details>'
+            )
+
         cards.append(
             f"""
 <section class="card">
   <h2>{name}</h2>
   <p><a href="{url_e}" target="_blank" rel="noopener">{name} on Fandango</a></p>
   <p><span class="{pill_class}">{cur}</span></p>
-  <p><strong>release_schema</strong>: {schema}</p>
-  <p><strong>total_ticks</strong>: {tticks} · <strong>last_success_at</strong>: {su}</p>
-  {img_html}
-  {vid_html}
-  {trace_html}
+  <p class="card-stats"><strong>release_schema</strong> {schema} · <strong>ticks</strong> {tticks} · <strong>last OK</strong> {su}</p>
+  {media_block}
 </section>
 """
         )
@@ -360,6 +375,7 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
             f"<td>{html.escape(str(hst.get('last_seen_tweet_id') or '—'))}</td>"
             "</tr>"
         )
+    n_social = len(sx_lines)
     sx_block = (
         "<table><thead><tr><th>handle</th><th>user_id</th>"
         "<th>last_polled_at</th><th>last_seen_tweet_id</th></tr></thead><tbody>"
@@ -380,6 +396,23 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
             f"<td><code>{xh}</code></td></tr>"
         )
 
+    n_registry = len(movie_rows)
+    social_fold = (
+        f'<details class="panel-fold">'
+        f'<summary><span class="fold-title">X / Twitter poller</span>'
+        f'<span class="fold-badge">{n_social} handles</span></summary>'
+        f'<div class="fold-body">{sx_block}</div></details>'
+    )
+    registry_fold = (
+        f'<details class="panel-fold">'
+        f'<summary><span class="fold-title">Movies registry</span>'
+        f'<span class="fold-badge">{n_registry} movies</span></summary>'
+        f'<div class="fold-body"><table>'
+        f"<thead><tr><th>key</th><th>title</th><th>fandango_targets</th>"
+        f"<th>x_handles</th></tr></thead><tbody>"
+        f'{"".join(movie_rows)}</tbody></table></div></details>'
+    )
+
     intel_panel = _render_release_intel_panel(movies, release_intel)
 
     return f"""<!DOCTYPE html>
@@ -390,38 +423,139 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
   <meta http-equiv="refresh" content="10" />
   <title>fandango-watcher</title>
   <style>
-    body {{ font-family: system-ui, sans-serif; background: #12141a; color: #e8e8ec;
-      margin: 0; padding: 1rem 1.5rem; max-width: 1200px; margin-left: auto;
-      margin-right: auto; }}
-    header {{ border-bottom: 1px solid #2a2f3a; padding-bottom: 1rem; margin-bottom: 1rem; }}
-    h1 {{ font-size: 1.35rem; margin: 0 0 0.5rem 0; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 1rem; }}
-    .card {{ background: #1a1d26; border: 1px solid #2a2f3a; border-radius: 8px;
-      padding: 1rem; }}
-    .card h2 {{ margin: 0 0 0.5rem 0; font-size: 1.05rem; }}
-    .pill {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px;
-      background: #2a3140; font-size: 0.85rem; }}
+    :root {{
+      --bg: #0f1117;
+      --surface: #161a22;
+      --surface2: #1a1f2a;
+      --border: #2a3142;
+      --text: #e8eaef;
+      --muted: #9aa3b2;
+      --accent: #7eb8ff;
+      --accent2: #9ec5ff;
+      --radius: 10px;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text);
+      margin: 0; padding: 0 1.25rem 2rem;
+      max-width: 1280px; margin-left: auto; margin-right: auto;
+      line-height: 1.45; font-size: 0.95rem;
+    }}
+    main.dash {{ display: flex; flex-direction: column; gap: 1.25rem; }}
+    header {{
+      border-bottom: 1px solid var(--border);
+      padding: 1.25rem 0 1rem;
+      margin-bottom: 0.25rem;
+    }}
+    header h1 {{ font-size: 1.4rem; font-weight: 650; margin: 0 0 0.35rem 0; letter-spacing: -0.02em; }}
+    header p {{ margin: 0.25rem 0; font-size: 0.88rem; color: var(--muted); }}
+    .section-head {{ margin: 0; padding: 0; }}
+    .section-label {{
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.12em; color: var(--muted); margin: 0 0 0.2rem 0;
+    }}
+    .panel-tagline {{
+      font-size: 0.82rem; color: var(--muted); margin: 0 0 0.5rem 0;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+      gap: 0.85rem;
+    }}
+    .card {{
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.9rem 1rem;
+      display: flex; flex-direction: column; gap: 0.35rem;
+    }}
+    .card h2 {{ margin: 0; font-size: 1.02rem; font-weight: 600; }}
+    .card-stats {{ font-size: 0.82rem; color: var(--muted); margin: 0.15rem 0 0 0; }}
+    .pill {{
+      display: inline-block; padding: 0.12rem 0.55rem; border-radius: 999px;
+      background: #2a3140; font-size: 0.8rem; font-weight: 500;
+    }}
     .pill-ok {{ background: #1e3d2e; color: #a8f0c0; }}
     .pill-warn {{ background: #3d2a1e; color: #f0d4a8; }}
-    .thumb img {{ max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #2a2f3a; }}
-    video {{ max-width: 100%; border-radius: 4px; background: #000; }}
-    a {{ color: #7eb8ff; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 0.9rem; }}
-    th, td {{ border: 1px solid #2a2f3a; padding: 0.35rem 0.5rem; text-align: left; }}
-    code {{ font-size: 0.75rem; word-break: break-all; }}
-    section.panel {{ margin-top: 1.5rem; }}
-    p.hint {{ font-size: 0.9rem; opacity: 0.85; margin: 0.5rem 0 0 0; }}
-    p.hint.meta {{ font-size: 0.8rem; opacity: 0.75; margin-bottom: 0.75rem; }}
-    .intel-panel h3 {{ font-size: 1rem; margin: 0 0 0.35rem 0; color: #c8d4f0; }}
-    .intel-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-      gap: 1rem; margin-top: 0.75rem; }}
-    .intel-card {{ background: #151822; border: 1px solid #2e3545; border-radius: 8px;
-      padding: 1rem; }}
-    .intel-headline {{ font-weight: 600; color: #9ec5ff; margin: 0 0 0.5rem 0; }}
-    p.qualifier {{ font-size: 0.8rem; opacity: 0.75; margin-top: 0.75rem; font-style: italic; }}
-    .pill-warn-inline {{ background: #3d2a1e; color: #f0d4a8; padding: 0.35rem 0.5rem;
-      border-radius: 6px; display: inline-block; }}
+    a {{ color: var(--accent); text-underline-offset: 2px; }}
+    a:hover {{ color: #a8d4ff; }}
+    .thumb img {{ max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--border); }}
+    video {{ max-width: 100%; border-radius: 6px; background: #000; }}
+    details {{ color: var(--text); }}
+    summary {{
+      cursor: pointer; list-style: none; user-select: none;
+      font-size: 0.85rem; font-weight: 500; color: var(--accent2);
+      padding: 0.35rem 0;
+    }}
+    summary::-webkit-details-marker {{ display: none; }}
+    summary::before {{
+      content: "▸"; display: inline-block; margin-right: 0.4rem;
+      transition: transform 0.15s ease; opacity: 0.75; font-size: 0.75rem;
+    }}
+    details[open] > summary::before {{ transform: rotate(90deg); }}
+    .card-expand, .intel-expand {{ margin-top: 0.25rem; }}
+    .card-expand-body, .intel-expand-body {{
+      padding: 0.5rem 0 0 0.85rem; border-left: 2px solid var(--border);
+      margin-top: 0.35rem; font-size: 0.88rem;
+    }}
+    .intel-panel {{
+      background: linear-gradient(180deg, var(--surface2) 0%, var(--surface) 100%);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1rem 1.1rem 1.1rem;
+    }}
+    .intel-panel .section-label {{ margin-top: 0; }}
+    .intel-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+      gap: 0.75rem; margin-top: 0.65rem;
+    }}
+    .intel-card {{
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 0.85rem 1rem;
+    }}
+    .intel-card h3 {{
+      font-size: 0.95rem; margin: 0 0 0.25rem 0; color: #d4daf0;
+      font-weight: 600;
+    }}
+    .intel-headline {{ font-weight: 600; color: var(--accent2); margin: 0 0 0.4rem 0; font-size: 0.9rem; }}
+    p.qualifier {{ font-size: 0.78rem; opacity: 0.8; margin: 0.5rem 0 0 0; font-style: italic; color: var(--muted); }}
+    .pill-warn-inline {{
+      background: #3d2a1e; color: #f0d4a8; padding: 0.35rem 0.55rem;
+      border-radius: 6px; display: inline-block; font-size: 0.82rem;
+    }}
+    section.panel {{ margin: 0; }}
+    .panel-secondary {{ margin-top: 0.25rem; }}
+    .panel-fold {{
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--surface); overflow: hidden;
+    }}
+    .panel-fold > summary {{
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.75rem; padding: 0.65rem 1rem;
+      background: var(--surface2); border-bottom: 1px solid transparent;
+      font-size: 0.9rem;
+    }}
+    .panel-fold[open] > summary {{
+      border-bottom-color: var(--border);
+    }}
+    .fold-title {{ font-weight: 600; color: var(--text); }}
+    .fold-badge {{
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--muted); background: var(--bg); padding: 0.2rem 0.5rem;
+      border-radius: 999px; border: 1px solid var(--border);
+    }}
+    .fold-body {{ padding: 0.65rem 1rem 0.85rem; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
+    th, td {{ border: 1px solid var(--border); padding: 0.4rem 0.55rem; text-align: left; }}
+    th {{ background: var(--surface2); color: var(--muted); font-weight: 600; font-size: 0.75rem;
+      text-transform: uppercase; letter-spacing: 0.04em; }}
+    tr:nth-child(even) td {{ background: rgba(255,255,255,0.02); }}
+    code {{ font-size: 0.72rem; word-break: break-all; color: #c5cce0; }}
+    p.hint {{ font-size: 0.88rem; opacity: 0.9; margin: 0.5rem 0 0 0; color: var(--muted); }}
+    p.hint.meta {{ font-size: 0.78rem; opacity: 0.85; margin-bottom: 0.65rem; }}
+    footer.dash-foot {{
+      margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border);
+      font-size: 0.82rem; color: var(--muted);
+    }}
   </style>
 </head>
 <body>
@@ -440,27 +574,28 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
         else ""
     }
   </header>
+  <main class="dash">
   {intel_panel}
+  <section class="section-head">
+    <h2 class="section-label">Fandango crawl</h2>
+    <p class="panel-tagline">Per-target state · expand <strong>Media &amp; traces</strong> for screenshots / video / Playwright trace</p>
+  </section>
   <div class="grid">
     {"".join(cards)}
   </div>
-  <section class="panel">
-    <h2>X / Twitter poller state</h2>
-    {sx_block}
+  <section class="panel panel-secondary">
+    {social_fold}
   </section>
-  <section class="panel">
-    <h2>Movies registry</h2>
-    <table>
-      <thead><tr><th>key</th><th>title</th><th>fandango_targets</th><th>x_handles</th></tr></thead>
-      <tbody>{"".join(movie_rows)}</tbody>
-    </table>
+  <section class="panel panel-secondary">
+    {registry_fold}
   </section>
-  <p style="margin-top:2rem;font-size:0.85rem;opacity:0.7;">
+  </main>
+  <footer class="dash-foot">
     JSON: <a href="/api/status">/api/status</a> ·
     <a href="/api/release_intel">/api/release_intel</a> ·
     <a href="/api/movies">/api/movies</a> ·
     <a href="/healthz">/healthz</a>
-  </p>
+  </footer>
 </body>
 </html>
 """
