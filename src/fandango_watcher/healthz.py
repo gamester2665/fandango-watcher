@@ -158,6 +158,16 @@ def _make_handler_cls(
                     ]
                     _send_json(self, {"movies": movies})
                     return
+                if path_only == "/api/release_intel":
+                    from .release_intel import get_release_intel_for_dashboard
+
+                    payload = get_release_intel_for_dashboard(
+                        dd.cfg,
+                        state_dir=dd.paths.state_dir,
+                        settings=dd.settings,
+                    )
+                    _send_json(self, payload)
+                    return
                 if path_only.startswith("/artifacts/"):
                     rel = path_only[len("/artifacts/") :]
                     _serve_artifact_file(
@@ -201,7 +211,8 @@ def start_healthz_server(
     ephemeral port (read it back via ``ctx.port``).
 
     When ``dashboard_data`` is set, also serves ``/`` (HTML), ``/api/status``,
-    ``/api/movies``, and static files under ``/artifacts/...``.
+    ``/api/movies``, ``/api/release_intel`` (xAI Grok release summaries), and
+    static files under ``/artifacts/...``.
     """
     server = _ExclusiveThreadingHTTPServer(
         (host, port),

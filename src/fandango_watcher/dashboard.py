@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from .config import WatcherConfig
+from .config import Settings, WatcherConfig
+from .release_intel import get_release_intel_for_dashboard
 from .social_x import load_social_x_state
 
 _PT = ZoneInfo("America/Los_Angeles")
@@ -57,6 +58,8 @@ class DashboardData:
     paths: DashboardPaths
     # :class:`~fandango_watcher.healthz.Heartbeat` (avoid circular import).
     heartbeat: Any | None = None
+    # Env for optional xAI (Grok) release-intel summaries on the dashboard.
+    settings: Settings | None = None
 
 
 def _latest_artifact_for_target(
@@ -152,11 +155,18 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
 
     movies = [m.model_dump(mode="json") for m in data.cfg.movies]
 
+    release_intel = get_release_intel_for_dashboard(
+        data.cfg,
+        state_dir=paths.state_dir,
+        settings=data.settings,
+    )
+
     return {
         "healthz": healthz,
         "targets": targets_out,
         "social_x": social_x,
         "movies": movies,
+        "release_intel": release_intel,
         "paths": {
             "state_dir": str(paths.state_dir),
             "social_x_state_path": str(paths.social_x_state_path),
@@ -165,12 +175,106 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
     }
 
 
+def _render_release_intel_panel(
+    movies: list[Any], release_intel: dict[str, Any]
+) -> str:
+    """HTML for xAI-backed release summaries (one sub-card per movie)."""
+    if not release_intel:
+        return (
+            '<section class="panel intel-panel"><h2>Release news (xAI Grok)</h2>'
+            '<p class="hint">No release intel payload (internal).</p></section>'
+        )
+    status = release_intel.get("status")
+    if status == "disabled":
+        return (
+            '<section class="panel intel-panel"><h2>Release news (xAI Grok)</h2>'
+            f'<p class="hint">{html.escape(str(release_intel.get("reason") or "disabled"))}</p></section>'
+        )
+    if status == "unconfigured":
+        return (
+            '<section class="panel intel-panel"><h2>Release news (xAI Grok)</h2>'
+            '<p class="hint">Set <code>XAI_API_KEY</code> in <code>.env</code> for '
+            "summaries of public release and ticketing news. "
+            "Fandango crawl state below remains the source of truth for on-sale detection.</p>"
+            "</section>"
+        )
+
+    meta_parts: list[str] = []
+    if release_intel.get("updated_at"):
+        meta_parts.append(f"updated {html.escape(str(release_intel['updated_at']))}")
+    if release_intel.get("model"):
+        meta_parts.append(f"model {html.escape(str(release_intel['model']))}")
+    src = release_intel.get("source")
+    if src:
+        meta_parts.append(html.escape(str(src)))
+    if release_intel.get("cache_age_seconds") is not None:
+        meta_parts.append(
+            f"cache age {int(release_intel['cache_age_seconds'])}s"
+        )
+    meta_line = " · ".join(meta_parts) if meta_parts else ""
+
+    err = release_intel.get("error")
+    err_html = ""
+    if err:
+        err_html = (
+            f'<p class="hint pill-warn-inline">{html.escape(str(err))}</p>'
+        )
+
+    intel_map = release_intel.get("movies")
+    if not isinstance(intel_map, dict):
+        intel_map = {}
+
+    blocks: list[str] = []
+    for m in movies:
+        if not isinstance(m, dict):
+            continue
+        key = str(m.get("key") or "")
+        title = html.escape(str(m.get("title") or key))
+        raw = intel_map.get(key)
+        if not isinstance(raw, dict):
+            raw = {}
+        headline = html.escape(str(raw.get("headline") or "—"))
+        summary = html.escape(str(raw.get("summary") or "—"))
+        ticketing = html.escape(str(raw.get("ticketing") or "—"))
+        notable = raw.get("notable_dates")
+        notable_e = html.escape(str(notable)) if notable else ""
+        qual = html.escape(str(raw.get("qualifier") or ""))
+
+        nd_line = ""
+        if notable_e:
+            nd_line = f"<p><strong>Notable dates</strong>: {notable_e}</p>"
+
+        blocks.append(
+            f"""
+<div class="intel-card">
+  <h3>{title}</h3>
+  <p class="intel-headline">{headline}</p>
+  <p>{summary}</p>
+  <p><strong>Ticketing</strong>: {ticketing}</p>
+  {nd_line}
+  <p class="qualifier">{qual}</p>
+</div>
+"""
+        )
+
+    body = "".join(blocks) if blocks else "<p class=\"hint\">No movies in registry.</p>"
+    return f"""
+<section class="panel intel-panel">
+  <h2>Release news (xAI Grok)</h2>
+  <p class="hint meta">{meta_line}</p>
+  {err_html}
+  <div class="intel-grid">{body}</div>
+</section>
+"""
+
+
 def render_index_html(snapshot: dict[str, Any]) -> str:
     """Single-page HTML with inline CSS; auto-refresh every 10 seconds."""
     healthz = snapshot.get("healthz") or {}
     targets = snapshot.get("targets") or []
     social_x = snapshot.get("social_x") or {}
     movies = snapshot.get("movies") or []
+    release_intel = snapshot.get("release_intel") or {}
 
     ticks = healthz.get("total_ticks", "—")
     errs = healthz.get("total_errors", "—")
@@ -274,6 +378,8 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
             f"<td><code>{xh}</code></td></tr>"
         )
 
+    intel_panel = _render_release_intel_panel(movies, release_intel)
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -304,6 +410,16 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
     code {{ font-size: 0.75rem; word-break: break-all; }}
     section.panel {{ margin-top: 1.5rem; }}
     p.hint {{ font-size: 0.9rem; opacity: 0.85; margin: 0.5rem 0 0 0; }}
+    p.hint.meta {{ font-size: 0.8rem; opacity: 0.75; margin-bottom: 0.75rem; }}
+    .intel-panel h3 {{ font-size: 1rem; margin: 0 0 0.35rem 0; color: #c8d4f0; }}
+    .intel-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 1rem; margin-top: 0.75rem; }}
+    .intel-card {{ background: #151822; border: 1px solid #2e3545; border-radius: 8px;
+      padding: 1rem; }}
+    .intel-headline {{ font-weight: 600; color: #9ec5ff; margin: 0 0 0.5rem 0; }}
+    p.qualifier {{ font-size: 0.8rem; opacity: 0.75; margin-top: 0.75rem; font-style: italic; }}
+    .pill-warn-inline {{ background: #3d2a1e; color: #f0d4a8; padding: 0.35rem 0.5rem;
+      border-radius: 6px; display: inline-block; }}
   </style>
 </head>
 <body>
@@ -322,6 +438,7 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
         else ""
     }
   </header>
+  {intel_panel}
   <div class="grid">
     {"".join(cards)}
   </div>
@@ -338,6 +455,7 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
   </section>
   <p style="margin-top:2rem;font-size:0.85rem;opacity:0.7;">
     JSON: <a href="/api/status">/api/status</a> ·
+    <a href="/api/release_intel">/api/release_intel</a> ·
     <a href="/api/movies">/api/movies</a> ·
     <a href="/healthz">/healthz</a>
   </p>

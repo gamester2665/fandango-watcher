@@ -73,14 +73,12 @@ class TestAgentFallbackKey:
         assert "ANTHROPIC_API_KEY" not in env_keys
 
 
-class TestLegacyCruftRemoved:
-    def test_no_xai_grok_keys(self, env_keys: set[str]) -> None:
-        # XAI_* (xAI / Grok) was a leftover from the scaffolding seed and
-        # is now decisively unused. The X_* keys (Twitter Developer API)
-        # ARE expected and tested in :class:`TestSocialXKeys` below.
-        forbidden = {"XAI_API_KEY", "XAI_API_SECRET", "XAI_API_BEARER_TOKEN"}
-        leaked = forbidden & env_keys
-        assert not leaked, f"leftover xAI keys in .env.example: {leaked}"
+class TestXaiDashboardKeys:
+    """xAI (Grok) for optional dashboard release-intel summaries."""
+
+    def test_xai_api_key_documented(self, env_keys: set[str]) -> None:
+        assert "XAI_API_KEY" in env_keys
+        assert "XAI_MODEL" in env_keys
 
 
 class TestSocialXKeys:

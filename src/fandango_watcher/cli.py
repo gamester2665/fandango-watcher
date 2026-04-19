@@ -569,7 +569,8 @@ def _run_dashboard(args: argparse.Namespace) -> int:
     cfg = load_config(config_path)
     paths = DashboardPaths.from_config(cfg)
     hb = Heartbeat()
-    dd = DashboardData(cfg=cfg, paths=paths, heartbeat=hb)
+    settings = Settings()
+    dd = DashboardData(cfg=cfg, paths=paths, heartbeat=hb, settings=settings)
 
     try:
         ctx = start_healthz_server(

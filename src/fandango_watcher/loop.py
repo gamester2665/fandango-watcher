@@ -565,7 +565,7 @@ def run_watch(
         try:
             dash_paths = DashboardPaths.from_config(cfg)
             dashboard_data = DashboardData(
-                cfg=cfg, paths=dash_paths, heartbeat=hb
+                cfg=cfg, paths=dash_paths, heartbeat=hb, settings=settings
             )
             healthz_ctx = start_healthz_server(
                 hb,

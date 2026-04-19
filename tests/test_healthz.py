@@ -168,6 +168,10 @@ class TestDashboardRoutes:
             with urllib.request.urlopen(f"{base}/api/movies", timeout=5) as resp:
                 assert resp.status == 200
                 assert "movies" in json.loads(resp.read())
+            with urllib.request.urlopen(f"{base}/api/release_intel", timeout=5) as resp:
+                assert resp.status == 200
+                ri = json.loads(resp.read())
+                assert ri.get("status") == "unconfigured"
 
     def test_artifacts_path_traversal_returns_404(
         self, tmp_path: Path

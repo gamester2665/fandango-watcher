@@ -161,6 +161,15 @@ class StateConfig(ConfigBase):
     dir: str = "/app/state"
 
 
+class ReleaseIntelConfig(ConfigBase):
+    """Dashboard summaries via xAI (Grok) OpenAI-compatible API."""
+
+    enabled: bool = True
+    model: str = "grok-3-mini-latest"
+    cache_ttl_seconds: int = Field(default=3600, ge=60)
+    timeout_seconds: int = Field(default=90, ge=10, le=300)
+
+
 # -----------------------------------------------------------------------------
 # Social signals: X / Twitter (Phase 2.5 — advisory only)
 # -----------------------------------------------------------------------------
@@ -318,6 +327,7 @@ class WatcherConfig(ConfigBase):
     state: StateConfig = Field(default_factory=StateConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     social_x: SocialXConfig = Field(default_factory=SocialXConfig)
+    release_intel: ReleaseIntelConfig = Field(default_factory=ReleaseIntelConfig)
     movies: list[MovieConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -487,6 +497,12 @@ class Settings(BaseSettings):
     # ``base_url`` is OpenRouter, ``resolve_llm_api_key_for_agent`` in
     # ``agent_fallback.py`` falls back to ``openai_api_key``.
     openrouter_api_key: str = ""
+
+    # xAI (Grok) — dashboard ``release_intel`` summaries (OpenAI-compatible).
+    # https://docs.x.ai/docs/api-reference
+    xai_api_key: str = ""
+    # Optional env override for ``release_intel.model`` in config YAML.
+    xai_model: str = ""
 
     # X / Twitter Developer API (Phase 2.5 — social signals)
     # Only ``x_bearer_token`` is required for read-only public-tweet polling.

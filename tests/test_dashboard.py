@@ -90,6 +90,8 @@ def test_collect_dashboard_state_roundtrip(tmp_path: Path) -> None:
     snap = collect_dashboard_state(
         DashboardData(cfg=cfg, paths=paths, heartbeat=hb)
     )
+    assert "release_intel" in snap
+    assert snap["release_intel"]["status"] == "unconfigured"
     assert snap["healthz"]["total_ticks"] == 0
     assert len(snap["targets"]) == 1
     t0 = snap["targets"][0]
@@ -104,6 +106,7 @@ def test_render_index_html_escapes_movie_title() -> None:
         "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
         "targets": [],
         "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
         "movies": [{"key": "m1", "title": "<script>evil</script>", "fandango_targets": [], "x_handles": []}],
     }
     html_out = render_index_html(snap)
@@ -116,6 +119,7 @@ def test_render_index_html_shows_empty_state_hint() -> None:
         "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
         "targets": [{"name": "t1", "url": "https://x", "state": {}}],
         "social_x": {"handles": {}},
+        "release_intel": {"status": "disabled", "reason": "test"},
         "movies": [],
     }
     html_out = render_index_html(snap)
@@ -134,6 +138,7 @@ def test_render_index_html_hides_hint_when_state_present() -> None:
             }
         ],
         "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
         "movies": [],
     }
     html_out = render_index_html(snap)

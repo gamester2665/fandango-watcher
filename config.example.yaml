@@ -186,6 +186,16 @@ state:
   dir: /app/state
 
 # -----------------------------------------------------------------------------
+# Dashboard: xAI (Grok) release/ticketing news summaries (optional).
+# Set XAI_API_KEY in .env. Responses are cached as state/release_intel_cache.json.
+# -----------------------------------------------------------------------------
+release_intel:
+  enabled: true
+  model: grok-3-mini-latest
+  cache_ttl_seconds: 3600
+  timeout_seconds: 90
+
+# -----------------------------------------------------------------------------
 # Browser. Headless in production; the `login` compose service overrides to
 # headed for the one-time Fandango + AMC Stubs login.
 # -----------------------------------------------------------------------------
