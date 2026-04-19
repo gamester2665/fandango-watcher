@@ -498,15 +498,16 @@ class Settings(BaseSettings):
     # ``agent_fallback.py`` falls back to ``openai_api_key``.
     openrouter_api_key: str = ""
 
-    # xAI (Grok) — dashboard ``release_intel`` summaries (OpenAI-compatible).
-    # https://docs.x.ai/docs/api-reference — not interchangeable with OpenAI keys.
+    # xAI (Grok) — dashboard ``release_intel`` only; api.x.ai. Not OpenAI keys.
+    # Also unrelated to ``x_api_key`` below (that is the Twitter/X Developer API).
+    # https://docs.x.ai/docs/api-reference
     xai_api_key: str = ""
     # Optional alternate env name for the same xAI console key.
     grok_api_key: str = ""
     # Optional env override for ``release_intel.model`` in config YAML.
     xai_model: str = ""
 
-    # X / Twitter Developer API (Phase 2.5 — social signals)
+    # X / Twitter Developer API (developer.x.com) — social poll; NOT xAI Grok.
     # Only ``x_bearer_token`` is required for read-only public-tweet polling.
     # Key/secret are kept here for future user-context (OAuth1) flows.
     x_api_key: str = ""
