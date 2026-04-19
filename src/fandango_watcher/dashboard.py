@@ -25,6 +25,8 @@ class DashboardPaths:
     video_dir: Path
     trace_dir: Path
     purchase_dir: Path
+    # ``state/social_x.json`` — X poller persistence (same as social_x._state_path).
+    social_x_state_path: Path
     artifacts_root: Path
 
     @classmethod
@@ -34,6 +36,7 @@ class DashboardPaths:
         video_dir = Path(cfg.browser.record_video_dir).resolve()
         trace_dir = Path(cfg.browser.record_trace_dir).resolve()
         purchase_dir = Path(cfg.screenshots.per_purchase_dir).resolve()
+        social_x_state_path = state_dir / "social_x.json"
         artifacts_root = screenshot_dir.parent.resolve()
         return cls(
             state_dir=state_dir,
@@ -41,6 +44,7 @@ class DashboardPaths:
             video_dir=video_dir,
             trace_dir=trace_dir,
             purchase_dir=purchase_dir,
+            social_x_state_path=social_x_state_path,
             artifacts_root=artifacts_root,
         )
 
@@ -155,6 +159,7 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
         "movies": movies,
         "paths": {
             "state_dir": str(paths.state_dir),
+            "social_x_state_path": str(paths.social_x_state_path),
             "artifacts_root": str(paths.artifacts_root),
         },
     }

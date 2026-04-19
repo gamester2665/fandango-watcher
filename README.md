@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforcement + real-failure calibration pending. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-382 unit tests; run `uv run pytest -q`.
+385 unit tests; run `uv run pytest -q`.
 
 ---
 
@@ -259,7 +259,7 @@ recognizable A-List benefit phrase."**
 ## Tests
 
 ```bash
-uv run pytest -q                               # full suite (~6s, 382 tests)
+uv run pytest -q                               # full suite (~6s, 385 tests)
 uv run pytest tests/test_review_fixtures.py    # auto-discovered $0.00 invariant fixtures
 uv run pytest tests/test_agent_fallback_golden.py  # invariant must halt even if agent claims success
 uv run pytest tests/test_purchaser_rescue.py   # rescue is invoked + retried correctly

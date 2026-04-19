@@ -95,9 +95,7 @@ def _serve_artifact_file(
         return True
     root = artifacts_root.resolve()
     candidate = (root / rel).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
+    if not candidate.is_relative_to(root):
         handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
         return True
     if not candidate.is_file():
