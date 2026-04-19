@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced via browser-use usage summaries; real-failure calibration still pending. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-390 unit tests; run `uv run pytest -q`.
+391 unit tests; run `uv run pytest -q`.
 
 ---
 

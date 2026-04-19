@@ -159,6 +159,53 @@ _EXTRACTOR_JS = r"""
     });
   });
 
+  // --- Fandango "shared showtimes" layout (2025+) -------------------------
+  // Many movie-times pages use h2.shared-theater-header__name inside
+  // .shared-showtimes__container. Those pages often have **no** elements
+  // matching theater-card data-testids, so the legacy loop above yields
+  // zero theaters and we mis-classify ticketed pages as not_on_sale.
+  if (theaters.length === 0) {
+    document
+      .querySelectorAll(
+        'h2.shared-theater-header__name, h3.shared-theater-header__name'
+      )
+      .forEach((heading) => {
+        const name = text(heading);
+        if (!name) return;
+        const container =
+          heading.closest('.shared-showtimes__container') ||
+          heading.closest('[class*="shared-showtimes"]');
+        if (!container) return;
+        const showtimes = [];
+        container.querySelectorAll('a').forEach((el) => {
+          const lbl = text(el);
+          if (!lbl) return;
+          if (!/\d{1,2}:\d{2}/.test(lbl)) return;
+          showtimes.push({
+            label: lbl,
+            ticket_url: el.href || null,
+            is_buyable:
+              !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+            date_label: null,
+          });
+        });
+        // One theater with zero parsed times still yields partial_release
+        // (theater_count > 0) vs not_on_sale; prefer real showtime rows when present.
+        theaters.push({
+          name,
+          address: null,
+          distance_miles: null,
+          format_sections: [
+            {
+              label: 'Standard',
+              attributes: [],
+              showtimes,
+            },
+          ],
+        });
+      });
+  }
+
   return {
     page_title: document.title || "",
     movie_title:
@@ -243,7 +290,7 @@ def crawl_target(
     browser_cfg: BrowserConfig,
     citywalk_anchor: str,
     screenshot_dir: Path | None = None,
-    extra_wait_ms: int = 1500,
+    extra_wait_ms: int = 2500,
 ) -> ParsedPageData:
     """Crawl one Fandango target and return a validated ``ParsedPageData``.
 

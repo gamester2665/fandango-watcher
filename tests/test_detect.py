@@ -277,6 +277,10 @@ class TestCityWalkDetection:
             ("AMC Universal CityWalk 19 + IMAX", True),
             ("amc universal citywalk", True),
             ("AMC  Universal  CityWalk  19", True),  # extra spaces
+            (
+                "Universal Cinema AMC at CityWalk Hollywood",
+                True,
+            ),  # Fandango string vs config anchor word order
             ("AMC CityWalk Orlando", False),  # no "Universal"
             ("AMC Burbank 16", False),
             ("Regal LA Live", False),

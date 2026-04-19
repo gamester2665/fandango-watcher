@@ -141,7 +141,29 @@ def _normalize_whitespace(s: str) -> str:
 
 
 def _is_citywalk(theater_name: str, citywalk_anchor: str) -> bool:
-    return _normalize_whitespace(citywalk_anchor) in _normalize_whitespace(theater_name)
+    """True when ``theater_name`` is the configured CityWalk venue.
+
+    Primary rule: case-insensitive substring match (anchor in theater name).
+
+    Fandango often renders the venue as **Universal Cinema AMC at CityWalk
+    Hollywood** while configs say **AMC Universal CityWalk** — same place,
+    different word order, so a plain substring check fails. When both strings
+    contain *citywalk*, *amc*, and *universal*, treat it as the same anchor.
+    """
+    tl = _normalize_whitespace(theater_name)
+    al = _normalize_whitespace(citywalk_anchor)
+    if al in tl:
+        return True
+    if (
+        "citywalk" in tl
+        and "citywalk" in al
+        and "amc" in tl
+        and "amc" in al
+        and "universal" in tl
+        and "universal" in al
+    ):
+        return True
+    return False
 
 
 def _theater_listings(
