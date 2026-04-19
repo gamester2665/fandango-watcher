@@ -60,6 +60,8 @@ class DashboardData:
     heartbeat: Any | None = None
     # Env for optional xAI (Grok) release-intel summaries on the dashboard.
     settings: Settings | None = None
+    # HTML meta refresh interval; 0 disables auto-reload.
+    refresh_seconds: int = 10
 
 
 def _latest_artifact_for_target(
@@ -115,6 +117,32 @@ def _fmt_pt(iso: str | None) -> str:
         return dt.astimezone(_PT).strftime("%Y-%m-%d %H:%M:%S %Z")
     except (ValueError, OSError):
         return str(iso)
+
+
+def _relative_ago(
+    iso: str | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Short relative time for crawl timestamps (server clock)."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        dt = dt.astimezone(UTC)
+        ref = (now or datetime.now(UTC)).astimezone(UTC)
+        secs = int((ref - dt).total_seconds())
+        if secs < 45:
+            return "just now"
+        if secs < 3600:
+            return f"{max(1, secs // 60)}m ago"
+        if secs < 86400:
+            return f"{secs // 3600}h ago"
+        return f"{secs // 86400}d ago"
+    except (ValueError, OSError, TypeError):
+        return ""
 
 
 def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
@@ -279,8 +307,12 @@ def _render_release_intel_panel(
 """
 
 
-def render_index_html(snapshot: dict[str, Any]) -> str:
-    """Single-page HTML with inline CSS; auto-refresh every 10 seconds."""
+def render_index_html(
+    snapshot: dict[str, Any],
+    *,
+    refresh_seconds: int = 10,
+) -> str:
+    """Single-page HTML with inline CSS; optional meta refresh."""
     healthz = snapshot.get("healthz") or {}
     targets = snapshot.get("targets") or []
     social_x = snapshot.get("social_x") or {}
@@ -309,7 +341,12 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
         schema = html.escape(str(st.get("last_release_schema") or "—"))
         cur = html.escape(str(st.get("current_state") or "—"))
         tticks = html.escape(str(st.get("total_ticks", "—")))
-        su = html.escape(str(st.get("last_success_at") or "—"))
+        su_raw = st.get("last_success_at")
+        su = html.escape(str(su_raw or "—"))
+        rel = _relative_ago(str(su_raw) if su_raw is not None else None)
+        rel_html = (
+            f' <span class="rel">({html.escape(rel)})</span>' if rel else ""
+        )
 
         pill_class = "pill"
         cur_l = str(st.get("current_state") or "").lower()
@@ -356,7 +393,7 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
   <h2>{name}</h2>
   <p><a href="{url_e}" target="_blank" rel="noopener">{name} on Fandango</a></p>
   <p><span class="{pill_class}">{cur}</span></p>
-  <p class="card-stats"><strong>release_schema</strong> {schema} · <strong>ticks</strong> {tticks} · <strong>last OK</strong> {su}</p>
+  <p class="card-stats"><strong>release_schema</strong> {schema} · <strong>ticks</strong> {tticks} · <strong>last OK</strong> {su}{rel_html}</p>
   {media_block}
 </section>
 """
@@ -415,13 +452,22 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
 
     intel_panel = _render_release_intel_panel(movies, release_intel)
 
+    rs = max(0, int(refresh_seconds))
+    meta_refresh = (
+        f'  <meta http-equiv="refresh" content="{rs}" />\n' if rs > 0 else ""
+    )
+    refresh_note = (
+        f"Auto-refresh every {rs}s (disable with --refresh-seconds 0)."
+        if rs > 0
+        else "Auto-refresh off — reload the page to update."
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="refresh" content="10" />
-  <title>fandango-watcher</title>
+{meta_refresh}  <title>fandango-watcher</title>
   <style>
     :root {{
       --bg: #0f1117;
@@ -556,6 +602,11 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
       margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border);
       font-size: 0.82rem; color: var(--muted);
     }}
+    p.refresh-hint {{ margin: 0 0 0.65rem 0; font-size: 0.78rem; opacity: 0.92; }}
+    .card-stats .rel {{ font-size: 0.78rem; opacity: 0.88; font-weight: 450; }}
+    @media (prefers-reduced-motion: reduce) {{
+      summary::before {{ transition: none !important; }}
+    }}
   </style>
 </head>
 <body>
@@ -591,6 +642,7 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
   </section>
   </main>
   <footer class="dash-foot">
+    <p class="refresh-hint">{html.escape(refresh_note)}</p>
     JSON: <a href="/api/status">/api/status</a> ·
     <a href="/api/release_intel">/api/release_intel</a> ·
     <a href="/api/movies">/api/movies</a> ·

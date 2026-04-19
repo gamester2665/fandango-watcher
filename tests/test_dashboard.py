@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fandango_watcher.config import (
@@ -21,6 +22,7 @@ from fandango_watcher.dashboard import (
     DashboardData,
     DashboardPaths,
     _latest_artifact_for_target,
+    _relative_ago,
     artifact_url,
     collect_dashboard_state,
     render_index_html,
@@ -125,6 +127,29 @@ def test_render_index_html_shows_empty_state_hint() -> None:
     html_out = render_index_html(snap)
     assert "No per-target crawl history yet" in html_out
     assert "fandango-watcher watch" in html_out
+
+
+def test_relative_ago_minutes() -> None:
+    now = datetime(2026, 6, 1, 15, 0, 0, tzinfo=UTC)
+    past = datetime(2026, 6, 1, 14, 20, 0, tzinfo=UTC)
+    out = _relative_ago(
+        past.isoformat().replace("+00:00", "Z"),
+        now=now,
+    )
+    assert "m ago" in out
+
+
+def test_render_index_html_disables_meta_refresh_when_zero() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert 'http-equiv="refresh"' not in html_out
+    assert "Auto-refresh off" in html_out
 
 
 def test_render_index_html_hides_hint_when_state_present() -> None:

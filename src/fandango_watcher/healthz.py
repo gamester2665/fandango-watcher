@@ -145,7 +145,8 @@ def _make_handler_cls(
                 dd = dashboard_data
                 if path_only == "/":
                     snap = collect_dashboard_state(dd)
-                    html = render_index_html(snap)
+                    rs = getattr(dd, "refresh_seconds", 10)
+                    html = render_index_html(snap, refresh_seconds=rs)
                     _send_bytes(self, html.encode("utf-8"), "text/html; charset=utf-8")
                     return
                 if path_only == "/api/status":

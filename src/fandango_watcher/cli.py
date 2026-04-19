@@ -175,6 +175,16 @@ def build_parser() -> argparse.ArgumentParser:
             "(the URL is still logged). Ignored if --no-healthz."
         ),
     )
+    p_watch.add_argument(
+        "--dashboard-refresh-seconds",
+        type=int,
+        default=10,
+        metavar="N",
+        help=(
+            "HTML auto-refresh interval for the dashboard (meta refresh). "
+            "Use 0 to disable. Default 10."
+        ),
+    )
 
     # -- dashboard ----------------------------------------------------------
     p_dash = subparsers.add_parser(
@@ -200,6 +210,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-open",
         action="store_true",
         help="Do not auto-open a browser window.",
+    )
+    p_dash.add_argument(
+        "--refresh-seconds",
+        type=int,
+        default=10,
+        metavar="N",
+        help=(
+            "HTML auto-refresh interval (meta refresh). 0 disables. Default 10."
+        ),
     )
 
     # -- login --------------------------------------------------------------
@@ -550,6 +569,7 @@ def _run_watch(args: argparse.Namespace) -> int:
         healthz_port=healthz_port,
         max_ticks=args.max_ticks,
         open_browser=not args.no_open,
+        dashboard_refresh_seconds=args.dashboard_refresh_seconds,
     )
 
 
@@ -570,7 +590,13 @@ def _run_dashboard(args: argparse.Namespace) -> int:
     paths = DashboardPaths.from_config(cfg)
     hb = Heartbeat()
     settings = Settings()
-    dd = DashboardData(cfg=cfg, paths=paths, heartbeat=hb, settings=settings)
+    dd = DashboardData(
+        cfg=cfg,
+        paths=paths,
+        heartbeat=hb,
+        settings=settings,
+        refresh_seconds=max(0, int(args.refresh_seconds)),
+    )
 
     try:
         ctx = start_healthz_server(
