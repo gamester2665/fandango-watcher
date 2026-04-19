@@ -18,6 +18,7 @@ Phase 2 checklist.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,33 @@ from .detect import (
     PageSnapshot,
     classify,
 )
+from .models import ReleaseSchema
+
+logger = logging.getLogger(__name__)
+
+
+def _wait_for_fandango_showtime_dom(page: Page, *, timeout_ms: int = 15_000) -> None:
+    """Block until movie-times UI has likely painted (or timeout).
+
+    ``domcontentloaded`` plus a fixed sleep can snapshot a shell where neither
+    legacy theater-cards nor ``h2.shared-theater-header__name`` have mounted
+    yet, yielding 0 theaters and a false ``not_on_sale``. Waiting for a
+    selector that appears on both layout families avoids flaky classification.
+    """
+    try:
+        page.wait_for_selector(
+            "h2.shared-theater-header__name, "
+            "[data-testid*='theater-card'], "
+            "[class*='TheaterCard' i], "
+            "a[href*='ticketing']",
+            timeout=timeout_ms,
+        )
+    except Exception:
+        logger.debug(
+            "showtime DOM wait timed out after %dms; extracting anyway",
+            timeout_ms,
+            exc_info=True,
+        )
 from .models import ParsedPageData
 
 
@@ -337,6 +365,7 @@ def crawl_target(
             )
             if extra_wait_ms > 0:
                 page.wait_for_timeout(extra_wait_ms)
+            _wait_for_fandango_showtime_dom(page)
 
             screenshot_path: Path | None = None
             if screenshot_dir is not None:
@@ -346,6 +375,21 @@ def crawl_target(
             snapshot = _build_snapshot(
                 page=page, url=target.url, screenshot_path=screenshot_path
             )
+            parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
+            if (
+                parsed.release_schema == ReleaseSchema.NOT_ON_SALE
+                and snapshot.ticket_url
+                and "ticketing" in snapshot.ticket_url
+            ):
+                logger.info(
+                    "crawl_target: not_on_sale but ticketing URL present; "
+                    "waiting 4s and re-extracting once (slow showtime paint)"
+                )
+                page.wait_for_timeout(4000)
+                snapshot = _build_snapshot(
+                    page=page, url=target.url, screenshot_path=screenshot_path
+                )
+                parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
         finally:
             if trace_dir is not None:
                 trace_path = trace_dir / f"{target.name}-{stamp}.zip"
@@ -364,4 +408,4 @@ def crawl_target(
             if browser is not None:
                 browser.close()
 
-    return classify(snapshot, citywalk_anchor=citywalk_anchor)
+    return parsed

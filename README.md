@@ -291,11 +291,14 @@ between two listeners. To clear it:
   (and `--healthz-port` on `watch`).
 
 **Crawl shows `theater_count: 0` / `not_on_sale` but the movie is on sale** —
-Fandango often needs a **ZIP or location** before it renders theater cards.
-Use a format-filtered movie URL (e.g. `?format=IMAX%2070MM`), set your
-market in the browser profile (`fandango-watcher login`), or pick a target URL
-that includes location context. See also **Field notes** in [`PLAN.md`](./PLAN.md)
-(“coming soon” vs bookable showtimes).
+(1) Fandango may need a **ZIP or location** before it renders theater cards —
+use a format-filtered URL, warm the profile (`fandango-watcher login`), or
+pick a URL with location context. (2) **Race:** the page can paint showtimes
+after `domcontentloaded`; the crawler now waits for showtime DOM and can
+re-extract once when a ticketing URL is already visible. (3) After `git pull`,
+**restart `watch`** so the running process loads the latest extractor — stale
+Python processes keep old behavior and keep writing `not_on_sale` into
+`state/*.json`. See **Field notes** in [`PLAN.md`](./PLAN.md).
 
 **Twilio or SMTP skipped / warnings** — Check `.env` matches `.env.example`
 (`TWILIO_*`, `SMTP_*`). Run `fandango-watcher test-notify` to verify both
