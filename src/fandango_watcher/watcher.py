@@ -5,10 +5,12 @@ Exposes one public entry point, :func:`crawl_target`, which:
 1. Launches Chromium via Playwright's sync API (persistent context if a
    ``user_data_dir`` exists on disk, fresh context otherwise).
 2. Navigates to the target URL.
-3. Dumps a timestamped screenshot to ``screenshot_dir`` (if given).
-4. Extracts a :class:`~fandango_watcher.detect.PageSnapshot` via a small
+3. Optionally clicks a format chip (``TargetConfig.format_filter_click_*``)
+   so the DOM matches a filtered view (e.g. IMAX 3D) before capture.
+4. Dumps a timestamped screenshot to ``screenshot_dir`` (if given).
+5. Extracts a :class:`~fandango_watcher.detect.PageSnapshot` via a small
    browser-side JS helper.
-5. Hands the snapshot to :func:`~fandango_watcher.detect.classify` and
+6. Hands the snapshot to :func:`~fandango_watcher.detect.classify` and
    returns the validated ``ParsedPageData``.
 
 The DOM selectors used by the extractor are best-effort against Fandango's
@@ -19,6 +21,7 @@ Phase 2 checklist.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,7 +37,7 @@ from .detect import (
     PageSnapshot,
     classify,
 )
-from .models import ReleaseSchema
+from .models import ParsedPageData, ReleaseSchema
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,56 @@ def _wait_for_fandango_showtime_dom(page: Page, *, timeout_ms: int = 15_000) -> 
             timeout_ms,
             exc_info=True,
         )
-from .models import ParsedPageData
+
+
+def _maybe_click_format_filter(page: Page, target: TargetConfig) -> None:
+    """If configured, click a Fandango format chip before extraction.
+
+    Use ``format_filter_click_selector`` for a CSS selector, or
+    ``format_filter_click_label`` for a case-insensitive substring match
+    (scoped to ``#lazyload-format-filters`` when present). On failure, logs a
+    warning and continues so the crawl still returns a snapshot.
+    """
+    sel = target.format_filter_click_selector
+    label = target.format_filter_click_label
+    if not sel and not label:
+        return
+    timeout = int(target.format_filter_click_timeout_ms)
+    try:
+        if sel:
+            logger.info(
+                "format filter click (selector): target=%s selector=%r",
+                target.name,
+                sel,
+            )
+            page.locator(sel).first.click(timeout=timeout)
+        else:
+            assert label is not None
+            logger.info(
+                "format filter click (label): target=%s label=%r",
+                target.name,
+                label,
+            )
+            label_rx = re.compile(re.escape(label.strip()), re.IGNORECASE)
+            bucket = page.locator("#lazyload-format-filters")
+            if bucket.count() > 0:
+                chip = bucket.locator("li, button, a, [role='button']").filter(
+                    has_text=label_rx
+                )
+            else:
+                chip = page.locator("[class*='format-filter__list-item' i]").filter(
+                    has_text=label_rx
+                )
+            chip.first.click(timeout=timeout)
+    except Exception:
+        logger.warning(
+            "format filter click failed for target=%s; extracting current DOM",
+            target.name,
+            exc_info=True,
+        )
+        return
+    page.wait_for_timeout(800)
+    _wait_for_fandango_showtime_dom(page, timeout_ms=min(12_000, timeout))
 
 
 # -----------------------------------------------------------------------------
@@ -366,6 +418,7 @@ def crawl_target(
             if extra_wait_ms > 0:
                 page.wait_for_timeout(extra_wait_ms)
             _wait_for_fandango_showtime_dom(page)
+            _maybe_click_format_filter(page, target)
 
             screenshot_path: Path | None = None
             if screenshot_dir is not None:

@@ -8,6 +8,14 @@
 # -----------------------------------------------------------------------------
 # URLs to crawl on each tick. The first entry is primary; additional entries
 # act as backups for format-filtered routes or alternate slugs.
+#
+# Optional per-target keys (click a format chip after load, before screenshot +
+# extraction) — use when the URL alone does not select the row you want
+# (e.g. IMAX 3D at CityWalk):
+#   format_filter_click_selector: CSS selector for the chip (first match)
+#   format_filter_click_label:    substring, case-insensitive, if selector unset
+#     (scoped to #lazyload-format-filters, else .format-filter__list-item)
+#   format_filter_click_timeout_ms: default 12000
 # -----------------------------------------------------------------------------
 targets:
   - name: odyssey-imax-70mm

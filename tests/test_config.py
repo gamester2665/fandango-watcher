@@ -22,6 +22,7 @@ from fandango_watcher.config import (
     PurchaseConfig,
     SeatPrefEntry,
     Settings,
+    TargetConfig,
     WatcherConfig,
     load_config,
 )
@@ -234,6 +235,41 @@ class TestSeatPriorityKeys:
     def test_empty_seat_list_rejected(self) -> None:
         with pytest.raises(ValidationError):
             SeatPrefEntry(auditorium=1, seats=[])
+
+
+# -----------------------------------------------------------------------------
+# Target optional format-filter click
+# -----------------------------------------------------------------------------
+
+
+class TestTargetFormatFilterClick:
+    def test_defaults(self) -> None:
+        t = TargetConfig(name="n", url="https://www.fandango.com/x")
+        assert t.format_filter_click_selector is None
+        assert t.format_filter_click_label is None
+        assert t.format_filter_click_timeout_ms == 12000
+
+    def test_selector_and_label_accepted(self) -> None:
+        t = TargetConfig(
+            name="n",
+            url="https://www.fandango.com/x",
+            format_filter_click_selector="#lazyload-format-filters li",
+            format_filter_click_label="IMAX 3D",
+            format_filter_click_timeout_ms=8000,
+        )
+        assert t.format_filter_click_selector == "#lazyload-format-filters li"
+        assert t.format_filter_click_label == "IMAX 3D"
+        assert t.format_filter_click_timeout_ms == 8000
+
+    def test_blank_strings_normalized_to_none(self) -> None:
+        t = TargetConfig(
+            name="n",
+            url="https://www.fandango.com/x",
+            format_filter_click_selector="",
+            format_filter_click_label="   ",
+        )
+        assert t.format_filter_click_selector is None
+        assert t.format_filter_click_label is None
 
 
 # -----------------------------------------------------------------------------

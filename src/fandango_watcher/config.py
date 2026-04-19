@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import FormatTag
@@ -33,6 +33,18 @@ class TargetConfig(ConfigBase):
         "domcontentloaded"
     )
     timeout_ms: int = Field(default=30000, gt=0)
+    # Optional: click a format chip after load so the DOM matches a filtered view
+    # (e.g. IMAX 3D) before screenshots + extraction. Selector wins over label.
+    format_filter_click_selector: str | None = None
+    format_filter_click_label: str | None = None
+    format_filter_click_timeout_ms: int = Field(default=12000, ge=1000, le=120000)
+
+    @field_validator("format_filter_click_selector", "format_filter_click_label", mode="before")
+    @classmethod
+    def _strip_empty_format_filter_fields(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class TheaterConfig(ConfigBase):
