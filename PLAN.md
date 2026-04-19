@@ -641,17 +641,17 @@ remains the **sole** gate on the final "Complete Reservation" click.
   browser-use; cost accounting needs a per-provider token-usage hook).
 - [ ] Calibrate rescue prompt + optional rescue-on-exception against a
   real Fandango failure fixture (see ``dump-review`` + ``review_pages/``).
-- [ ] Confirm the Python invariant still gates the final click
-  regardless of what the model attempts (golden test with a
-  fixture-based `Page` stub that the agent "succeeds" on but whose DOM
-  shows `$5.99` — must halt).
+- [x] Confirm the Python invariant still gates the final click
+  regardless of what the model attempts — covered by
+  ``tests/test_agent_fallback_golden.py`` (upcharge fixture + SUCCEEDED
+  contract; purchaser re-validates DOM before Complete retry).
 
 ### Phase 7 — Hardening & VPS readiness
 
-- [ ] Write `README.md` with `docker compose` commands, the first-run headed-login flow, config + `.env` setup, and troubleshooting.
-- [ ] Document how to re-warm the profile volume after an AMC Stubs logout or session expiry.
+- [x] Write `README.md` with `docker compose` commands, the first-run headed-login flow, config + `.env` setup, and troubleshooting.
+- [x] Document how to re-warm the profile volume after an AMC Stubs logout or session expiry.
 - [ ] Smoke-test the same image on a VPS (VNC for the one-time login) to prove portability.
-- [ ] Record known risks (Fandango markup drift, fraud-detection friction, A-List policy changes on premium formats).
+- [x] Record known risks (Fandango markup drift, fraud-detection friction, A-List policy changes on premium formats).
 
 ---
 

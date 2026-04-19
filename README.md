@@ -274,6 +274,57 @@ uv run fandango-watcher dump-review --url <fandango-review-url> --headed
 
 ---
 
+## Troubleshooting
+
+**Port already in use (`8787`)** — Another process (or a second `watch` /
+`dashboard`) is bound to the dashboard / healthz port. Stop the other
+process, or use `fandango-watcher dashboard --port 8790` and/or change
+`--healthz-port` on `watch`.
+
+**Crawl shows `theater_count: 0` / `not_on_sale` but the movie is on sale** —
+Fandango often needs a **ZIP or location** before it renders theater cards.
+Use a format-filtered movie URL (e.g. `?format=IMAX%2070MM`), set your
+market in the browser profile (`fandango-watcher login`), or pick a target URL
+that includes location context. See also **Field notes** in [`PLAN.md`](./PLAN.md)
+(“coming soon” vs bookable showtimes).
+
+**Twilio or SMTP skipped / warnings** — Check `.env` matches `.env.example`
+(`TWILIO_*`, `SMTP_*`). Run `fandango-watcher test-notify` to verify both
+channels.
+
+**X / Twitter `x-poll` errors** — Confirm `X_BEARER_TOKEN` and run
+`fandango-watcher x-poll --check-bearer`. Free-tier rate limits may require
+longer `social_x.min_seconds`.
+
+**Agent rescue always `FAILED` (“browser-use not installed”)** — Install the
+optional stack: `uv sync --extra agent`.
+
+### Re-warming the browser profile (session expired)
+
+The Playwright profile (`browser.user_data_dir`, e.g. `./browser-profile` or
+Docker volume `fandango_profile`) holds Fandango + AMC Stubs cookies. After
+logout, password change, or long idle:
+
+- **Local:** run `uv run fandango-watcher login --headed` and complete sign-in
+  in the Chromium window.
+- **Docker:** `docker compose --profile tools run --rm login` with a working
+  X11/WSL display (see Docker section above).
+
+Then restart `watch`. Purchases and crawls reuse the same profile.
+
+### Known risks
+
+- **DOM drift** — Fandango can change class names and flows; update selectors
+  and capture new `dump-review` fixtures when layouts change.
+- **Friction** — CAPTCHAs, fraud checks, or extra verification can block
+  automation; agent rescue is instructed to stop with `NEEDS_HUMAN`-style
+  outcomes.
+- **A-List policy** — Premium formats and special events may not always be
+  no-upcharge; the `$0.00` invariant is designed to **halt** on any non-zero
+  total rather than complete a bad order.
+
+---
+
 ## License
 
 Personal use.

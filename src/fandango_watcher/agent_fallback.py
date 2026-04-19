@@ -283,6 +283,13 @@ class BrowserUseFallback:
         try:
             # ``browser_use.Agent.run`` is async; we own the event loop here
             # because the scripted purchaser is sync.
+            if self._cfg.max_cost_usd > 0:
+                logger.debug(
+                    "agent_fallback.max_cost_usd=%s is not yet enforced from "
+                    "provider token usage; max_steps=%s bounds each rescue",
+                    self._cfg.max_cost_usd,
+                    self._cfg.max_steps,
+                )
             result = asyncio.run(agent.run(max_steps=self._cfg.max_steps))
         except Exception as e:  # noqa: BLE001 — surface every failure
             logger.exception("browser-use rescue raised")
