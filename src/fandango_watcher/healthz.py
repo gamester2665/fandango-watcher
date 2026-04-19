@@ -127,7 +127,11 @@ def _make_handler_cls(
             )
 
         def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
-            from .dashboard import collect_dashboard_state, render_index_html
+            from .dashboard import (
+                collect_dashboard_state,
+                compute_dashboard_revision,
+                render_index_html,
+            )
 
             parsed = urlparse(self.path)
             path_only = unquote(parsed.path) or "/"
@@ -146,8 +150,17 @@ def _make_handler_cls(
                 if path_only == "/":
                     snap = collect_dashboard_state(dd)
                     rs = getattr(dd, "refresh_seconds", 10)
-                    html = render_index_html(snap, refresh_seconds=rs)
+                    rev = compute_dashboard_revision(dd)
+                    html = render_index_html(
+                        snap,
+                        refresh_seconds=rs,
+                        live_revision=rev,
+                    )
                     _send_bytes(self, html.encode("utf-8"), "text/html; charset=utf-8")
+                    return
+                if path_only == "/api/revision":
+                    rev = compute_dashboard_revision(dd)
+                    _send_json(self, {"revision": rev})
                     return
                 if path_only == "/api/status":
                     snap = collect_dashboard_state(dd)
@@ -212,8 +225,9 @@ def start_healthz_server(
     ephemeral port (read it back via ``ctx.port``).
 
     When ``dashboard_data`` is set, also serves ``/`` (HTML), ``/api/status``,
-    ``/api/movies``, ``/api/release_intel`` (xAI Grok release summaries), and
-    static files under ``/artifacts/...``.
+    ``/api/revision`` (fingerprint for live tab reload), ``/api/movies``,
+    ``/api/release_intel`` (xAI Grok release summaries), and static files under
+    ``/artifacts/...``.
     """
     server = _ExclusiveThreadingHTTPServer(
         (host, port),
@@ -231,7 +245,8 @@ def start_healthz_server(
     )
     if dashboard_data is not None:
         logger.info(
-            "dashboard ready: http://%s:%d/  (also /api/status, /api/movies, /artifacts/)",
+            "dashboard ready: http://%s:%d/  (also /api/status, /api/revision, "
+            "/api/movies, /artifacts/)",
             host,
             bound,
         )

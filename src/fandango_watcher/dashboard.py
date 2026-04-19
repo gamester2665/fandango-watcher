@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 from dataclasses import dataclass
@@ -203,6 +204,41 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
     }
 
 
+def compute_dashboard_revision(data: DashboardData) -> str:
+    """Short fingerprint that changes when the rendered dashboard would change.
+
+    Used by ``/api/revision`` and the HTML live-reload script so the **same tab**
+    refreshes as soon as crawl state, artifacts, or heartbeat data updates — without
+    relying on a fixed full-page interval only.
+    """
+    parts: list[str] = []
+    hb = data.heartbeat
+    if hb is not None:
+        parts.append(str(getattr(hb, "total_ticks", 0)))
+        parts.append(str(getattr(hb, "total_errors", 0)))
+        lt = getattr(hb, "last_tick_at", None)
+        parts.append(lt.isoformat() if lt is not None else "")
+        extra = getattr(hb, "extra", None)
+        if isinstance(extra, dict) and extra:
+            parts.append(json.dumps(extra, sort_keys=True, default=str))
+    paths = data.paths
+    for t in data.cfg.targets:
+        sp = paths.state_dir / f"{t.name}.json"
+        parts.append(str(sp.stat().st_mtime_ns) if sp.is_file() else "0")
+        shot = _latest_artifact_for_target(t.name, paths.screenshot_dir, ".png")
+        vid = _latest_artifact_for_target(t.name, paths.video_dir, ".webm")
+        tr = _latest_artifact_for_target(t.name, paths.trace_dir, ".zip")
+        parts.append(str(shot.stat().st_mtime_ns) if shot else "0")
+        parts.append(str(vid.stat().st_mtime_ns) if vid else "0")
+        parts.append(str(tr.stat().st_mtime_ns) if tr else "0")
+    sx = paths.social_x_state_path
+    parts.append(str(sx.stat().st_mtime_ns) if sx.is_file() else "0")
+    ric = paths.state_dir / "release_intel_cache.json"
+    parts.append(str(ric.stat().st_mtime_ns) if ric.is_file() else "0")
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _render_release_intel_panel(
     movies: list[Any], release_intel: dict[str, Any]
 ) -> str:
@@ -311,8 +347,15 @@ def render_index_html(
     snapshot: dict[str, Any],
     *,
     refresh_seconds: int = 10,
+    live_revision: str | None = None,
 ) -> str:
-    """Single-page HTML with inline CSS; optional meta refresh."""
+    """Single-page HTML with inline CSS.
+
+    When ``live_revision`` is set and ``refresh_seconds`` > 0, injects a small
+    script that polls ``/api/revision`` and reloads when the fingerprint changes
+    (same browser tab). ``<noscript>`` still uses meta refresh as a fallback.
+    When ``live_revision`` is omitted, uses only meta refresh (legacy/tests).
+    """
     healthz = snapshot.get("healthz") or {}
     targets = snapshot.get("targets") or []
     social_x = snapshot.get("social_x") or {}
@@ -453,21 +496,58 @@ def render_index_html(
     intel_panel = _render_release_intel_panel(movies, release_intel)
 
     rs = max(0, int(refresh_seconds))
-    meta_refresh = (
-        f'  <meta http-equiv="refresh" content="{rs}" />\n' if rs > 0 else ""
-    )
-    refresh_note = (
-        f"Auto-refresh every {rs}s (disable with --refresh-seconds 0)."
-        if rs > 0
-        else "Auto-refresh off — reload the page to update."
-    )
+    use_live = rs > 0 and live_revision is not None
+    meta_refresh = ""
+    noscript_meta = ""
+    if rs > 0:
+        if use_live:
+            noscript_meta = (
+                f'  <noscript><meta http-equiv="refresh" content="{rs}" />'
+                f"</noscript>\n"
+            )
+        else:
+            meta_refresh = f'  <meta http-equiv="refresh" content="{rs}" />\n'
+    poll_ms = 0
+    if use_live:
+        poll_ms = max(2000, min(30_000, rs * 1000))
+    if use_live:
+        refresh_note = (
+            f"Live reload when data changes (check every {poll_ms // 1000}s). "
+            f"No-JS fallback: full refresh every {rs}s."
+        )
+    elif rs > 0:
+        refresh_note = (
+            f"Auto-refresh every {rs}s (disable with --refresh-seconds 0)."
+        )
+    else:
+        refresh_note = "Auto-refresh off — reload the page to update."
+    rev_json = json.dumps(live_revision) if live_revision is not None else "null"
+    live_script = ""
+    if use_live:
+        live_script = f"""
+  <script>
+(function () {{
+  var rev = {rev_json};
+  var ms = {poll_ms};
+  function poll() {{
+    fetch("/api/revision", {{ cache: "no-store" }})
+      .then(function (r) {{ return r.json(); }})
+      .then(function (d) {{
+        if (d && d.revision && d.revision !== rev) location.reload();
+      }})
+      .catch(function () {{}});
+  }}
+  setInterval(poll, ms);
+}})();
+  </script>
+"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-{meta_refresh}  <title>fandango-watcher</title>
+{meta_refresh}{noscript_meta}  <title>fandango-watcher</title>
   <style>
     :root {{
       --bg: #0f1117;
@@ -648,6 +728,6 @@ def render_index_html(
     <a href="/api/movies">/api/movies</a> ·
     <a href="/healthz">/healthz</a>
   </footer>
-</body>
+{live_script}</body>
 </html>
 """

@@ -583,7 +583,9 @@ def run_watch(
                 import webbrowser
 
                 try:
-                    webbrowser.open(base)
+                    # Prefer the same browser window when the OS honors it (avoids
+                    # a new tab on every restart if a dashboard tab is already open).
+                    webbrowser.open(base, new=0)
                 except Exception:  # noqa: BLE001
                     logger.debug("webbrowser.open failed", exc_info=True)
         except OSError:

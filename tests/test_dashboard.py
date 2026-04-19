@@ -25,6 +25,7 @@ from fandango_watcher.dashboard import (
     _relative_ago,
     artifact_url,
     collect_dashboard_state,
+    compute_dashboard_revision,
     render_index_html,
 )
 from fandango_watcher.healthz import Heartbeat
@@ -137,6 +138,38 @@ def test_relative_ago_minutes() -> None:
         now=now,
     )
     assert "m ago" in out
+
+
+def test_render_index_html_live_reload_includes_fetch_and_noscript_fallback() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+    }
+    html_out = render_index_html(snap, refresh_seconds=10, live_revision="abc")
+    assert "/api/revision" in html_out
+    assert "fetch(" in html_out
+    assert '<noscript><meta http-equiv="refresh" content="10"' in html_out
+    assert "  <meta http-equiv=" not in html_out.split("<noscript>")[0]
+
+
+def test_compute_dashboard_revision_changes_with_state_mtime(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    paths = DashboardPaths.from_config(cfg)
+    paths.state_dir.mkdir(parents=True)
+    p = paths.state_dir / "alpha.json"
+    p.write_text("{}", encoding="utf-8")
+    hb = Heartbeat()
+    dd = DashboardData(cfg=cfg, paths=paths, heartbeat=hb)
+    r1 = compute_dashboard_revision(dd)
+    import time
+
+    time.sleep(0.05)
+    p.write_text('{"x": 1}', encoding="utf-8")
+    r2 = compute_dashboard_revision(dd)
+    assert r1 != r2
 
 
 def test_render_index_html_disables_meta_refresh_when_zero() -> None:

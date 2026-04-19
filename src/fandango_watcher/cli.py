@@ -621,7 +621,7 @@ def _run_dashboard(args: argparse.Namespace) -> int:
     logger.info("open dashboard: %s", url)
     if not args.no_open:
         try:
-            webbrowser.open(url)
+            webbrowser.open(url, new=0)
         except Exception:  # noqa: BLE001
             logger.debug("webbrowser.open failed", exc_info=True)
 
