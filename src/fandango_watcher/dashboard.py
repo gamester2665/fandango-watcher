@@ -193,9 +193,11 @@ def _render_release_intel_panel(
     if status == "unconfigured":
         return (
             '<section class="panel intel-panel"><h2>Release news (xAI Grok)</h2>'
-            '<p class="hint">Set <code>XAI_API_KEY</code> in <code>.env</code> for '
-            "summaries of public release and ticketing news. "
-            "Fandango crawl state below remains the source of truth for on-sale detection.</p>"
+            '<p class="hint">Set <code>XAI_API_KEY</code> (or <code>GROK_API_KEY</code>) in '
+            "<code>.env</code> with a key from <a href=\"https://console.x.ai\" "
+            'target="_blank" rel="noopener">console.x.ai</a> — OpenAI keys do not work '
+            "on api.x.ai. Summaries are advisory; Fandango crawl state below is the "
+            "source of truth for on-sale detection.</p>"
             "</section>"
         )
 

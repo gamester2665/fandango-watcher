@@ -24,6 +24,7 @@ from fandango_watcher.config import (
 from fandango_watcher.release_intel import (
     _compose_prompt,
     _extract_json_object,
+    _resolve_xai_api_key,
     get_release_intel_for_dashboard,
     refresh_release_intel,
 )
@@ -86,12 +87,20 @@ def test_extract_json_object_strips_fence() -> None:
     assert _extract_json_object(raw) == {"a": 1}
 
 
+def test_resolve_xai_prefers_xai_then_grok() -> None:
+    assert _resolve_xai_api_key(
+        Settings(xai_api_key="a", grok_api_key="b")
+    ) == "a"
+    assert _resolve_xai_api_key(Settings(xai_api_key="", grok_api_key="b")) == "b"
+    assert _resolve_xai_api_key(Settings(xai_api_key="", grok_api_key="")) == ""
+
+
 def test_get_release_intel_unconfigured_without_key(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     got = get_release_intel_for_dashboard(
         cfg,
         state_dir=Path(cfg.state.dir),
-        settings=Settings(xai_api_key=""),
+        settings=Settings(xai_api_key="", grok_api_key=""),
     )
     assert got["status"] == "unconfigured"
 

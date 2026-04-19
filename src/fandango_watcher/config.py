@@ -499,8 +499,10 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
 
     # xAI (Grok) — dashboard ``release_intel`` summaries (OpenAI-compatible).
-    # https://docs.x.ai/docs/api-reference
+    # https://docs.x.ai/docs/api-reference — not interchangeable with OpenAI keys.
     xai_api_key: str = ""
+    # Optional alternate env name for the same xAI console key.
+    grok_api_key: str = ""
     # Optional env override for ``release_intel.model`` in config YAML.
     xai_model: str = ""
 

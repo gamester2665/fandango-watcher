@@ -23,8 +23,28 @@ CACHE_BASENAME = "release_intel_cache.json"
 XAI_CHAT_COMPLETIONS_URL = "https://api.x.ai/v1/chat/completions"
 
 
+def _resolve_xai_api_key(settings: Settings) -> str:
+    """Bearer for api.x.ai — ``XAI_API_KEY`` or ``GROK_API_KEY`` (same key)."""
+    x = (settings.xai_api_key or "").strip()
+    if x:
+        return x
+    return (settings.grok_api_key or "").strip()
+
+
 def _cache_path(state_dir: Path) -> Path:
     return state_dir / CACHE_BASENAME
+
+
+def _format_tag_list(formats: list[Any] | None) -> list[str]:
+    """Serialize ``preferred_formats`` whether enums or plain strings from YAML."""
+    out: list[str] = []
+    for f in formats or []:
+        if isinstance(f, str):
+            out.append(f)
+        else:
+            v = getattr(f, "value", None)
+            out.append(str(v) if v is not None else str(f))
+    return out
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -70,7 +90,9 @@ def _build_watch_context(cfg: WatcherConfig, state_dir: Path) -> list[dict[str, 
             {
                 "key": m.key,
                 "title": m.title,
-                "preferred_formats": [f.value for f in (m.preferred_formats or [])],
+                "preferred_formats": _format_tag_list(
+                    list(m.preferred_formats or [])
+                ),
                 "x_handles": list(m.x_handles or []),
                 "x_keywords": list(m.x_keywords or []),
                 "fandango_targets": tstats,
@@ -110,7 +132,9 @@ def _call_xai(
             },
             json=payload,
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            snippet = (r.text or "")[:900]
+            raise RuntimeError(f"xAI HTTP {r.status_code}: {snippet}")
         data = r.json()
     choices = data.get("choices") or []
     if not choices:
@@ -152,9 +176,9 @@ def refresh_release_intel(
 ) -> dict[str, Any]:
     """Call xAI and write ``release_intel_cache.json``. Raises on HTTP/parse errors."""
     ri = cfg.release_intel
-    api_key = (settings.xai_api_key or "").strip()
+    api_key = _resolve_xai_api_key(settings)
     if not api_key:
-        raise ValueError("XAI_API_KEY is not set")
+        raise ValueError("No xAI bearer: set XAI_API_KEY or GROK_API_KEY in .env")
 
     model = (settings.xai_model or "").strip() or ri.model
     rows = _build_watch_context(cfg, state_dir)
@@ -214,16 +238,19 @@ def get_release_intel_for_dashboard(
 ) -> dict[str, Any]:
     """Return a JSON-safe blob for ``/api/status`` and the HTML dashboard.
 
-    Respects ``release_intel.enabled``, ``XAI_API_KEY``, and cache TTL.
+    Respects ``release_intel.enabled``, API key (``XAI_API_KEY`` or
+    ``OPENAI_API_KEY`` fallback), and cache TTL.
     """
     ri = cfg.release_intel
     if not ri.enabled:
         return {"status": "disabled", "reason": "release_intel.enabled is false"}
 
-    if settings is None or not (settings.xai_api_key or "").strip():
+    if settings is None or not _resolve_xai_api_key(settings):
         return {
             "status": "unconfigured",
-            "reason": "set XAI_API_KEY in .env for Grok release summaries",
+            "reason": (
+                "set XAI_API_KEY or GROK_API_KEY in .env (xAI console key; not OpenAI)"
+            ),
         }
 
     cached = load_cached_intel(state_dir)

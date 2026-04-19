@@ -78,6 +78,7 @@ class TestXaiDashboardKeys:
 
     def test_xai_api_key_documented(self, env_keys: set[str]) -> None:
         assert "XAI_API_KEY" in env_keys
+        assert "GROK_API_KEY" in env_keys
         assert "XAI_MODEL" in env_keys
 
 
