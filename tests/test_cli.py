@@ -6,6 +6,7 @@ Covers:
 * ``once --url`` is routed correctly (we don't actually launch Playwright;
   the watcher function is monkeypatched to intercept the call)
 * ``once`` without a config file reports a clear error
+* ``once --write-state`` persists ``state/<target>.json`` (config mode only)
 * ``test-purchase --from-fixture`` runs the planner end-to-end without
   touching Playwright
 * ``login`` forwards the resolved browser config + URL to ``run_login``
@@ -73,6 +74,7 @@ class TestBuildParser:
                 "--no-screenshot",
                 "--dry-run",
                 "--headed",
+                "--write-state",
             ]
         )
         assert ns.command == "once"
@@ -82,6 +84,7 @@ class TestBuildParser:
         assert ns.no_screenshot is True
         assert ns.dry_run is True
         assert ns.headed is True
+        assert ns.write_state is True
 
     def test_log_level_choices_enforced(self) -> None:
         parser = cli.build_parser()
@@ -416,6 +419,88 @@ class TestOnceViaExampleConfig:
         err = capsys.readouterr().err
         assert "no target named" in err
         assert "odyssey-imax-70mm" in err  # valid option listed for the user
+
+    def test_write_state_with_url_ad_hoc_errors(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        rc = cli.main(
+            [
+                "once",
+                "--url",
+                "https://www.fandango.com/x",
+                "--write-state",
+                "--no-screenshot",
+            ]
+        )
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "--write-state" in err
+        assert "--config" in err
+
+    def test_write_state_persists_json(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        state_dir = tmp_path / "state"
+        cfg_text = f"""
+targets:
+  - name: t1
+    url: https://example.com/m
+theater:
+  display_name: CW
+  fandango_theater_anchor: AMC Universal CityWalk
+formats:
+  require: [IMAX]
+  include: []
+poll:
+  min_seconds: 30
+  max_seconds: 30
+  error_backoff_multiplier: 2
+  error_backoff_cap_seconds: 1800
+purchase:
+  enabled: false
+  mode: notify_only
+notify:
+  channels: []
+  on_events: []
+screenshots:
+  dir: {repr(str(tmp_path / "artifacts" / "screenshots"))}
+  per_purchase_dir: {repr(str(tmp_path / "artifacts" / "purchase"))}
+state:
+  dir: {repr(str(state_dir))}
+browser:
+  headless: true
+  user_data_dir: {repr(str(tmp_path / "profile"))}
+"""
+        cfg_path = tmp_path / "cfg.yaml"
+        cfg_path.write_text(cfg_text, encoding="utf-8")
+
+        def fake_crawl(target, *, browser_cfg, citywalk_anchor, screenshot_dir):  # type: ignore[no-untyped-def]
+            return _make_stub_result()
+
+        monkeypatch.setattr("fandango_watcher.watcher.crawl_target", fake_crawl)
+
+        rc = cli.main(
+            [
+                "once",
+                "--config",
+                str(cfg_path),
+                "--target",
+                "t1",
+                "--no-screenshot",
+                "--write-state",
+            ]
+        )
+        assert rc == 0
+        assert (state_dir / "t1.json").is_file()
+        out = json.loads(capsys.readouterr().out)
+        assert "parsed" in out and "state_write" in out
+        assert out["parsed"]["release_schema"] == "not_on_sale"
+        assert out["state_write"]["path"].endswith("t1.json")
+        assert "target_state" in out["state_write"]
 
 
 # -----------------------------------------------------------------------------

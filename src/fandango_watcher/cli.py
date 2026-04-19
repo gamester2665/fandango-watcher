@@ -111,6 +111,16 @@ def build_parser() -> argparse.ArgumentParser:
             "`npx playwright show-trace <file>` (DOM + screenshots + network)."
         ),
     )
+    p_once.add_argument(
+        "--write-state",
+        action="store_true",
+        help=(
+            "After a successful crawl, run the same transition()+save as "
+            "`watch` and write state/<target>.json (requires --config; not "
+            "compatible with --url). stdout JSON becomes "
+            '{"parsed": ... , "state_write": ...}.'
+        ),
+    )
 
     # -- watch --------------------------------------------------------------
     p_watch = subparsers.add_parser(
@@ -390,6 +400,15 @@ def _run_once(args: argparse.Namespace) -> int:
     # cost of starting up Playwright.
     from .watcher import crawl_target
 
+    if args.write_state and args.url:
+        print(
+            "error: --write-state requires a config file (--config); "
+            "it cannot be used with --url ad-hoc mode.",
+            file=sys.stderr,
+        )
+        return 1
+
+    cfg_for_state: Any = None
     if args.url:
         # Ad-hoc mode: synthesize a minimal target + browser config so the
         # user can `fandango-watcher once --url <URL>` without a config file.
@@ -443,6 +462,7 @@ def _run_once(args: argparse.Namespace) -> int:
         screenshot_dir = (
             None if args.no_screenshot else Path(cfg.screenshots.dir)
         )
+        cfg_for_state = cfg
 
     logger.info(
         "crawling target=%s url=%s headless=%s",
@@ -458,9 +478,27 @@ def _run_once(args: argparse.Namespace) -> int:
         screenshot_dir=screenshot_dir,
     )
 
-    # ``mode="json"`` ensures datetimes and enums serialize cleanly.
-    payload = result.model_dump(mode="json")
-    json.dump(payload, sys.stdout, indent=2, default=str)
+    if args.write_state:
+        from .state import load_target_state, save_target_state, transition
+
+        assert cfg_for_state is not None
+        state_dir = Path(cfg_for_state.state.dir)
+        prev = load_target_state(state_dir, target.name)
+        tr = transition(prev, result)
+        written = save_target_state(state_dir, tr.state)
+        out: dict[str, Any] = {
+            "parsed": result.model_dump(mode="json"),
+            "state_write": {
+                "path": str(written),
+                "events": tr.events,
+                "target_state": tr.state.model_dump(mode="json"),
+            },
+        }
+        json.dump(out, sys.stdout, indent=2, default=str)
+    else:
+        # ``mode="json"`` ensures datetimes and enums serialize cleanly.
+        payload = result.model_dump(mode="json")
+        json.dump(payload, sys.stdout, indent=2, default=str)
     sys.stdout.write("\n")
     return 0
 
