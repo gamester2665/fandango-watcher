@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig
+from .dashboard import DashboardData, DashboardPaths
 from .healthz import Heartbeat, HealthzContext, start_healthz_server
 from .models import ParsedPageData
 from .notify import (
@@ -524,6 +525,7 @@ def run_watch(
     purchase_fn: PurchaseFn | None = None,
     purchase_artifacts_dir: Path | None = None,
     social_x_poll_fn: Callable[..., object] | None = None,
+    open_browser: bool = True,
 ) -> int:
     """Run the watch loop until ``stop_event`` is set or ``max_ticks`` is hit.
 
@@ -561,9 +563,24 @@ def run_watch(
     healthz_ctx: HealthzContext | None = None
     if healthz_port is not None:
         try:
-            healthz_ctx = start_healthz_server(
-                hb, host=healthz_host, port=healthz_port
+            dash_paths = DashboardPaths.from_config(cfg)
+            dashboard_data = DashboardData(
+                cfg=cfg, paths=dash_paths, heartbeat=hb
             )
+            healthz_ctx = start_healthz_server(
+                hb,
+                host=healthz_host,
+                port=healthz_port,
+                dashboard_data=dashboard_data,
+            )
+            base = f"http://{healthz_host}:{healthz_ctx.port}/"
+            if open_browser:
+                import webbrowser
+
+                try:
+                    webbrowser.open(base)
+                except Exception:  # noqa: BLE001
+                    logger.debug("webbrowser.open failed", exc_info=True)
         except OSError:
             logger.exception(
                 "failed to start healthz on %s:%d; continuing without",

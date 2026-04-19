@@ -157,6 +157,40 @@ def build_parser() -> argparse.ArgumentParser:
             "debugging (DOM + screenshots + network + console)."
         ),
     )
+    p_watch.add_argument(
+        "--no-open",
+        action="store_true",
+        help=(
+            "Do not open the read-only dashboard in a browser on startup "
+            "(the URL is still logged). Ignored if --no-healthz."
+        ),
+    )
+
+    # -- dashboard ----------------------------------------------------------
+    p_dash = subparsers.add_parser(
+        "dashboard",
+        help=(
+            "Serve the read-only dashboard only (no Fandango crawl). "
+            "Browse state + artifacts at http://127.0.0.1:8787/ by default."
+        ),
+    )
+    p_dash.add_argument("--config", default=None)
+    p_dash.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address (default 127.0.0.1).",
+    )
+    p_dash.add_argument(
+        "--port",
+        type=int,
+        default=8787,
+        help="TCP port (default 8787).",
+    )
+    p_dash.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not auto-open a browser window.",
+    )
 
     # -- login --------------------------------------------------------------
     p_login = subparsers.add_parser(
@@ -477,7 +511,59 @@ def _run_watch(args: argparse.Namespace) -> int:
         stop_event=stop_event,
         healthz_port=healthz_port,
         max_ticks=args.max_ticks,
+        open_browser=not args.no_open,
     )
+
+
+def _run_dashboard(args: argparse.Namespace) -> int:
+    import threading
+    import webbrowser
+
+    from .dashboard import DashboardData, DashboardPaths
+    from .healthz import Heartbeat, start_healthz_server
+    from .loop import install_signal_handlers
+
+    config_path = _resolve_config_path(args.config)
+    if not config_path.is_file():
+        print(f"error: config file not found: {config_path}", file=sys.stderr)
+        return 1
+
+    cfg = load_config(config_path)
+    paths = DashboardPaths.from_config(cfg)
+    hb = Heartbeat()
+    dd = DashboardData(cfg=cfg, paths=paths, heartbeat=hb)
+
+    try:
+        ctx = start_healthz_server(
+            hb,
+            host=args.host,
+            port=args.port,
+            dashboard_data=dd,
+        )
+    except OSError:
+        logger.exception(
+            "failed to bind dashboard on %s:%s",
+            args.host,
+            args.port,
+        )
+        return 1
+
+    url = f"http://{args.host}:{ctx.port}/"
+    logger.info("open dashboard: %s", url)
+    if not args.no_open:
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            logger.debug("webbrowser.open failed", exc_info=True)
+
+    stop_event = threading.Event()
+    install_signal_handlers(stop_event)
+    stop_event.wait()
+    try:
+        ctx.stop()
+    except Exception:  # noqa: BLE001
+        logger.exception("error stopping dashboard server")
+    return 0
 
 
 def _run_test_notify(args: argparse.Namespace) -> int:
@@ -925,6 +1011,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_once(args)
     if args.command == "watch":
         return _run_watch(args)
+    if args.command == "dashboard":
+        return _run_dashboard(args)
     if args.command == "test-notify":
         return _run_test_notify(args)
     if args.command == "login":

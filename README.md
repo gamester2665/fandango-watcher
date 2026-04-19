@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforcement + real-failure calibration pending. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-373 unit tests; run `uv run pytest -q`.
+382 unit tests; run `uv run pytest -q`.
 
 ---
 
@@ -113,6 +113,36 @@ Twilio SMS stays text-only (the message includes the Fandango deep link).
 
 ---
 
+## Read-only dashboard
+
+When the HTTP server is enabled (default for `watch`), the same process serves a
+**read-only HTML dashboard** alongside `/healthz`:
+
+| Route | Purpose |
+| ----- | ------- |
+| `/` | Auto-refreshing page (~10s): per-target cards with latest screenshot, **video** (`.webm`), and trace link; X poller table; movies registry. |
+| `/api/status` | JSON snapshot (same data as the HTML page). |
+| `/api/movies` | JSON list of `movies:` registry entries. |
+| `/healthz` | Liveness JSON (Docker healthcheck). |
+| `/artifacts/...` | Static files under your `artifacts/` tree (screenshots, videos, traces) — path-traversal safe. |
+
+Bind address is **`127.0.0.1`** by default (not exposed to LAN). **`--no-healthz`** disables the server and the dashboard together.
+
+```bash
+# While watch is running (auto-opens your browser unless --no-open):
+uv run fandango-watcher watch --headed --video
+
+# Browse historical state + artifacts without crawling:
+uv run fandango-watcher dashboard
+# Optional: uv run fandango-watcher dashboard --host 127.0.0.1 --port 8787 --no-open
+```
+
+Use **`--no-open`** on `watch` if you only want the dashboard URL in the logs (e.g. SSH session).
+
+Videos from crawls and purchases are renamed to **`{target-name}-{timestamp}.webm`** under `browser.record_video_dir` so each card can pick the latest file for that target.
+
+---
+
 ## Quick start (Docker)
 
 ```bash
@@ -151,8 +181,11 @@ fandango-watcher <subcommand>
                    --target / --url / --no-screenshot / --dry-run /
                    --headed / --video / --trace
   watch            Long poll loop (Twilio + SMTP + scripted purchaser).
+                   Serves dashboard + /healthz unless --no-healthz.
                    Flags: --no-healthz / --healthz-port / --max-ticks /
-                          --headed / --video / --trace
+                          --headed / --video / --trace / --no-open
+  dashboard        Read-only UI only (no crawl). Flags:
+                   --config / --host / --port / --no-open
   login            Headed first-run to warm the persistent profile.
   test-notify      Fire one Twilio + SMTP message through the configured channels.
   test-purchase    Crawl + classify + plan + JSON. Never clicks Complete.
@@ -205,6 +238,8 @@ recognizable A-List benefit phrase."**
 ├── pyproject.toml                    # uv-managed deps; [agent] extra = browser-use + langchain-openai
 └── src/fandango_watcher/
     ├── cli.py                        # argparse subcommands (lazy-imported)
+    ├── dashboard.py                  # collect_dashboard_state + render_index_html (read-only UI)
+    ├── healthz.py                    # /healthz + optional dashboard + /artifacts static
     ├── config.py                     # Pydantic Settings + WatcherConfig (incl. BrowserConfig record_video / record_trace)
     ├── models.py                     # ParsedPageData (Schema A / B / C discriminated union)
     ├── reference_pages.py            # canonical Fandango fixtures (Odyssey, Dune Pt 3, Project Hail Mary, Mandalorian + Grogu)
@@ -224,7 +259,7 @@ recognizable A-List benefit phrase."**
 ## Tests
 
 ```bash
-uv run pytest -q                               # full suite (~4s, 373 tests)
+uv run pytest -q                               # full suite (~6s, 382 tests)
 uv run pytest tests/test_review_fixtures.py    # auto-discovered $0.00 invariant fixtures
 uv run pytest tests/test_agent_fallback_golden.py  # invariant must halt even if agent claims success
 uv run pytest tests/test_purchaser_rescue.py   # rescue is invoked + retried correctly

@@ -49,6 +49,7 @@ class TestBuildParser:
         assert names == {
             "once",
             "watch",
+            "dashboard",
             "login",
             "test-notify",
             "test-purchase",
@@ -116,6 +117,37 @@ class TestLoginParser:
         assert ns.config is None
         assert ns.login_url is None
         assert ns.headless is False
+
+
+class TestDashboardParser:
+    def test_dashboard_accepts_host_port_no_open(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(
+            [
+                "dashboard",
+                "--config",
+                "cfg.yaml",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "9999",
+                "--no-open",
+            ]
+        )
+        assert ns.command == "dashboard"
+        assert ns.config == "cfg.yaml"
+        assert ns.host == "0.0.0.0"
+        assert ns.port == 9999
+        assert ns.no_open is True
+
+
+class TestWatchNoOpen:
+    def test_watch_parses_no_open(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(["watch", "--no-open", "--no-healthz"])
+        assert ns.command == "watch"
+        assert ns.no_open is True
+        assert ns.no_healthz is True
 
 
 class TestTestPurchaseParser:

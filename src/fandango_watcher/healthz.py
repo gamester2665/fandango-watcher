@@ -1,24 +1,19 @@
-"""Tiny background HTTP server exposing ``/healthz``.
-
-``docker-compose.yml`` and the Dockerfile both reference
-``http://127.0.0.1:8787/healthz`` as the container healthcheck; this module
-is the minimal implementation that satisfies that probe without pulling in
-an async framework.
-
-The server runs in a daemon thread so a crashed handler can never keep the
-process alive. The ``Heartbeat`` dataclass is the shared state; the watch
-loop mutates it each tick and the HTTP handler reads a snapshot on request.
-"""
+"""Background HTTP server: ``/healthz`` plus optional read-only dashboard."""
 
 from __future__ import annotations
 
 import json
 import logging
+import mimetypes
+import shutil
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -64,17 +59,82 @@ class HealthzContext:
         self.thread.join(timeout=timeout)
 
 
-def _make_handler_cls(heartbeat: Heartbeat) -> type[BaseHTTPRequestHandler]:
+def _send_json(
+    handler: BaseHTTPRequestHandler, payload: dict[str, Any]
+) -> None:
+    body = json.dumps(payload, default=str).encode("utf-8")
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _send_bytes(
+    handler: BaseHTTPRequestHandler,
+    body: bytes,
+    content_type: str,
+) -> None:
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _serve_artifact_file(
+    handler: BaseHTTPRequestHandler,
+    *,
+    artifacts_root: Path,
+    relative_url_path: str,
+) -> bool:
+    """Stream a file under ``artifacts_root``. Returns True if handled."""
+    rel = relative_url_path.lstrip("/")
+    if ".." in rel.split("/"):
+        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+        return True
+    root = artifacts_root.resolve()
+    candidate = (root / rel).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+        return True
+    if not candidate.is_file():
+        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+        return True
+    mime, _enc = mimetypes.guess_type(str(candidate))
+    ctype = mime or "application/octet-stream"
+    try:
+        handler.send_response(HTTPStatus.OK)
+        handler.send_header("Content-Type", ctype)
+        handler.send_header("Content-Length", str(candidate.stat().st_size))
+        handler.end_headers()
+        with candidate.open("rb") as f:
+            shutil.copyfileobj(f, handler.wfile)
+    except OSError:
+        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+    return True
+
+
+def _make_handler_cls(
+    heartbeat: Heartbeat,
+    *,
+    dashboard_data: Any | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        # Silence the default stderr access log; route it to our logger at
-        # DEBUG instead so container stderr isn't spammed by probes.
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             logger.debug(
                 "healthz %s - %s", self.address_string(), format % args
             )
 
         def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
-            if self.path in ("/healthz", "/health"):
+            from .dashboard import collect_dashboard_state, render_index_html
+
+            parsed = urlparse(self.path)
+            path_only = unquote(parsed.path) or "/"
+
+            if path_only in ("/healthz", "/health"):
                 payload = json.dumps(heartbeat.snapshot()).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json")
@@ -82,6 +142,33 @@ def _make_handler_cls(heartbeat: Heartbeat) -> type[BaseHTTPRequestHandler]:
                 self.end_headers()
                 self.wfile.write(payload)
                 return
+
+            if dashboard_data is not None:
+                dd = dashboard_data
+                if path_only == "/":
+                    snap = collect_dashboard_state(dd)
+                    html = render_index_html(snap)
+                    _send_bytes(self, html.encode("utf-8"), "text/html; charset=utf-8")
+                    return
+                if path_only == "/api/status":
+                    snap = collect_dashboard_state(dd)
+                    _send_json(self, snap)
+                    return
+                if path_only == "/api/movies":
+                    movies = [
+                        m.model_dump(mode="json") for m in dd.cfg.movies
+                    ]
+                    _send_json(self, {"movies": movies})
+                    return
+                if path_only.startswith("/artifacts/"):
+                    rel = path_only[len("/artifacts/") :]
+                    _serve_artifact_file(
+                        self,
+                        artifacts_root=dd.paths.artifacts_root,
+                        relative_url_path=rel,
+                    )
+                    return
+
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
     return Handler
@@ -92,20 +179,32 @@ def start_healthz_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8787,
+    dashboard_data: Any | None = None,
 ) -> HealthzContext:
     """Bind + serve in a daemon thread. Use ``port=0`` in tests for an
     ephemeral port (read it back via ``ctx.port``).
+
+    When ``dashboard_data`` is set, also serves ``/`` (HTML), ``/api/status``,
+    ``/api/movies``, and static files under ``/artifacts/...``.
     """
-    server = ThreadingHTTPServer((host, port), _make_handler_cls(heartbeat))
-    # daemon=True so the process can exit even if ``shutdown()`` is skipped
-    # (e.g. during a crash inside the watch loop).
+    server = ThreadingHTTPServer(
+        (host, port),
+        _make_handler_cls(heartbeat, dashboard_data=dashboard_data),
+    )
     thread = threading.Thread(
         target=server.serve_forever, name="healthz", daemon=True
     )
     thread.start()
+    bound = server.server_address[1]
     logger.info(
         "healthz listening on http://%s:%d/healthz",
         host,
-        server.server_address[1],
+        bound,
     )
+    if dashboard_data is not None:
+        logger.info(
+            "dashboard ready: http://%s:%d/  (also /api/status, /api/movies, /artifacts/)",
+            host,
+            bound,
+        )
     return HealthzContext(server=server, thread=thread)

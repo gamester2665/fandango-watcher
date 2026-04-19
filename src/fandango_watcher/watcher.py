@@ -25,6 +25,7 @@ from typing import Any
 from playwright.sync_api import Page, sync_playwright
 
 from .config import BrowserConfig, TargetConfig
+from .playwright_video import rename_page_video_after_close
 from .detect import (
     ExtractedFormatSection,
     ExtractedShowtime,
@@ -278,6 +279,8 @@ def crawl_target(
         if trace_dir is not None:
             context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        page: Page | None = None
         try:
             page = context.new_page()
             page.goto(
@@ -298,12 +301,18 @@ def crawl_target(
             )
         finally:
             if trace_dir is not None:
-                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
                 trace_path = trace_dir / f"{target.name}-{stamp}.zip"
                 try:
                     context.tracing.stop(path=str(trace_path))
                 except Exception:  # noqa: BLE001 — never let tracing kill the crawl
                     pass
+            if page is not None:
+                rename_page_video_after_close(
+                    page,
+                    browser_cfg=browser_cfg,
+                    label=target.name,
+                    stamp=stamp,
+                )
             context.close()
             if browser is not None:
                 browser.close()

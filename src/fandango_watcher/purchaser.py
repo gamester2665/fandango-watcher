@@ -33,6 +33,7 @@ from .agent_fallback import (
     build_agent_fallback,
 )
 from .config import AgentFallbackConfig, BrowserConfig, PurchaseConfig, Settings
+from .playwright_video import rename_page_video_after_close
 from .purchase import (
     InvariantResult,
     PurchaseAttempt,
@@ -340,6 +341,7 @@ def run_scripted_purchase(
     try:
         with session_cm as (_pw, context, _browser):
             page = context.new_page()
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             step = 0
 
             def snap(label: str) -> None:
@@ -416,123 +418,132 @@ def run_scripted_purchase(
                     agent_rescue_notes=agent_rescue_notes,
                 )
 
-            page.goto(
-                plan.showtime_url,
-                wait_until="domcontentloaded",
-                timeout=navigate_timeout_ms,
-            )
-            page.wait_for_timeout(1200)
-            snap("after-goto")
-
-            picked = False
-            for seat in plan.seat_priority:
-                if _click_seat(page, seat, seat_click_timeout_ms):
-                    picked = True
-                    logger.info("selected seat candidate=%s", seat)
-                    break
-            snap("after-seat-click")
-
-            if not picked:
-                return _finish(
-                    PurchaseOutcome.HALTED_PREFERRED_SOLD_OUT,
-                    halt_reason="no preferred seat could be clicked",
+            try:
+                page.goto(
+                    plan.showtime_url,
+                    wait_until="domcontentloaded",
+                    timeout=navigate_timeout_ms,
                 )
-
-            _advance_toward_review(page)
-            snap("after-advance")
-
-            raw = page.evaluate(_REVIEW_SNAPSHOT_JS)
-            if not isinstance(raw, dict):
-                raw = {}
-            review = extract_review_state(plan, raw)
-            inv = validate_invariant(plan, review, purchase_cfg.invariant)
-            snap("review-before-decision")
-
-            if not inv.ok:
-                return _finish(
-                    PurchaseOutcome.HALTED_INVARIANT,
-                    review=review,
-                    inv=inv,
-                    halt_reason="; ".join(inv.reasons_failed),
-                )
-
-            if hold_for_confirm:
-                return _finish(
-                    PurchaseOutcome.HELD_FOR_CONFIRM,
-                    review=review,
-                    inv=inv,
-                    halt_reason="hold_for_confirm: invariant passed; complete manually",
-                )
-
-            if not _click_complete_reservation(page):
-                err0 = "complete reservation button not found or not clickable"
-                reason = _classify_scripted_failure_for_agent(
-                    err=None, complete_button_failed=True
-                )
-                rr = maybe_agent_rescue(reason, err0, page)
-                if rr is not None:
-                    snap("after-agent-rescue")
-                if rr is not None and rr.outcome == FallbackOutcome.SUCCEEDED:
-                    raw_r = page.evaluate(_REVIEW_SNAPSHOT_JS)
-                    review_r = extract_review_state(
-                        plan, raw_r if isinstance(raw_r, dict) else {}
+                page.wait_for_timeout(1200)
+                snap("after-goto")
+    
+                picked = False
+                for seat in plan.seat_priority:
+                    if _click_seat(page, seat, seat_click_timeout_ms):
+                        picked = True
+                        logger.info("selected seat candidate=%s", seat)
+                        break
+                snap("after-seat-click")
+    
+                if not picked:
+                    return _finish(
+                        PurchaseOutcome.HALTED_PREFERRED_SOLD_OUT,
+                        halt_reason="no preferred seat could be clicked",
                     )
-                    inv_r = validate_invariant(
-                        plan, review_r, purchase_cfg.invariant
+    
+                _advance_toward_review(page)
+                snap("after-advance")
+    
+                raw = page.evaluate(_REVIEW_SNAPSHOT_JS)
+                if not isinstance(raw, dict):
+                    raw = {}
+                review = extract_review_state(plan, raw)
+                inv = validate_invariant(plan, review, purchase_cfg.invariant)
+                snap("review-before-decision")
+    
+                if not inv.ok:
+                    return _finish(
+                        PurchaseOutcome.HALTED_INVARIANT,
+                        review=review,
+                        inv=inv,
+                        halt_reason="; ".join(inv.reasons_failed),
                     )
-                    if not inv_r.ok:
+    
+                if hold_for_confirm:
+                    return _finish(
+                        PurchaseOutcome.HELD_FOR_CONFIRM,
+                        review=review,
+                        inv=inv,
+                        halt_reason="hold_for_confirm: invariant passed; complete manually",
+                    )
+    
+                if not _click_complete_reservation(page):
+                    err0 = "complete reservation button not found or not clickable"
+                    reason = _classify_scripted_failure_for_agent(
+                        err=None, complete_button_failed=True
+                    )
+                    rr = maybe_agent_rescue(reason, err0, page)
+                    if rr is not None:
+                        snap("after-agent-rescue")
+                    if rr is not None and rr.outcome == FallbackOutcome.SUCCEEDED:
+                        raw_r = page.evaluate(_REVIEW_SNAPSHOT_JS)
+                        review_r = extract_review_state(
+                            plan, raw_r if isinstance(raw_r, dict) else {}
+                        )
+                        inv_r = validate_invariant(
+                            plan, review_r, purchase_cfg.invariant
+                        )
+                        if not inv_r.ok:
+                            return _finish(
+                                PurchaseOutcome.HALTED_INVARIANT,
+                                review=review_r,
+                                inv=inv_r,
+                                halt_reason="; ".join(inv_r.reasons_failed),
+                                agent_rescue_attempted=True,
+                                agent_rescue_outcome=str(rr.outcome),
+                                agent_rescue_notes=rr.notes,
+                            )
+                        if hold_for_confirm:
+                            return _finish(
+                                PurchaseOutcome.HELD_FOR_CONFIRM,
+                                review=review_r,
+                                inv=inv_r,
+                                halt_reason=(
+                                    "hold_for_confirm: invariant passed after agent "
+                                    "rescue; complete manually"
+                                ),
+                                agent_rescue_attempted=True,
+                                agent_rescue_outcome=str(rr.outcome),
+                                agent_rescue_notes=rr.notes,
+                            )
+                        if _click_complete_reservation(page):
+                            return after_successful_complete_click(
+                                agent_rescue_attempted=True,
+                                agent_rescue_outcome=str(rr.outcome),
+                                agent_rescue_notes=rr.notes,
+                            )
                         return _finish(
-                            PurchaseOutcome.HALTED_INVARIANT,
+                            PurchaseOutcome.FAILED_SCRIPTED,
                             review=review_r,
                             inv=inv_r,
-                            halt_reason="; ".join(inv_r.reasons_failed),
+                            err=err0 + " (after agent rescue)",
                             agent_rescue_attempted=True,
                             agent_rescue_outcome=str(rr.outcome),
                             agent_rescue_notes=rr.notes,
                         )
-                    if hold_for_confirm:
-                        return _finish(
-                            PurchaseOutcome.HELD_FOR_CONFIRM,
-                            review=review_r,
-                            inv=inv_r,
-                            halt_reason=(
-                                "hold_for_confirm: invariant passed after agent "
-                                "rescue; complete manually"
-                            ),
-                            agent_rescue_attempted=True,
-                            agent_rescue_outcome=str(rr.outcome),
-                            agent_rescue_notes=rr.notes,
-                        )
-                    if _click_complete_reservation(page):
-                        return after_successful_complete_click(
-                            agent_rescue_attempted=True,
-                            agent_rescue_outcome=str(rr.outcome),
-                            agent_rescue_notes=rr.notes,
-                        )
+    
+                    extra = ""
+                    if rr is not None:
+                        extra = f" | agent_rescue={rr.outcome}: {rr.notes}"
                     return _finish(
                         PurchaseOutcome.FAILED_SCRIPTED,
-                        review=review_r,
-                        inv=inv_r,
-                        err=err0 + " (after agent rescue)",
-                        agent_rescue_attempted=True,
-                        agent_rescue_outcome=str(rr.outcome),
-                        agent_rescue_notes=rr.notes,
+                        review=review,
+                        inv=inv,
+                        err=err0 + extra,
+                        agent_rescue_attempted=rr is not None,
+                        agent_rescue_outcome=str(rr.outcome) if rr else None,
+                        agent_rescue_notes=rr.notes if rr else None,
                     )
-
-                extra = ""
-                if rr is not None:
-                    extra = f" | agent_rescue={rr.outcome}: {rr.notes}"
-                return _finish(
-                    PurchaseOutcome.FAILED_SCRIPTED,
-                    review=review,
-                    inv=inv,
-                    err=err0 + extra,
-                    agent_rescue_attempted=rr is not None,
-                    agent_rescue_outcome=str(rr.outcome) if rr else None,
-                    agent_rescue_notes=rr.notes if rr else None,
+    
+                return after_successful_complete_click()
+            finally:
+                rename_page_video_after_close(
+                    page,
+                    browser_cfg=browser_cfg,
+                    label=plan.target_name,
+                    stamp=stamp,
                 )
 
-            return after_successful_complete_click()
 
     except Exception as e:  # noqa: BLE001 — surface any Playwright failure
         logger.exception("scripted purchase crashed")
