@@ -241,7 +241,7 @@ class BrowserUseFallback:
 
     # --- lazy agent build ---------------------------------------------------
 
-    def _build_agent(self, page: Any, task: str) -> Any:
+    def _build_agent(self, page: Any, task: str, *, calculate_cost: bool = False) -> Any:
         """Lazy-import ``browser_use``. Raises ``RuntimeError`` with a clear
         install hint if the optional dependency is missing."""
         try:
@@ -262,15 +262,21 @@ class BrowserUseFallback:
             api_key=api_key,
             temperature=0.0,
         )
-        return Agent(task=task, llm=llm, page=page)
+        return Agent(
+            task=task,
+            llm=llm,
+            page=page,
+            calculate_cost=calculate_cost,
+        )
 
     # --- public ------------------------------------------------------------
 
     def rescue(self, page: Any, request: RescueRequest) -> RescueResult:
         task = self.build_task_prompt(request)
 
+        calculate_cost = self._cfg.max_cost_usd > 0
         try:
-            agent = self._build_agent(page, task)
+            agent = self._build_agent(page, task, calculate_cost=calculate_cost)
         except RuntimeError as e:
             # Missing optional dep, bad config, etc. Surface as FAILED so
             # the purchaser falls through to "halt + notify human".
@@ -280,17 +286,36 @@ class BrowserUseFallback:
                 notes=str(e),
             )
 
+        max_budget = self._cfg.max_cost_usd
+
+        async def _on_step_end(agent: Any) -> None:
+            if max_budget <= 0:
+                return
+            try:
+                summary = await agent.token_cost_service.get_usage_summary()
+            except Exception:
+                logger.debug(
+                    "agent_fallback: usage summary unavailable for budget check",
+                    exc_info=True,
+                )
+                return
+            if summary.total_cost > max_budget:
+                logger.info(
+                    "agent_fallback: stopping rescue: estimated LLM cost %.4f USD "
+                    "exceeds max_cost_usd=%.4f",
+                    summary.total_cost,
+                    max_budget,
+                )
+                agent.stop()
+
+        run_kw: dict[str, Any] = {"max_steps": self._cfg.max_steps}
+        if max_budget > 0:
+            run_kw["on_step_end"] = _on_step_end
+
         try:
             # ``browser_use.Agent.run`` is async; we own the event loop here
             # because the scripted purchaser is sync.
-            if self._cfg.max_cost_usd > 0:
-                logger.debug(
-                    "agent_fallback.max_cost_usd=%s is not yet enforced from "
-                    "provider token usage; max_steps=%s bounds each rescue",
-                    self._cfg.max_cost_usd,
-                    self._cfg.max_steps,
-                )
-            result = asyncio.run(agent.run(max_steps=self._cfg.max_steps))
+            result = asyncio.run(agent.run(**run_kw))
         except Exception as e:  # noqa: BLE001 — surface every failure
             logger.exception("browser-use rescue raised")
             return RescueResult(
@@ -299,45 +324,101 @@ class BrowserUseFallback:
                 final_url=getattr(page, "url", None),
             )
 
-        return _result_from_browser_use(result, page, max_steps=self._cfg.max_steps)
+        return _result_from_browser_use(
+            result,
+            page,
+            max_steps=self._cfg.max_steps,
+            max_cost_usd=self._cfg.max_cost_usd,
+        )
+
+
+def _infer_steps(result: Any) -> int:
+    hist = getattr(result, "history", None)
+    if isinstance(hist, list):
+        return len(hist)
+    raw = getattr(result, "n_steps", None) or getattr(result, "steps", None)
+    if isinstance(raw, int):
+        return raw
+    return 0
+
+
+def _infer_cost_usd(result: Any) -> float:
+    usage = getattr(result, "usage", None)
+    if usage is None:
+        return 0.0
+    raw = getattr(usage, "total_cost", None)
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    return 0.0
+
+
+def _infer_success(result: Any) -> bool:
+    """browser-use 0.12+ returns :class:`AgentHistoryList` with methods; older
+    shapes used simple attributes."""
+    is_done_m = getattr(result, "is_done", None)
+    is_successful_m = getattr(result, "is_successful", None)
+    if callable(is_done_m) and callable(is_successful_m):
+        if not is_done_m():
+            return False
+        ok = is_successful_m()
+        return ok is True
+    return any(
+        bool(getattr(result, a, False))
+        for a in ("is_done", "is_successful", "success")
+    )
 
 
 def _result_from_browser_use(
-    result: Any, page: Any, *, max_steps: int
+    result: Any,
+    page: Any,
+    *,
+    max_steps: int,
+    max_cost_usd: float = 0.0,
 ) -> RescueResult:
     """Map browser-use's loose result object onto our typed contract.
 
     browser-use's API has churned across versions; we read defensively and
     fall back to FAILED if the shape is unrecognizable.
     """
-    steps = (
-        getattr(result, "n_steps", None)
-        or getattr(result, "steps", None)
-        or 0
-    )
-    if not isinstance(steps, int):
-        steps = 0
-
-    success_attrs = ("is_done", "is_successful", "success")
-    success = any(bool(getattr(result, a, False)) for a in success_attrs)
+    steps = _infer_steps(result)
+    cost_usd = _infer_cost_usd(result)
+    success = _infer_success(result)
 
     notes = ""
-    for attr in ("final_result", "extracted_content", "summary"):
-        value = getattr(result, attr, None)
+    final_fn = getattr(result, "final_result", None)
+    if callable(final_fn):
+        value = final_fn()
         if value:
             notes = str(value)[:500]
-            break
+    if not notes:
+        for attr in ("final_result", "extracted_content", "summary"):
+            value = getattr(result, attr, None)
+            if value:
+                notes = str(value)[:500]
+                break
 
-    if not success and steps >= max_steps:
+    budget_note = ""
+    if max_cost_usd > 0 and cost_usd > max_cost_usd:
+        budget_note = (
+            f"estimated_cost_usd={cost_usd:.4f} exceeds max_cost_usd={max_cost_usd:.4f}"
+        )
+
+    if max_cost_usd > 0 and cost_usd > max_cost_usd:
         outcome = FallbackOutcome.BUDGET_EXHAUSTED
+        if budget_note:
+            notes = f"{notes}; {budget_note}" if notes else budget_note
+            notes = notes[:500]
     elif success:
         outcome = FallbackOutcome.SUCCEEDED
+    elif not success and steps >= max_steps:
+        outcome = FallbackOutcome.BUDGET_EXHAUSTED
     else:
         outcome = FallbackOutcome.FAILED
 
     return RescueResult(
         outcome=outcome,
         steps_used=steps,
+        cost_usd=cost_usd,
         notes=notes,
         final_url=getattr(page, "url", None),
     )

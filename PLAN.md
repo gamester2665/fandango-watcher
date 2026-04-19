@@ -637,8 +637,10 @@ remains the **sole** gate on the final "Complete Reservation" click.
   ``cfg.agent_fallback``. Audit fields on ``PurchaseAttempt``:
   ``agent_rescue_attempted``, ``agent_rescue_outcome``, ``agent_rescue_notes``.
   Stubbed flow: ``tests/test_purchaser_rescue.py``.
-- [ ] Enforce `max_cost_usd` (current `max_steps` is enforced by
-  browser-use; cost accounting needs a per-provider token-usage hook).
+- [x] Enforce `max_cost_usd` via browser-use ``Agent(..., calculate_cost=True)``,
+  ``TokenCost.get_usage_summary().total_cost``, per-step ``on_step_end`` stop,
+  and post-run mapping in ``_result_from_browser_use`` (LiteLLM pricing cache;
+  set ``BROWSER_USE_CALCULATE_COST=true`` is optional — we pass ``calculate_cost`` explicitly when the cap applies).
 - [ ] Calibrate rescue prompt + optional rescue-on-exception against a
   real Fandango failure fixture (see ``dump-review`` + ``review_pages/``).
 - [x] Confirm the Python invariant still gates the final click

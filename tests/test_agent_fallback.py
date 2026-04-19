@@ -205,6 +205,45 @@ class TestResultMapping:
         assert r.outcome == FallbackOutcome.FAILED
         assert r.steps_used == 0
 
+    def test_cost_over_max_budget_exhausted_even_if_done(self) -> None:
+        bu = SimpleNamespace(
+            n_steps=5,
+            is_done=True,
+            final_result="ok",
+            usage=SimpleNamespace(total_cost=3.5),
+        )
+        r = _result_from_browser_use(
+            bu, _FakePage(), max_steps=40, max_cost_usd=2.0
+        )
+        assert r.outcome == FallbackOutcome.BUDGET_EXHAUSTED
+        assert r.cost_usd == 3.5
+        assert "estimated_cost_usd" in r.notes
+
+    def test_agent_history_list_style_success(self) -> None:
+        class _Hist:
+            def __init__(self) -> None:
+                self.history = [None] * 4
+                self.usage = SimpleNamespace(total_cost=0.01)
+                self._done = True
+                self._ok = True
+
+            def is_done(self) -> bool:
+                return self._done
+
+            def is_successful(self) -> bool | None:
+                return self._ok if self._done else None
+
+            def final_result(self) -> str | None:
+                return "review page"
+
+        bu = _Hist()
+        r = _result_from_browser_use(
+            bu, _FakePage(), max_steps=40, max_cost_usd=1.0
+        )
+        assert r.outcome == FallbackOutcome.SUCCEEDED
+        assert r.steps_used == 4
+        assert r.cost_usd == 0.01
+
 
 # -----------------------------------------------------------------------------
 # Protocol conformance — quick structural check

@@ -31,10 +31,10 @@ phased checklist.
 | 3     | Notifications (Twilio + SMTP)       | done — transition-only, with optional screenshot/video MIME attachments. |
 | 4     | Scripted purchaser (dry-run)        | done — `purchaser.py` + `$0.00` invariant + fixture-driven invariant tests. |
 | 5     | Full auto-buy                       | wired; defaulted to `notify_only` until calibrated against a live drop. |
-| 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforcement + real-failure calibration pending. |
+| 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced via browser-use usage summaries; real-failure calibration still pending. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-385 unit tests; run `uv run pytest -q`.
+387 unit tests; run `uv run pytest -q`.
 
 ---
 
