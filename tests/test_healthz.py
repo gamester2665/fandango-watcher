@@ -132,6 +132,20 @@ class TestHealthz:
         # Python's socketserver tolerates double-close.
         ctx.server.server_close()
 
+    def test_second_bind_on_same_port_raises(self) -> None:
+        """Regression: dashboard must NOT silently dual-bind on Windows when
+        a stale process is still holding the port. The exclusive subclass
+        sets ``allow_reuse_address=False`` so the second start raises
+        ``OSError`` immediately instead of round-robining requests between
+        two processes serving stale config (orphaned-uv-child bug)."""
+        hb = Heartbeat()
+        ctx = start_healthz_server(hb, host="127.0.0.1", port=0)
+        try:
+            with pytest.raises(OSError):
+                start_healthz_server(hb, host="127.0.0.1", port=ctx.port)
+        finally:
+            ctx.stop()
+
 
 class TestDashboardRoutes:
     def test_root_and_api_status_with_dashboard_data(self, tmp_path: Path) -> None:

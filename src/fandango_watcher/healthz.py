@@ -172,6 +172,24 @@ def _make_handler_cls(
     return Handler
 
 
+class _ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
+    """``ThreadingHTTPServer`` that refuses to share its bind address.
+
+    The stdlib default sets ``allow_reuse_address = True``. On Linux that maps
+    to ``SO_REUSEADDR`` (safe — only bypasses TIME_WAIT). On Windows the same
+    flag means ``SO_REUSEADDR`` *plus* allowing a **second live listener** on
+    the same port; the kernel then round-robins accepts between them. We hit
+    that exact bug when a prior ``fandango-watcher dashboard`` left an
+    orphaned Python child bound to ``8787`` after its ``uv`` wrapper was
+    force-killed: a fresh dashboard happily bound the same port and half the
+    requests served stale config. Forcing exclusive bind makes the second
+    start fail loudly with ``OSError: [WinError 10048]`` so the operator
+    notices instead of staring at a phantom-stale UI.
+    """
+
+    allow_reuse_address = False
+
+
 def start_healthz_server(
     heartbeat: Heartbeat,
     *,
@@ -185,7 +203,7 @@ def start_healthz_server(
     When ``dashboard_data`` is set, also serves ``/`` (HTML), ``/api/status``,
     ``/api/movies``, and static files under ``/artifacts/...``.
     """
-    server = ThreadingHTTPServer(
+    server = _ExclusiveThreadingHTTPServer(
         (host, port),
         _make_handler_cls(heartbeat, dashboard_data=dashboard_data),
     )

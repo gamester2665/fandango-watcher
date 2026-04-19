@@ -540,11 +540,15 @@ def _run_dashboard(args: argparse.Namespace) -> int:
             port=args.port,
             dashboard_data=dd,
         )
-    except OSError:
-        logger.exception(
-            "failed to bind dashboard on %s:%s",
-            args.host,
-            args.port,
+    except OSError as e:
+        print(
+            f"error: failed to bind dashboard on {args.host}:{args.port}: {e}\n"
+            f"hint: another dashboard process may still be holding the port.\n"
+            f"  windows: netstat -ano | findstr :{args.port}\n"
+            f"           taskkill /F /PID <pid>\n"
+            f"  posix:   lsof -nP -iTCP:{args.port} -sTCP:LISTEN\n"
+            f"           kill <pid>",
+            file=sys.stderr,
         )
         return 1
 

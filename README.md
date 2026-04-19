@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced via browser-use usage summaries; real-failure calibration still pending. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-387 unit tests; run `uv run pytest -q`.
+388 unit tests; run `uv run pytest -q`.
 
 ---
 
@@ -277,9 +277,16 @@ uv run fandango-watcher dump-review --url <fandango-review-url> --headed
 ## Troubleshooting
 
 **Port already in use (`8787`)** — Another process (or a second `watch` /
-`dashboard`) is bound to the dashboard / healthz port. Stop the other
-process, or use `fandango-watcher dashboard --port 8790` and/or change
-`--healthz-port` on `watch`.
+`dashboard`) is bound to the dashboard / healthz port. The server now binds
+**exclusively** (`allow_reuse_address=False`), so a second start fails fast
+with `OSError: [WinError 10048]` instead of silently round-robining requests
+between two listeners. To clear it:
+- **Windows:** `netstat -ano | findstr :8787` → `taskkill /F /PID <pid>`
+  (kill the **`python.exe`** PID directly — `taskkill` on the parent `uv`
+  wrapper leaves the Python child still bound to the port).
+- **POSIX:** `lsof -nP -iTCP:8787 -sTCP:LISTEN` → `kill <pid>`.
+- Or pick a different port: `fandango-watcher dashboard --port 8790`
+  (and `--healthz-port` on `watch`).
 
 **Crawl shows `theater_count: 0` / `not_on_sale` but the movie is on sale** —
 Fandango often needs a **ZIP or location** before it renders theater cards.
