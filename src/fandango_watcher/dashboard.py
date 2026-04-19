@@ -178,6 +178,13 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
     last_utc = html.escape(str(healthz.get("last_tick_at") or "—"))
     last_pt = html.escape(str(healthz.get("last_tick_at_pt") or "—"))
 
+    no_target_history = False
+    if targets:
+        no_target_history = all(
+            not (isinstance(t.get("state"), dict) and t.get("state"))
+            for t in targets
+        )
+
     cards: list[str] = []
     for t in targets:
         name = html.escape(str(t.get("name", "")))
@@ -296,6 +303,7 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
     th, td {{ border: 1px solid #2a2f3a; padding: 0.35rem 0.5rem; text-align: left; }}
     code {{ font-size: 0.75rem; word-break: break-all; }}
     section.panel {{ margin-top: 1.5rem; }}
+    p.hint {{ font-size: 0.9rem; opacity: 0.85; margin: 0.5rem 0 0 0; }}
   </style>
 </head>
 <body>
@@ -304,6 +312,15 @@ def render_index_html(snapshot: dict[str, Any]) -> str:
     <p>Heartbeat · ticks: {html.escape(str(ticks))} · errors: {html.escape(str(errs))}</p>
     <p>Started (UTC): {started} · Last tick (UTC): {last_utc}</p>
     <p>Last tick (Pacific): {last_pt}</p>
+    {
+        '<p class="hint">No per-target crawl history yet — the dashboard only '
+        '<strong>reads</strong> <code>state/&lt;target&gt;.json</code>. Run '
+        '<code>fandango-watcher watch</code> (or <code>once</code>) so ticks, '
+        "schema, and screenshots populate. <code>dashboard</code> alone does "
+        "not crawl.</p>"
+        if no_target_history
+        else ""
+    }
   </header>
   <div class="grid">
     {"".join(cards)}

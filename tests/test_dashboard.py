@@ -111,6 +111,35 @@ def test_render_index_html_escapes_movie_title() -> None:
     assert "&lt;script&gt;" in html_out or "evil" in html_out
 
 
+def test_render_index_html_shows_empty_state_hint() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [{"name": "t1", "url": "https://x", "state": {}}],
+        "social_x": {"handles": {}},
+        "movies": [],
+    }
+    html_out = render_index_html(snap)
+    assert "No per-target crawl history yet" in html_out
+    assert "fandango-watcher watch" in html_out
+
+
+def test_render_index_html_hides_hint_when_state_present() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "t1",
+                "url": "https://x",
+                "state": {"total_ticks": 1, "current_state": "watching"},
+            }
+        ],
+        "social_x": {"handles": {}},
+        "movies": [],
+    }
+    html_out = render_index_html(snap)
+    assert "No per-target crawl history yet" not in html_out
+
+
 def test_artifact_url_rejects_escape(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     root.mkdir()

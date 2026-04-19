@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced via browser-use usage summaries; real-failure calibration still pending. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-388 unit tests; run `uv run pytest -q`.
+390 unit tests; run `uv run pytest -q`.
 
 ---
 
@@ -125,6 +125,8 @@ When the HTTP server is enabled (default for `watch`), the same process serves a
 | `/api/movies` | JSON list of `movies:` registry entries. |
 | `/healthz` | Liveness JSON (Docker healthcheck). |
 | `/artifacts/...` | Static files under your `artifacts/` tree (screenshots, videos, traces) — path-traversal safe. |
+
+Per-target **history** (ticks, classifier schema, `last_success_at`) lives in **`state/<target-name>.json`** and is written only when **`watch`** or **`once`** crawls — the **`dashboard`** subcommand never crawls; it only reads those files. If you run locally, point `state.dir` and `screenshots.dir` at repo-relative paths (e.g. `state`, `artifacts/screenshots`) instead of Docker’s `/app/...` so files land where the dashboard expects them.
 
 Bind address is **`127.0.0.1`** by default (not exposed to LAN). **`--no-healthz`** disables the server and the dashboard together.
 
