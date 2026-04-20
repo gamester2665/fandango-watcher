@@ -118,7 +118,7 @@ class PageDataBase(CrawlContext, ParsedCounts):
     theaters: list[TheaterListing] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_citywalk_counts(self) -> "PageDataBase":
+    def validate_citywalk_counts(self) -> PageDataBase:
         if self.citywalk_showtime_count > self.showtime_count:
             raise ValueError("citywalk_showtime_count cannot exceed showtime_count")
         if self.citywalk_present and self.citywalk_showtime_count == 0:
@@ -131,7 +131,7 @@ class NotOnSalePageData(PageDataBase):
     watch_status: Literal[WatchStatus.NOT_WATCHABLE] = WatchStatus.NOT_WATCHABLE
 
     @model_validator(mode="after")
-    def validate_not_on_sale(self) -> "NotOnSalePageData":
+    def validate_not_on_sale(self) -> NotOnSalePageData:
         # ``theater_count`` may be > 0 when the extractor sees theater shells
         # but no parseable showtime links (same positive-evidence rule as
         # :func:`~fandango_watcher.detect._pick_release_schema`).
@@ -147,7 +147,7 @@ class PartialReleasePageData(PageDataBase):
     watch_status: Literal[WatchStatus.WATCHABLE] = WatchStatus.WATCHABLE
 
     @model_validator(mode="after")
-    def validate_partial_release(self) -> "PartialReleasePageData":
+    def validate_partial_release(self) -> PartialReleasePageData:
         if self.theater_count <= 0:
             raise ValueError("partial_release pages must include at least one theater")
         if self.showtime_count <= 0:
@@ -160,7 +160,7 @@ class FullReleasePageData(PageDataBase):
     watch_status: Literal[WatchStatus.WATCHABLE] = WatchStatus.WATCHABLE
 
     @model_validator(mode="after")
-    def validate_full_release(self) -> "FullReleasePageData":
+    def validate_full_release(self) -> FullReleasePageData:
         if self.theater_count <= 0:
             raise ValueError("full_release pages must include at least one theater")
         if self.showtime_count <= 0:
@@ -173,7 +173,7 @@ ParsedPageData = Annotated[
     Field(discriminator="release_schema"),
 ]
 
-PARSED_PAGE_DATA_ADAPTER = TypeAdapter(ParsedPageData)
+PARSED_PAGE_DATA_ADAPTER: TypeAdapter[ParsedPageData] = TypeAdapter(ParsedPageData)
 
 
 def validate_page_data(payload: dict[str, Any]) -> ParsedPageData:

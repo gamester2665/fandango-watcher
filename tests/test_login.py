@@ -15,7 +15,6 @@ import pytest
 from fandango_watcher.config import BrowserConfig, ViewportConfig
 from fandango_watcher.login import DEFAULT_LOGIN_URL, run_login
 
-
 # -----------------------------------------------------------------------------
 # Fakes
 # -----------------------------------------------------------------------------

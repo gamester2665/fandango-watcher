@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .config import BrowserConfig
 
@@ -43,7 +43,7 @@ def run_login(
     browser_cfg: BrowserConfig,
     *,
     login_url: str = DEFAULT_LOGIN_URL,
-    playwright_factory: Callable[[], "_PWContextManager"] = _default_playwright_factory,
+    playwright_factory: Callable[[], _PWContextManager] = _default_playwright_factory,
     wait_input: Callable[[str], str] = input,
     out: Any = sys.stderr,
     headless_override: bool | None = None,

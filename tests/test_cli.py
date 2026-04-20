@@ -1,4 +1,4 @@
-"""Tests for src/fandango_watcher/cli.py.
+"""Tests for ``fandango_watcher.cli`` (package under ``src/fandango_watcher/cli/``).
 
 Covers:
 
@@ -25,7 +25,6 @@ from fandango_watcher import cli
 from fandango_watcher.models import (
     NotOnSalePageData,
 )
-
 
 # -----------------------------------------------------------------------------
 # Parser shape

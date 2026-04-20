@@ -36,7 +36,7 @@ from pathlib import Path
 from .artifacts import prune_artifact_trees
 from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig, plain_secret
 from .dashboard import DashboardData, DashboardPaths
-from .healthz import Heartbeat, HealthzContext, start_healthz_server
+from .healthz import HealthzContext, Heartbeat, start_healthz_server
 from .models import ParsedPageData
 from .notify import (
     ChannelResult,
@@ -56,7 +56,7 @@ from .state import (
     save_target_state,
     transition,
 )
-from .watcher import crawl_target, crawl_targets_in_tick
+from .watcher import crawl_targets_in_tick
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +203,7 @@ def build_social_x_notification(
     label = match.label or f"@{match.handle}"
     subject = f"X hint: {label}"
     body_lines = [
-        f"X HINT (advisory only — Fandango is still source of truth)",
+        "X HINT (advisory only — Fandango is still source of truth)",
         f"Account: @{match.handle}{f' ({match.label})' if match.label else ''}",
         f"Matched: {', '.join(match.matched_keywords)}",
     ]
@@ -427,7 +427,7 @@ def _maybe_poll_social_x(
     try:
         # ``effective_social_x`` merges movies[].x_handles into the poll set
         # so the user only has to declare each handle once (under its movie).
-        result = impl(  # type: ignore[misc]
+        result = impl(
             cfg.effective_social_x(),
             plain_secret(settings.x_bearer_token),
             state_dir,
@@ -453,7 +453,7 @@ def _maybe_poll_social_x(
     return base_next
 
 
-def _x_interval(cfg: WatcherConfig, rng: random.Random) -> "timedelta":
+def _x_interval(cfg: WatcherConfig, rng: random.Random) -> timedelta:
     from datetime import timedelta
 
     seconds = rng.uniform(cfg.social_x.min_seconds, cfg.social_x.max_seconds)

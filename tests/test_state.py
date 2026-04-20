@@ -17,8 +17,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 from fandango_watcher.models import (
     FullReleasePageData,
     NotOnSalePageData,
@@ -34,7 +32,6 @@ from fandango_watcher.state import (
     save_target_state,
     transition,
 )
-
 
 NOW = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
 LATER = NOW + timedelta(minutes=5)
@@ -166,7 +163,6 @@ class TestRecordError:
     def test_fires_at_threshold_exactly_once(self) -> None:
         prev = TargetState(target_name="t")
         err = RuntimeError("boom")
-        result: list[str] = []
         for _ in range(4):
             prev = record_error(prev, err, error_streak_threshold=5).state
         # 5th consecutive error crosses the threshold.
@@ -192,7 +188,7 @@ class TestRecordError:
             consecutive_successes=4,
             last_release_schema=ReleaseSchema.PARTIAL_RELEASE,
         )
-        r = record_error(prev, IOError("x"))
+        r = record_error(prev, OSError("x"))
         assert r.state.consecutive_successes == 0
         # last_release_schema is NOT cleared — we still know tickets were live.
         assert r.state.last_release_schema == ReleaseSchema.PARTIAL_RELEASE

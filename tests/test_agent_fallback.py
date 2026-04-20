@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import sys
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -28,14 +27,12 @@ from fandango_watcher.agent_fallback import (
     FallbackOutcome,
     NoopFallback,
     RescueRequest,
-    RescueResult,
     _result_from_browser_use,
     build_agent_fallback,
     resolve_llm_api_key_for_agent,
 )
 from fandango_watcher.config import AgentFallbackConfig, Settings
 from fandango_watcher.purchase import PurchasePlan
-
 
 # -----------------------------------------------------------------------------
 # Helpers

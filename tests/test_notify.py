@@ -13,11 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from fandango_watcher.config import NotifyConfig, Settings
 from fandango_watcher.notify import (
-    ChannelResult,
     FanOutNotifier,
     NotificationMessage,
     Notifier,
@@ -25,7 +22,6 @@ from fandango_watcher.notify import (
     TwilioNotifier,
     build_notifier,
 )
-
 
 # -----------------------------------------------------------------------------
 # Fakes
@@ -67,7 +63,7 @@ class _FakeSmtpSession:
     def __init__(self, calls_log: list[tuple[str, tuple[Any, ...]]]) -> None:
         self._log = calls_log
 
-    def __enter__(self) -> "_FakeSmtpSession":
+    def __enter__(self) -> _FakeSmtpSession:
         self._log.append(("__enter__", ()))
         return self
 

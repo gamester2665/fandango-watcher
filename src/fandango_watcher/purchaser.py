@@ -18,13 +18,12 @@ import logging
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from functools import cache
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 from typing import Any
 
-from playwright.sync_api import Browser, BrowserContext, Page
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .agent_fallback import (
     AgentFallback,
@@ -114,7 +113,6 @@ def extract_review_state(plan: PurchasePlan, snapshot: dict[str, Any]) -> Review
     over false positives on ``$0.00``.
     """
     body: str = snapshot.get("bodyText") or ""
-    title: str = snapshot.get("title") or ""
     lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
     visible_phrases = lines if len(lines) <= 120 else [body[:50_000]]
 

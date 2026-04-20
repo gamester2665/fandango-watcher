@@ -10,9 +10,9 @@ import contextlib
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -30,8 +30,8 @@ from fandango_watcher.config import (
 )
 from fandango_watcher.dashboard import DashboardData, DashboardPaths
 from fandango_watcher.healthz import (
-    Heartbeat,
     HealthzContext,
+    Heartbeat,
     start_healthz_server,
 )
 

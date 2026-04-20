@@ -11,7 +11,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import FormatTag
@@ -66,7 +74,7 @@ class PollConfig(ConfigBase):
     error_backoff_cap_seconds: int = Field(default=1800, ge=60)
 
     @model_validator(mode="after")
-    def _validate_bounds(self) -> "PollConfig":
+    def _validate_bounds(self) -> PollConfig:
         if self.min_seconds > self.max_seconds:
             raise ValueError(
                 f"poll.min_seconds ({self.min_seconds}) must be <= "
@@ -106,7 +114,7 @@ class PurchaseConfig(ConfigBase):
     max_quantity: int = Field(default=1, ge=1)
 
     @model_validator(mode="after")
-    def _validate_seat_priority_keys(self) -> "PurchaseConfig":
+    def _validate_seat_priority_keys(self) -> PurchaseConfig:
         valid = {t.value for t in FormatTag}
         bad = [k for k in self.seat_priority if k not in valid]
         if bad:
@@ -150,7 +158,7 @@ class AgentFallbackConfig(ConfigBase):
 
 class NotifyConfig(ConfigBase):
     channels: list[Literal["twilio", "smtp"]] = Field(
-        default_factory=lambda: ["twilio", "smtp"]
+        default_factory=lambda: ["twilio", "smtp"]  # type: ignore[arg-type]
     )
     on_events: list[str] = Field(default_factory=list)
     # When true, SMTP emails for purchase outcomes (and ticket-live alerts)
@@ -236,7 +244,7 @@ class SocialXConfig(ConfigBase):
     max_results_per_handle: int = Field(default=10, ge=5, le=100)
 
     @model_validator(mode="after")
-    def _validate_bounds(self) -> "SocialXConfig":
+    def _validate_bounds(self) -> SocialXConfig:
         if self.min_seconds > self.max_seconds:
             raise ValueError(
                 f"social_x.min_seconds ({self.min_seconds}) must be <= "
@@ -345,7 +353,7 @@ class WatcherConfig(ConfigBase):
     movies: list[MovieConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _validate_movies_and_social(self) -> "WatcherConfig":
+    def _validate_movies_and_social(self) -> WatcherConfig:
         # Movie keys must be unique so notifications and CLI output can
         # round-trip safely.
         seen: set[str] = set()

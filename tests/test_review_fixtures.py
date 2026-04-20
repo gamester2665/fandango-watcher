@@ -30,7 +30,6 @@ from fandango_watcher.purchase import (
 )
 from fandango_watcher.purchaser import extract_review_state
 
-
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "review_pages"
 
 

@@ -36,6 +36,8 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.0.3",
     "ruff>=0.9.0",
+    "mypy>=1.15.0",
+    "types-PyYAML>=6.0.12",
 ]
 
 [tool.ruff]
@@ -44,10 +46,27 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",
+    "B017",
+    "UP047",
+]
+
+[tool.mypy]
+python_version = "3.13"
+packages = ["fandango_watcher"]
+mypy_path = "src"
+explicit_package_bases = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+show_error_codes = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: Playwright and/or local HTTP (slower than unit tests)",
+]
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:pydantic._internal._config",

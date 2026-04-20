@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 from fandango_watcher.config import (
     BrowserConfig,
@@ -36,7 +35,6 @@ from fandango_watcher.config import (
     TheaterConfig,
     ViewportConfig,
     WatcherConfig,
-    load_config,
 )
 from fandango_watcher.loop import (
     ERROR_STREAK_THRESHOLD,
@@ -54,14 +52,13 @@ from fandango_watcher.models import (
     Showtime,
     TheaterListing,
 )
-from fandango_watcher.purchase import PurchaseAttempt, PurchaseOutcome, PurchasePlan
 from fandango_watcher.notify import (
-    ChannelResult,
     FanOutNotifier,
     NotificationMessage,
     Notifier,
 )
-from fandango_watcher.state import Event, TargetState, load_target_state
+from fandango_watcher.purchase import PurchaseAttempt, PurchaseOutcome, PurchasePlan
+from fandango_watcher.state import Event, load_target_state
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_EXAMPLE_PATH = REPO_ROOT / "config.example.yaml"

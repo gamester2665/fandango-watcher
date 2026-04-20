@@ -13,27 +13,25 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from fandango_watcher.config import (
+    FormatsConfig,
     MovieConfig,
+    NotifyConfig,
+    PollConfig,
+    PurchaseConfig,
     SocialXConfig,
     SocialXHandleConfig,
     TargetConfig,
     TheaterConfig,
-    FormatsConfig,
-    PollConfig,
-    PurchaseConfig,
-    NotifyConfig,
     WatcherConfig,
 )
 from fandango_watcher.loop import build_social_x_notification
 from fandango_watcher.social_x import (
-    PollResult,
     SocialXState,
     XSignalMatch,
     check_x_signals,
@@ -41,7 +39,6 @@ from fandango_watcher.social_x import (
     match_tweet,
     save_social_x_state,
 )
-
 
 # -----------------------------------------------------------------------------
 # match_tweet

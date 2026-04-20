@@ -247,8 +247,8 @@ class BrowserUseFallback:
         """Lazy-import ``browser_use``. Raises ``RuntimeError`` with a clear
         install hint if the optional dependency is missing."""
         try:
-            from browser_use import Agent  # type: ignore[import-not-found]
-            from langchain_openai import ChatOpenAI  # type: ignore[import-not-found]
+            from browser_use import Agent
+            from langchain_openai import ChatOpenAI
         except ImportError as e:
             raise RuntimeError(_BROWSER_USE_INSTALL_HINT) from e
 

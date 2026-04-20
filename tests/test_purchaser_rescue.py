@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from fandango_watcher import purchaser as purchaser_mod
 from fandango_watcher.agent_fallback import (
     FallbackOutcome,
     RescueRequest,
@@ -20,7 +21,6 @@ from fandango_watcher.config import (
 )
 from fandango_watcher.models import FormatTag
 from fandango_watcher.purchase import PurchaseOutcome, PurchasePlan
-from fandango_watcher import purchaser as purchaser_mod
 
 
 class _FakePage:

@@ -119,7 +119,7 @@ def __dir__() -> list[str]:
 
 
 def main() -> int:
-    """Console-script entry point. Delegates to :mod:`fandango_watcher.cli`."""
+    """Console-script entry point. Delegates to :mod:`fandango_watcher.cli` package."""
     from .cli import main as cli_main
 
     return cli_main()

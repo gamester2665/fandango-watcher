@@ -8,11 +8,11 @@ import mimetypes
 import shutil
 import threading
 from dataclasses import dataclass, field
-from typing import Any
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
@@ -176,12 +176,12 @@ def _make_handler_cls(
             path_only = unquote(parsed.path) or "/"
 
             if path_only in ("/healthz", "/health"):
-                payload = json.dumps(heartbeat.snapshot()).encode("utf-8")
+                health_body = json.dumps(heartbeat.snapshot()).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Content-Length", str(len(health_body)))
                 self.end_headers()
-                self.wfile.write(payload)
+                self.wfile.write(health_body)
                 return
 
             if path_only == "/metrics":

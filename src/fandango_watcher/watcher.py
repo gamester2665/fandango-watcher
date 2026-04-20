@@ -29,7 +29,6 @@ from typing import Any
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .config import BrowserConfig, TargetConfig
-from .playwright_video import rename_page_video_after_close
 from .detect import (
     ExtractedFormatSection,
     ExtractedShowtime,
@@ -38,6 +37,7 @@ from .detect import (
     classify,
 )
 from .models import ParsedPageData, ReleaseSchema
+from .playwright_video import rename_page_video_after_close
 
 logger = logging.getLogger(__name__)
 
