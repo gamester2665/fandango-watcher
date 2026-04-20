@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from fandango_watcher.config import (
     BrowserConfig,
     MovieConfig,
@@ -23,6 +25,7 @@ from fandango_watcher.config import (
 )
 from fandango_watcher.release_intel import (
     _compose_prompt,
+    _dashboard_error_summary,
     _extract_json_object,
     _resolve_xai_api_key,
     get_release_intel_for_dashboard,
@@ -159,3 +162,30 @@ def test_compose_prompt_contains_movie_key() -> None:
     p = _compose_prompt(rows)
     assert "mandalorian_and_grogu" in p
     assert "JSON" in p
+
+
+def test_dashboard_error_summary_http_status_error() -> None:
+    req = httpx.Request("GET", "https://example.com/")
+    resp = httpx.Response(401, request=req)
+    exc = httpx.HTTPStatusError("x", request=req, response=resp)
+    assert _dashboard_error_summary(exc) == "HTTPStatusError(HTTP 401)"
+
+
+def test_get_release_intel_stale_error_omits_exception_body(tmp_path: Path) -> None:
+    """Full exception text can echo HTTP snippets; dashboard must not leak it."""
+    cfg = _cfg(tmp_path)
+    state_dir = Path(cfg.state.dir)
+    malicious = "Bearer super-secret xAI response body"
+    with patch(
+        "fandango_watcher.release_intel.refresh_release_intel",
+        side_effect=RuntimeError(malicious),
+    ):
+        got = get_release_intel_for_dashboard(
+            cfg,
+            state_dir=state_dir,
+            settings=Settings(xai_api_key="sk-fake"),
+        )
+    assert got["status"] == "stale_or_error"
+    err = str(got.get("error") or "")
+    assert malicious not in err
+    assert err == "RuntimeError"

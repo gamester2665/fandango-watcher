@@ -20,6 +20,15 @@ from .config import Settings, WatcherConfig, plain_secret
 
 logger = logging.getLogger(__name__)
 
+
+def _dashboard_error_summary(exc: BaseException) -> str:
+    """Short, non-sensitive label for logs and JSON (no bodies, no stack text)."""
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return f"{type(exc).__name__}(HTTP {exc.response.status_code})"
+    if isinstance(exc, httpx.TimeoutException):
+        return type(exc).__name__
+    return type(exc).__name__
+
 CACHE_BASENAME = "release_intel_cache.json"
 XAI_CHAT_COMPLETIONS_URL = "https://api.x.ai/v1/chat/completions"
 _CACHE_WRITE_LOCK = threading.Lock()
@@ -294,11 +303,12 @@ def get_release_intel_for_dashboard(
             "cache_age_seconds": 0,
         }
     except Exception as e:  # noqa: BLE001 — dashboard must stay up
-        logger.warning("release intel refresh failed: %s", e)
+        summary = _dashboard_error_summary(e)
+        logger.warning("release intel refresh failed: %s", summary)
         stale = cached or {}
         return {
             "status": "stale_or_error",
-            "error": f"{type(e).__name__}: {e}",
+            "error": summary,
             "updated_at": stale.get("updated_at"),
             "model": stale.get("model"),
             "movies": stale.get("movies") or {},
