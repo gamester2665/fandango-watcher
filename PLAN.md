@@ -117,6 +117,7 @@ fandango_watcher/
   .env.example                   # Twilio + SMTP + OPENROUTER_API_KEY / OPENAI_API_KEY
   config.example.yaml            # routes, format policy, seat priority, poll
   pyproject.toml                 # deps (playwright, twilio, pyyaml, pydantic; browser-use as optional extra)
+  .python-version                # 3.13 — matches requires-python; uv picks this up locally
   uv.lock
   artifacts/
     screenshots/                 # gitignored, mounted as volume

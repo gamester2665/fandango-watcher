@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced; calibration workflow in `tests/fixtures/rescue/README.md`. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-396 unit tests; run `uv run pytest -q`.
+421 unit + integration tests; run `uv run pytest -q`.
 
 ---
 
@@ -134,6 +134,7 @@ When the HTTP server is enabled (default for `watch`), the same process serves a
 | `/api/revision` | `{"revision": "..."}` fingerprint for live tab reload (cheap poll vs. full `/api/status`). |
 | `/api/movies` | JSON list of `movies:` registry entries. |
 | `/healthz` | Liveness JSON (Docker healthcheck). |
+| `/metrics` | Prometheus text exposition (tick/error counters from the heartbeat; scrape locally if you use an agent). |
 | `/artifacts/...` | Static files under your `artifacts/` tree (screenshots, videos, traces) — path-traversal safe. |
 
 Per-target **history** (ticks, classifier schema, `last_success_at`) lives in **`state/<target-name>.json`**. It is updated when **`watch`** runs, or when you **`once --write-state`** (same `transition()` + save as `watch`). Plain **`once`** only prints JSON unless **`--write-state`** is set. The **`dashboard`** subcommand never crawls; it only reads those files. If you run locally, point `state.dir` and `screenshots.dir` at repo-relative paths (e.g. `state`, `artifacts/screenshots`) instead of Docker’s `/app/...` so files land where the dashboard expects them.
@@ -278,7 +279,9 @@ recognizable A-List benefit phrase."**
 ## Tests
 
 ```bash
-uv run pytest -q                               # full suite (~6s, 385 tests)
+uv run pytest -q                               # full suite (~10s, 421 tests)
+uv run ruff check src tests                      # lint (needs: uv sync --group dev)
+uv run mypy src/fandango_watcher                 # typecheck (needs dev group)
 uv run pytest tests/test_review_fixtures.py    # auto-discovered $0.00 invariant fixtures
 uv run pytest tests/test_agent_fallback_golden.py  # invariant must halt even if agent claims success
 uv run pytest tests/test_purchaser_rescue.py   # rescue is invoked + retried correctly
