@@ -8,6 +8,7 @@
 - **Vision-LLM browser agents excel at rescue**, not racing: when Fandango A/B-tests a button label on release day, the agent can still recognize and click it instead of crashing the whole flow.
 - **AMC Stubs A-List makes auto-buy safe** because the economic blast radius of a mistake is near zero — A-List reservations are free to cancel and rebook before showtime — **provided we enforce the `$0.00` invariant** as the only gate to "Complete Reservation."
 - **Docker** collapses "home PC now / VPS later" into the same artifact. Named volumes keep the logged-in Fandango + AMC Stubs browser profile, screenshots, and state durable across container rebuilds.
+- **Deploy order:** treat **local (home PC) as the gate**. Do **not** push or run this stack on a VPS until you have **manually confirmed** end-to-end behavior locally (watch/once, healthz/dashboard, notifications as expected, purchase path acceptable for your risk tolerance). VPS is a portability step *after* that sign-off, not a shortcut around it.
 
 **Environment tooling:** Python 3.13+ managed by **[uv](https://docs.astral.sh/uv/)** *inside* the image (`uv sync`, `uv run …`). The image itself is based on Microsoft's official Playwright Python image so Chromium + system deps are already solved.
 
@@ -65,7 +66,7 @@ Reconciled with the codebase (2026-04): implementation status, not your personal
 - [x] Preferred seat sold out → `HALTED_PREFERRED_SOLD_OUT` + notify (`on_preferred_sold_out`).
 - [x] `purchase.mode: notify_only` skips auto-purchase; `test-purchase` plans without completing checkout; `test-purchase --stub` runs flow to review without completing.
 - [x] Screenshot pruning + per-attempt artifact dirs (`screenshots.max_age_days`, `per_purchase_dir`).
-- [ ] Same image on a **VPS** — deploy and verify manually; Docker layout supports it (Phase 7).
+- [ ] Same image on a **VPS** — **only after** local manual confirmation (watch/healthz/notify/purchase behavior verified on your machine). Then deploy and verify on the VPS; Docker layout supports it (Phase 7). **Policy:** no VPS push until local sign-off.
 
 ---
 
@@ -147,6 +148,8 @@ fandango_watcher/
 
 ## Docker & deployment
 
+**Local before VPS:** Run and validate the watcher **on your home PC first** (`docker compose` or `uv run` per README). Only when you are satisfied with behavior (crawls, state, dashboard/healthz, notifications, and—if enabled—purchase flow) should you **copy the same image/volumes to a VPS**. We explicitly **do not** recommend deploying to a remote server to “discover” whether things work.
+
 **Base image:** `python:3.13-slim-bookworm` in the shipped `Dockerfile`; Playwright browsers installed via `playwright install --with-deps chromium` at build time (equivalent outcome to the Microsoft Playwright image, different layer layout).
 
 **Named volumes (persist across container rebuilds):**
@@ -170,7 +173,7 @@ fandango_watcher/
 - `OPENROUTER_API_KEY` / `OPENAI_API_KEY` (bearers for the vision LLM; `resolve_llm_api_key_for_agent` in `agent_fallback.py` picks `OPENROUTER_API_KEY` when `agent_fallback.base_url` is OpenRouter, otherwise `OPENAI_API_KEY` first. Set both if you use both providers. Leave both empty for self-hosted vLLM with no auth.)
 - `WATCHER_MODE=watch|once|dry-run`
 
-**Home PC → VPS migration:** same image, same compose file, same volumes (either use Docker named volumes end-to-end or back up / restore as tarballs). Expect fraud-detection behavior to differ (residential → data-center IP); plan a one-time headed re-login via VNC on the VPS.
+**Home PC → VPS migration:** **after** local confirmation, same image, same compose file, same volumes (either use Docker named volumes end-to-end or back up / restore as tarballs). Expect fraud-detection behavior to differ (residential → data-center IP); plan a one-time headed re-login via VNC on the VPS.
 
 ---
 
@@ -525,7 +528,7 @@ Expected pattern: scripted purchaser handles the common case for months at near-
 
 ## VPS migration (later, now trivial)
 
-Not required for v1 (home PC). Docker makes the migration a matter of moving volumes:
+Not required for v1 (home PC). **Do not migrate until** you have manually verified the stack locally (see **Local before VPS** above). Docker makes the migration a matter of moving volumes:
 
 - Same image, same compose file.
 - Back up `fandango_profile` / `fandango_state` as tarballs; restore on the VPS.
@@ -662,7 +665,7 @@ remains the **sole** gate on the final "Complete Reservation" click.
 
 - [x] Write `README.md` with `docker compose` commands, the first-run headed-login flow, config + `.env` setup, and troubleshooting.
 - [x] Document how to re-warm the profile volume after an AMC Stubs logout or session expiry.
-- [ ] Smoke-test the same image on a VPS (VNC for the one-time login) to prove portability.
+- [ ] **Blocked on local sign-off:** smoke-test the same image on a VPS (VNC for the one-time login) to prove portability — **only after** you have manually confirmed end-to-end behavior on your home PC. **No VPS deploy until then.**
 - [x] Record known risks (Fandango markup drift, fraud-detection friction, A-List policy changes on premium formats).
 
 ---
@@ -705,7 +708,7 @@ email before/after the exact moment CityWalk cards flip).
 
 1. **A-List coverage proof per format:** capture one real $0.00 Fandango review screenshot for IMAX 70mm, Dolby (Prime), and Laser-at-Recliner at CityWalk so the `require_benefit_phrase_any` list is grounded in actual copy rather than guesses.
 2. **Special-event 70mm exclusions:** some one-off 70mm event screenings historically fall outside A-List's no-upcharge policy. The invariant will correctly halt on those — confirm "halt on any non-$0 total, always, even for covered formats" is the desired behavior rather than a configurable upcharge ceiling.
-3. **Initial VPS posture (only if/when migrating):** will the VPS use a residential proxy for checkout or a direct data-center IP? The architecture supports either, but the choice changes the first-run friction.
+3. **Initial VPS posture (only if/when migrating, and only after local confirmation):** will the VPS use a residential proxy for checkout or a direct data-center IP? The architecture supports either, but the choice changes the first-run friction.
 
 ---
 
