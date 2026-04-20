@@ -190,6 +190,18 @@ class DashboardConfig(ConfigBase):
     purchase_history_max_lines: int = Field(default=50, ge=1, le=500)
 
 
+class PurchaseAuditConfig(ConfigBase):
+    """Optional size cap and rotation for ``state/purchases.jsonl``.
+
+    On overflow the active file is renamed to ``purchases.jsonl.1`` (older
+    rotated files shift up to ``purchases.jsonl.<keep_rotated>``); anything
+    beyond that is dropped. Set ``max_bytes`` to ``None`` to disable rotation.
+    """
+
+    max_bytes: int | None = Field(default=5_000_000, ge=4096)
+    keep_rotated: int = Field(default=3, ge=0, le=20)
+
+
 class ReleaseIntelConfig(ConfigBase):
     """Dashboard summaries via xAI (Grok) OpenAI-compatible API."""
 
@@ -355,6 +367,7 @@ class WatcherConfig(ConfigBase):
     screenshots: ScreenshotsConfig = Field(default_factory=ScreenshotsConfig)
     state: StateConfig = Field(default_factory=StateConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    purchase_audit: PurchaseAuditConfig = Field(default_factory=PurchaseAuditConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     social_x: SocialXConfig = Field(default_factory=SocialXConfig)
     release_intel: ReleaseIntelConfig = Field(default_factory=ReleaseIntelConfig)

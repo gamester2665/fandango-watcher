@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced; calibration workflow in `tests/fixtures/rescue/README.md`. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-427+ unit + integration tests; run `uv run pytest -q`.
+430+ unit + integration tests; run `uv run pytest -q`.
 
 ---
 
@@ -82,7 +82,7 @@ Use this when you want **everything** validated: core behavior, long-running sta
 ### G — Ongoing
 
 12. **DOM drift:** when crawls misbehave, update selectors and refresh **`dump-review`** fixtures. **Agent rescue:** optional `uv sync --extra agent` and calibration notes in `tests/fixtures/rescue/README.md`.
-13. **Large `state/purchases.jsonl`:** trim or archive periodically on long-lived hosts if the file grows without bound (no automatic rotation in v1).
+13. **`state/purchases.jsonl` rotation:** controlled by `purchase_audit:` in `config.yaml` (default cap **5 MB**, keep **3** rotated copies as `purchases.jsonl.1` … `.3`). Set `max_bytes: null` to disable rotation if you prefer to manage it manually.
 
 ---
 

@@ -421,6 +421,62 @@ class TestAppendPurchaseJsonl:
         assert json.loads(lines[0]) == {"outcome": "held", "target": "t1"}
         assert json.loads(lines[1]) == {"outcome": "success", "target": "t1"}
 
+    def test_rotation_caps_active_file_and_keeps_archives(
+        self, tmp_path: Path
+    ) -> None:
+        state_dir = tmp_path / "state"
+        path = state_dir / "purchases.jsonl"
+        for i in range(6):
+            append_purchase_jsonl(
+                state_dir,
+                {"i": i, "blob": "x" * 200},
+                max_bytes=256,
+                keep_rotated=2,
+            )
+        rotated_1 = state_dir / "purchases.jsonl.1"
+        rotated_2 = state_dir / "purchases.jsonl.2"
+        rotated_overflow = state_dir / "purchases.jsonl.3"
+        assert rotated_1.is_file()
+        assert rotated_2.is_file()
+        assert not rotated_overflow.exists()
+        if path.exists():
+            assert path.stat().st_size <= 256
+        append_purchase_jsonl(
+            state_dir,
+            {"after": True},
+            max_bytes=256,
+            keep_rotated=2,
+        )
+        assert path.is_file()
+        assert path.stat().st_size <= 256
+
+    def test_rotation_zero_keep_truncates_active(self, tmp_path: Path) -> None:
+        state_dir = tmp_path / "state"
+        path = state_dir / "purchases.jsonl"
+        for i in range(4):
+            append_purchase_jsonl(
+                state_dir,
+                {"i": i, "blob": "y" * 200},
+                max_bytes=256,
+                keep_rotated=0,
+            )
+        assert not (state_dir / "purchases.jsonl.1").exists()
+        if path.exists():
+            assert path.stat().st_size <= 256
+
+    def test_rotation_disabled_when_max_bytes_none(self, tmp_path: Path) -> None:
+        state_dir = tmp_path / "state"
+        for i in range(20):
+            append_purchase_jsonl(
+                state_dir,
+                {"i": i, "blob": "z" * 200},
+                max_bytes=None,
+            )
+        path = state_dir / "purchases.jsonl"
+        assert not (state_dir / "purchases.jsonl.1").exists()
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 20
+
 
 # -----------------------------------------------------------------------------
 # build_notification copy

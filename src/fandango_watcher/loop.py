@@ -488,8 +488,55 @@ def _next_sleep_seconds(
 # -----------------------------------------------------------------------------
 
 
-def append_purchase_jsonl(state_dir: Path, row: dict[str, object]) -> None:
-    """Append one JSON line to ``state/purchases.jsonl`` for auditing."""
+def _rotate_purchases_jsonl(path: Path, *, keep_rotated: int) -> None:
+    """Shift ``purchases.jsonl`` -> ``.1``, ``.1`` -> ``.2``, … up to ``keep_rotated``.
+
+    Files beyond ``keep_rotated`` are dropped. ``keep_rotated == 0`` means truncate
+    the active file with no archive copy. Errors are logged and swallowed so an
+    audit-rotation hiccup never crashes the watch loop.
+    """
+    try:
+        if keep_rotated > 0:
+            oldest = path.with_suffix(path.suffix + f".{keep_rotated}")
+            if oldest.exists():
+                try:
+                    oldest.unlink()
+                except OSError:
+                    logger.debug("rotate: unlink %s failed", oldest, exc_info=True)
+            for i in range(keep_rotated - 1, 0, -1):
+                src = path.with_suffix(path.suffix + f".{i}")
+                dst = path.with_suffix(path.suffix + f".{i + 1}")
+                if src.exists():
+                    try:
+                        src.replace(dst)
+                    except OSError:
+                        logger.debug("rotate: %s -> %s failed", src, dst, exc_info=True)
+            try:
+                path.replace(path.with_suffix(path.suffix + ".1"))
+            except OSError:
+                logger.debug("rotate: %s -> .1 failed", path, exc_info=True)
+        else:
+            try:
+                path.unlink()
+            except OSError:
+                logger.debug("rotate: unlink active %s failed", path, exc_info=True)
+    except Exception:  # noqa: BLE001 — rotation must never break the loop
+        logger.warning("purchases.jsonl rotation failed", exc_info=True)
+
+
+def append_purchase_jsonl(
+    state_dir: Path,
+    row: dict[str, object],
+    *,
+    max_bytes: int | None = None,
+    keep_rotated: int = 3,
+) -> None:
+    """Append one JSON line to ``state/purchases.jsonl`` for auditing.
+
+    When ``max_bytes`` is set and the file exceeds that size after the write,
+    rotate to ``purchases.jsonl.1`` … ``.<keep_rotated>`` and start fresh. Pass
+    ``max_bytes=None`` (default) to disable rotation entirely.
+    """
     path = state_dir / "purchases.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(row, default=str) + "\n"
@@ -497,6 +544,13 @@ def append_purchase_jsonl(state_dir: Path, row: dict[str, object]) -> None:
         f.write(line)
         f.flush()
         os.fsync(f.fileno())
+    if max_bytes is not None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        if size > max_bytes:
+            _rotate_purchases_jsonl(path, keep_rotated=keep_rotated)
 
 
 def install_signal_handlers(stop_event: threading.Event) -> None:
@@ -771,6 +825,8 @@ def run_watch(
                                 "at": datetime.now(UTC).isoformat(),
                                 "attempt": attempt.model_dump(mode="json"),
                             },
+                            max_bytes=cfg.purchase_audit.max_bytes,
+                            keep_rotated=cfg.purchase_audit.keep_rotated,
                         )
 
             try:
