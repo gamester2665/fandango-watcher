@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import FormatTag
@@ -482,6 +482,13 @@ class Settings(BaseSettings):
     tz: str = "America/Los_Angeles"
     watcher_mode: Literal["watch", "once", "dry-run"] = "watch"
     watcher_config: str = "config.yaml"
+    # Default bind port when CLI omits ``--healthz-port`` / ``--port`` (watch + dashboard).
+    healthz_port: int = Field(
+        default=8787,
+        ge=1,
+        le=65535,
+        validation_alias=AliasChoices("WATCHER_HEALTHZ_PORT", "healthz_port"),
+    )
 
     # Twilio
     twilio_account_sid: str = ""

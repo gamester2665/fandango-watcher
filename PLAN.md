@@ -52,18 +52,20 @@ The scripted purchaser handles the common case in ~5–15 seconds at near-zero c
 
 ## MVP success criteria
 
-- [ ] `docker compose up -d` starts watcher + purchaser on your home PC using a pre-warmed Fandango browser profile.
-- [ ] The watcher polls one primary Fandango route and one optional backup route (e.g. `?format=IMAX%2070MM`) every ~5 min with jitter, writing a timestamped screenshot + structured parse result on every crawl.
-- [ ] A release-schema classifier (`not_on_sale | partial_release | full_release`) runs every crawl and is the source of truth for "watchable."
-- [ ] State machine fires **SMS + email in parallel** only on `bad → good` transition and enqueues one purchase attempt per transition.
-- [ ] Purchaser uses a **pre-warmed Fandango browser profile** (one-time headed login, persisted in a Docker named volume) with AMC Stubs linked and CityWalk Hollywood set as the default theater.
-- [ ] Purchaser consults a **format → auditorium → seat-priority** map in config and attempts the highest-priority seat available for the matched format.
-- [ ] **`$0.00` invariant** is enforced: the "Complete Reservation" button is **never** clicked unless the DOM shows total `$0.00` AND a recognizable A-List/Stubs benefit line on the review page AND the showtime/theater/seats on review match what the watcher enqueued. Any failed check halts the attempt and SMSs the human with a deep link to the review page.
-- [ ] If the scripted purchaser fails mid-flow (selector not found, layout drift, popup), a CU fallback is invoked automatically with the same invariant enforced — in Python, not by the model.
-- [ ] If the preferred showtime is sold out, the purchaser stops and texts the human (no auto-fallback to alternate showtimes in v1).
-- [ ] **Dry-run mode** (`purchase.mode: notify_only`) exercises the full pipeline with the final click stubbed.
-- [ ] Screenshots retained for 7 days (`max_age_days: 7`); each purchase attempt writes a labeled screenshot per step to `artifacts/purchase-attempts/<timestamp>/`.
-- [ ] The image that runs on your home PC runs unchanged on a VPS.
+Reconciled with the codebase (2026-04): implementation status, not your personal go-live sign-off.
+
+- [x] `docker compose` + `Dockerfile` ship a single watcher image; **you** warm `browser-profile` via `login` / first headed run (see README).
+- [x] Watcher polls multiple `targets` with jitter, writes screenshots + structured parse every crawl (`watcher.crawl_target`, `state.py`).
+- [x] Classifier `not_on_sale | partial_release | full_release` (`detect.py`) drives `watchable` / transitions.
+- [x] `bad → good` fires parallel notify (`notify.py`) and enqueues scripted purchase when `purchase.mode` is `full_auto` or `hold_and_confirm` (`loop.py`).
+- [x] Purchaser uses persistent `browser.user_data_dir`; **operator** links AMC Stubs / CityWalk in a real browser session.
+- [x] `plan_purchase` + `seat_priority` pick format / auditorium / seats (`purchase.py`).
+- [x] **`$0.00` invariant** in `purchase.validate_invariant` gates `Complete` in `purchaser.run_scripted_purchase`; failures halt + notify.
+- [x] Agent fallback (`agent_fallback.py`) on scoped scripted failures; invariant re-checked in Python before retry.
+- [x] Preferred seat sold out → `HALTED_PREFERRED_SOLD_OUT` + notify (`on_preferred_sold_out`).
+- [x] `purchase.mode: notify_only` skips auto-purchase; `test-purchase` plans without completing checkout; `test-purchase --stub` runs flow to review without completing.
+- [x] Screenshot pruning + per-attempt artifact dirs (`screenshots.max_age_days`, `per_purchase_dir`).
+- [ ] Same image on a **VPS** — not CI-verified here; Docker layout supports it (Phase 7).
 
 ---
 
@@ -123,26 +125,26 @@ fandango_watcher/
     state.json                   # last status, last alert, last purchase, error streak
   src/fandango_watcher/
     __init__.py
-    models.py                    # Pydantic schemas (+ PurchaseAttempt, SeatPreference)
-    watcher.py                   # crawl → classify → maybe notify → maybe enqueue purchase
+    models.py                    # ParsedPageData, release schemas
+    watcher.py                   # Playwright crawl + classify
     detect.py                    # page parse + release_schema classification
-    notify.py                    # Twilio + SMTP in parallel with per-channel retry
-    state.py                     # load/save state
-    config.py                    # pyyaml → validated Pydantic config
-    cli.py                       # `watch | once | test-notify | test-purchase | login`
-    purchaser/
-      __init__.py
-      scripted.py                # deterministic Playwright checkout flow
-      seats.py                   # seat-priority resolver
-      invariants.py              # $0.00 + A-List benefit detection (kill switch)
-      agent_fallback.py          # browser-use + VLM wrapper (invoked only on failure)
+    purchase.py                  # PurchasePlan, validate_invariant ($0.00 gate), PurchaseAttempt
+    purchaser.py                 # scripted checkout + agent rescue hook
+    notify.py                    # Twilio + SMTP (FanOutNotifier)
+    state.py                     # per-target transitions + events
+    dashboard.py                 # read-only HTTP + /api/revision live reload
+    healthz.py                   # /healthz + static /artifacts
+    config.py                    # YAML → WatcherConfig; Settings (.env)
+    cli.py                       # watch | once | dashboard | test-notify | test-purchase | login | …
+    agent_fallback.py            # browser-use + VLM (optional extra)
+    social_x.py                  # X advisory poller
 ```
 
 ---
 
 ## Docker & deployment
 
-**Base image:** `mcr.microsoft.com/playwright/python:v1.48.0-jammy` (or latest stable). Chromium + system deps pre-installed; Python deps layered via uv.
+**Base image:** `python:3.13-slim-bookworm` in the shipped `Dockerfile`; Playwright browsers installed via `playwright install --with-deps chromium` at build time (equivalent outcome to the Microsoft Playwright image, different layer layout).
 
 **Named volumes (persist across container rebuilds):**
 
@@ -157,7 +159,7 @@ fandango_watcher/
 
 **Health:** `/healthz` HTTP endpoint returning last-crawl timestamp, last `release_schema`, last error streak.
 
-**Environment (to go in a rewritten `.env.example` — the current file only contains leftover X/Twitter keys and should be replaced):**
+**Environment** — see `.env.example` (Twilio, SMTP, X bearer, LLM keys, optional `WATCHER_HEALTHZ_PORT` for default dashboard/healthz bind port):
 
 - `TZ=America/Los_Angeles`
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `NOTIFY_TO_E164`
@@ -277,7 +279,7 @@ If **any** check fails:
 - Send SMS + email with the reason, the current Fandango review URL, and the screenshot attached.
 - Let the seat hold expire rather than committing a bad purchase.
 
-The invariant is implemented in `src/fandango_watcher/purchaser/invariants.py` and is called by **both** the scripted purchaser and the CU fallback. The CU fallback is **never** trusted to self-attest the invariant — deterministic Python code re-reads the DOM.
+The invariant is implemented in `src/fandango_watcher/purchase.py` (`validate_invariant`, `extract_review_state`) and is called by **both** the scripted purchaser and the agent fallback. The fallback is **never** trusted to self-attest the invariant — deterministic Python code re-reads the DOM.
 
 ---
 
@@ -532,22 +534,24 @@ Not required for v1 (home PC). Docker makes the migration a matter of moving vol
 
 ## Phased checklist
 
+*(Reconciled with the repo — unchecked items are manual ops, live validation, or optional follow-up.)*
+
 ### Phase 1 — Source validation + Docker skeleton
 
-- [ ] Verify Fandango surfaces AMC Stubs A-List benefits consistently on IMAX 70mm / Dolby / Laser-Recliner checkouts at CityWalk Hollywood (capture one $0.00 review screenshot per format as invariant fixtures).
-- [ ] Add `Dockerfile` on `mcr.microsoft.com/playwright/python` base; add `docker-compose.yml` with named volumes for profile / artifacts / state.
-- [ ] **Replace `.env.example`** (currently leftover X/Twitter keys only) with Twilio + SMTP + `OPENROUTER_API_KEY` / `OPENAI_API_KEY` placeholders.
-- [ ] Add `config.example.yaml` matching the structure above (seat priority per format wired to your real preferences).
-- [ ] Lock the first watched route and the positive-ticketing rule for CityWalk.
+- [ ] **Manual:** Capture one $0.00 review screenshot per premium format at CityWalk for invariant fixtures (`tests/fixtures/review_pages/`, `dump-review`).
+- [x] `Dockerfile` + `docker-compose.yml` with named volumes for profile / artifacts / state (Playwright via `uv` + `playwright install`, not the mcr.microsoft.com Playwright base image).
+- [x] `.env.example` — Twilio, SMTP, LLM keys, X API, `WATCHER_HEALTHZ_PORT`, etc.
+- [x] `config.example.yaml` — targets, theater anchor, formats, seat priority, notify, purchase, agent_fallback, social_x, movies.
+- [x] Example routes + CityWalk anchor in config (operator edits `config.yaml` for each title).
 
 ### Phase 2 — Watcher & classifier (detection only, no purchase)
 
-- [ ] Scaffold uv deps (Playwright, Pydantic already present, pyyaml, twilio; browser-use as optional `[agent]` extra) and `uv run playwright install chromium` in the image build.
-- [ ] Implement `watcher.py` + `detect.py` using existing Pydantic models; classify Schema A/B/C on real pages.
-- [ ] Add `--once` CLI subcommand; write screenshot + parse JSON each run.
-- [ ] Add `state.py` so restarts do not re-alert.
-- [ ] Add poll loop with jitter + conservative error backoff; prune screenshots by `max_age_days: 7`.
-- [ ] Run overnight in `notify_only` mode to measure selector drift and error rates.
+- [x] uv / `pyproject.toml`; optional `[agent]` extra; Chromium in Docker build.
+- [x] `watcher.py` + `detect.py`; Schema A/B/C; optional per-target `format_filter_click_*`.
+- [x] `once` CLI (+ `--format-filter-*` overrides); screenshots + JSON.
+- [x] `state.py` + per-target JSON; transition dedupe for alerts.
+- [x] `watch` loop: jitter, error backoff, screenshot pruning.
+- [ ] **Ops:** overnight / long soak in `notify_only` to measure drift (not automated).
 
 ### Phase 2.5 — Social signals: X / Twitter (advisory only)
 
@@ -585,23 +589,23 @@ or replacing the Fandango watcher as the source of truth for "can I buy?".
 
 ### Phase 3 — Notifications
 
-- [ ] Implement `notify.py` with parallel Twilio + SMTP and per-channel retry / persisted pending flags.
-- [ ] Wire transition-only alerts on `bad → good`.
-- [ ] Add `test-notify` CLI to exercise both channels on demand.
+- [x] `notify.py` — Twilio + SMTP, `FanOutNotifier`, attachment limits for email.
+- [x] Transition + purchase + social events gated by `notify.on_events` (`loop._emit_events`, `_emit_purchase_outcome`).
+- [x] `test-notify` CLI.
 
 ### Phase 4 — Scripted purchaser (behind a dry-run flag)
 
-- [ ] Implement `purchaser/scripted.py` end-to-end but keep `purchase.mode: notify_only` until validated.
-- [ ] Implement `purchaser/seats.py` resolver consuming the format → auditorium → seats map.
-- [ ] Implement `purchaser/invariants.py` with the `$0.00` + A-List benefit check; unit-test against captured review-page HTML fixtures.
-- [ ] Add `test-purchase --stub` CLI that runs the whole flow but never clicks "Complete."
-- [ ] Capture golden review-page screenshots during a real (manually triggered) run; commit as invariant fixtures.
+- [x] Scripted flow in `purchaser.py` (not a separate `purchaser/scripted.py`); `purchase.mode` controls auto-buy.
+- [x] Seat / showtime selection in `purchase.plan_purchase` using `seat_priority` map.
+- [x] Invariant + review parsing in `purchase.py` (`validate_invariant`); unit tests + review fixtures under `tests/fixtures/`.
+- [x] `test-purchase --stub` — runs `run_scripted_purchase(..., hold_for_confirm=True)` after a plan (no Complete click).
+- [ ] **Manual:** Golden live review screenshots per format at CityWalk (optional enrichment of fixtures).
 
 ### Phase 5 — Full auto-buy (flip the default)
 
-- [ ] Set `purchase.mode: full_auto` in the example config; verify on the next real drop or a harmless live test booking you plan to cancel.
-- [ ] Cover error paths: session expired, preferred seat lost mid-flow, review page missing benefit phrase, invariant mismatch.
-- [ ] Wire purchase-outcome notifications (`purchase_succeeded`, `purchase_halted_invariant`, `purchase_halted_preferred_sold_out`).
+- [x] `config.example.yaml` uses `purchase.mode: full_auto` (operator verifies on real drop).
+- [x] Unit / integration coverage for invariant failure, sold-out, theater mismatch (`tests/test_purchase.py`, `test_purchaser*.py`); live session expiry remains an ops concern.
+- [x] Purchase outcomes wired to notify (`purchase_succeeded`, `purchase_halted_*`, etc.) when listed in `notify.on_events`.
 
 ### Phase 6 — Agent fallback (vision-LLM rescue)
 

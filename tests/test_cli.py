@@ -176,6 +176,7 @@ class TestTestPurchaseParser:
             "--no-screenshot",
             "--format-filter-label",
             "IMAX 3D",
+            "--stub",
         ])
         assert ns.command == "test-purchase"
         assert ns.config == "cfg.yaml"
@@ -183,6 +184,7 @@ class TestTestPurchaseParser:
         assert ns.from_fixture == "fixtures/foo.json"
         assert ns.no_screenshot is True
         assert ns.format_filter_label == "IMAX 3D"
+        assert ns.stub is True
 
 
 class TestDumpReviewParser:
@@ -731,6 +733,120 @@ class TestTestPurchaseFromFixture:
         assert payload["plan"] is None
         assert payload["release_schema"] == "not_on_sale"
         assert "no plan" in payload["reason"]
+
+    def test_stub_errors_when_no_plan(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        config_path = repo_root / "config.example.yaml"
+
+        fixture = {
+            "release_schema": "not_on_sale",
+            "watch_status": "not_watchable",
+            "url": "https://www.fandango.com/movie/odyssey",
+            "page_title": "The Odyssey - Coming Soon",
+            "crawled_at": "2026-12-25T18:00:00+00:00",
+            "schema_evidence": ["fixture"],
+            "theater_count": 0,
+            "showtime_count": 0,
+            "formats_seen": [],
+            "citywalk_present": False,
+            "citywalk_showtime_count": 0,
+            "citywalk_formats_seen": [],
+            "theaters": [],
+        }
+        fixture_path = tmp_path / "fixture.json"
+        fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+
+        rc = cli.main([
+            "test-purchase",
+            "--config",
+            str(config_path),
+            "--from-fixture",
+            str(fixture_path),
+            "--stub",
+        ])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "--stub requires a purchase plan" in err
+
+    def test_stub_invokes_run_scripted_purchase(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        config_path = repo_root / "config.example.yaml"
+
+        fixture = {
+            "release_schema": "partial_release",
+            "watch_status": "watchable",
+            "url": "https://www.fandango.com/movie/odyssey",
+            "page_title": "The Odyssey Tickets",
+            "movie_title": "The Odyssey",
+            "crawled_at": "2026-12-25T18:00:00+00:00",
+            "schema_evidence": ["fixture"],
+            "theater_count": 1,
+            "showtime_count": 1,
+            "formats_seen": ["IMAX_70MM"],
+            "citywalk_present": True,
+            "citywalk_showtime_count": 1,
+            "citywalk_formats_seen": ["IMAX_70MM"],
+            "theaters": [
+                {
+                    "name": "AMC Universal CityWalk 19",
+                    "is_citywalk": True,
+                    "format_sections": [
+                        {
+                            "label": "IMAX 70MM",
+                            "normalized_format": "IMAX_70MM",
+                            "attributes": [],
+                            "showtimes": [
+                                {
+                                    "label": "7:00p",
+                                    "ticket_url": "https://www.fandango.com/buy/x",
+                                    "is_buyable": True,
+                                    "is_citywalk": True,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        fixture_path = tmp_path / "fixture.json"
+        fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+
+        captured: dict[str, Any] = {}
+
+        def fake_run_scripted(*args: Any, **kwargs: Any) -> object:
+            captured["hold_for_confirm"] = kwargs.get("hold_for_confirm")
+            class _A:
+                def model_dump(self, mode: str = "json") -> dict[str, str]:
+                    return {"outcome": "held_for_confirm", "stub": True}
+
+            return _A()
+
+        monkeypatch.setattr(
+            "fandango_watcher.purchaser.run_scripted_purchase",
+            fake_run_scripted,
+        )
+
+        rc = cli.main([
+            "test-purchase",
+            "--config",
+            str(config_path),
+            "--from-fixture",
+            str(fixture_path),
+            "--stub",
+        ])
+        assert rc == 0
+        assert captured.get("hold_for_confirm") is True
+        out = json.loads(capsys.readouterr().out)
+        assert out["purchase_attempt"]["outcome"] == "held_for_confirm"
 
     def test_missing_fixture_file_reports_error(
         self,

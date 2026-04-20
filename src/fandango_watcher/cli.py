@@ -6,13 +6,13 @@ Subcommands mirror the phased plan:
 * ``watch``        -- Phase 3: long poll loop with /healthz
 * ``test-notify``  -- Phase 3: exercise SMS + email
 * ``login``        -- Phase 5: headed first-run login (warms the persistent profile)
-* ``test-purchase``-- Phase 4: dry-run the purchase planner against a live URL or
-                       a saved JSON fixture, prints the resulting ``PurchasePlan``
+* ``test-purchase``-- Phase 4: plan + JSON; optional ``--stub`` runs scripted
+                       checkout to the review page without clicking Complete
 * ``refs``         -- print bundled development reference Fandango URLs (Schema A/B/C)
 
-The end-to-end click flow (``purchaser.py``) is intentionally not yet wired —
-``test-purchase`` validates the planner + invariant in isolation so we can
-calibrate the seat-priority config without touching live checkout.
+``watch`` wires ``purchaser.run_scripted_purchase`` on release transitions
+when ``purchase.mode`` allows. ``test-purchase`` plans only; add ``--stub``
+for a live scripted run to the review page without clicking Complete.
 """
 
 from __future__ import annotations
@@ -165,8 +165,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument(
         "--healthz-port",
         type=int,
-        default=8787,
-        help="Port to bind /healthz on (default 8787).",
+        default=None,
+        help=(
+            "Port to bind /healthz on. Default: 8787 or ``WATCHER_HEALTHZ_PORT`` from .env."
+        ),
     )
     p_watch.add_argument(
         "--max-ticks",
@@ -232,8 +234,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_dash.add_argument(
         "--port",
         type=int,
-        default=8787,
-        help="TCP port (default 8787).",
+        default=None,
+        help=(
+            "TCP port. Default: 8787 or ``WATCHER_HEALTHZ_PORT`` from .env."
+        ),
     )
     p_dash.add_argument(
         "--no-open",
@@ -311,6 +315,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-screenshot",
         action="store_true",
         help="Skip the PNG screenshot for the live-crawl path.",
+    )
+    p_test_purchase.add_argument(
+        "--stub",
+        action="store_true",
+        help=(
+            "After a successful plan, run the scripted Playwright flow through "
+            "seat selection and review, then stop before clicking "
+            "'Complete Reservation' (hold_for_confirm). Requires "
+            "purchase.enabled and a bookable plan; uses live Fandango."
+        ),
     )
     _register_format_filter_cli_args(p_test_purchase)
 
@@ -606,7 +620,12 @@ def _run_watch(args: argparse.Namespace) -> int:
     stop_event = threading.Event()
     install_signal_handlers(stop_event)
 
-    healthz_port = None if args.no_healthz else args.healthz_port
+    bind_port = (
+        args.healthz_port
+        if args.healthz_port is not None
+        else settings.healthz_port
+    )
+    healthz_port = None if args.no_healthz else bind_port
 
     logger.info(
         "starting watch loop: targets=%d state_dir=%s healthz_port=%s",
@@ -653,20 +672,21 @@ def _run_dashboard(args: argparse.Namespace) -> int:
         refresh_seconds=max(0, int(args.refresh_seconds)),
     )
 
+    bind_port = args.port if args.port is not None else settings.healthz_port
     try:
         ctx = start_healthz_server(
             hb,
             host=args.host,
-            port=args.port,
+            port=bind_port,
             dashboard_data=dd,
         )
     except OSError as e:
         print(
-            f"error: failed to bind dashboard on {args.host}:{args.port}: {e}\n"
+            f"error: failed to bind dashboard on {args.host}:{bind_port}: {e}\n"
             f"hint: another dashboard process may still be holding the port.\n"
-            f"  windows: netstat -ano | findstr :{args.port}\n"
+            f"  windows: netstat -ano | findstr :{bind_port}\n"
             f"           taskkill /F /PID <pid>\n"
-            f"  posix:   lsof -nP -iTCP:{args.port} -sTCP:LISTEN\n"
+            f"  posix:   lsof -nP -iTCP:{bind_port} -sTCP:LISTEN\n"
             f"           kill <pid>",
             file=sys.stderr,
         )
@@ -816,6 +836,13 @@ def _run_test_purchase(args: argparse.Namespace) -> int:
     )
 
     if plan is None:
+        if args.stub:
+            print(
+                "error: --stub requires a purchase plan (purchase.enabled, "
+                "CityWalk bookable showtime, seat_priority for the format).",
+                file=sys.stderr,
+            )
+            return 1
         print(
             json.dumps(
                 {
@@ -831,10 +858,24 @@ def _run_test_purchase(args: argparse.Namespace) -> int:
         )
         return 0
 
-    payload = {
+    payload: dict[str, Any] = {
         "plan": plan.model_dump(mode="json"),
         "release_schema": str(parsed.release_schema),
     }
+    if args.stub:
+        from .purchaser import run_scripted_purchase
+
+        attempt = run_scripted_purchase(
+            plan,
+            browser_cfg=cfg.browser,
+            purchase_cfg=cfg.purchase,
+            per_purchase_dir=Path(cfg.screenshots.per_purchase_dir),
+            hold_for_confirm=True,
+            settings=Settings(),
+            agent_fallback_cfg=cfg.agent_fallback,
+        )
+        payload["purchase_attempt"] = attempt.model_dump(mode="json")
+
     json.dump(payload, sys.stdout, indent=2, default=str)
     sys.stdout.write("\n")
     return 0

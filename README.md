@@ -204,8 +204,9 @@ fandango-watcher <subcommand>
                    --config / --host / --port / --no-open
   login            Headed first-run to warm the persistent profile.
   test-notify      Fire one Twilio + SMTP message through the configured channels.
-  test-purchase    Crawl + classify + plan + JSON. Never clicks Complete.
-                   Same optional --format-filter-* flags as ``once`` when
+  test-purchase    Crawl + classify + plan + JSON. Optional ``--stub`` runs
+                   the scripted checkout to the review page only (no Complete
+                   click). Same optional --format-filter-* as ``once`` when
                    crawling (ignored with --from-fixture).
   x-poll           One-shot poll of configured X handles. Use --check-bearer
                    to validate the bearer token without consuming tweet quota.
@@ -305,7 +306,8 @@ between two listeners. To clear it:
   wrapper leaves the Python child still bound to the port).
 - **POSIX:** `lsof -nP -iTCP:8787 -sTCP:LISTEN` → `kill <pid>`.
 - Or pick a different port: `fandango-watcher dashboard --port 8790`
-  (and `--healthz-port` on `watch`).
+  (and `--healthz-port` on `watch`), or set **`WATCHER_HEALTHZ_PORT`** in `.env`
+  as the default when those flags are omitted.
 
 **Crawl shows `theater_count: 0` / `not_on_sale` but the movie is on sale** —
 (1) Fandango may need a **ZIP or location** before it renders theater cards —

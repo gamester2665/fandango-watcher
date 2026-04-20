@@ -317,3 +317,11 @@ class TestSettings:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("SOME_UNRELATED_VAR", "xyz")
         Settings()  # must not raise
+
+    def test_watcher_healthz_port_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("WATCHER_HEALTHZ_PORT", "9888")
+        s = Settings()
+        assert s.healthz_port == 9888
