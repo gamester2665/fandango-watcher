@@ -123,7 +123,8 @@ fandango_watcher/
     screenshots/                 # gitignored, mounted as volume
     purchase-attempts/           # per-attempt dir of screenshots + json trace
   state/
-    state.json                   # last status, last alert, last purchase, error streak
+    <target>.json                # one file per configured target (+ transitions, error streak)
+    social_x.json                # X poller cursor state (when social_x.enabled)
   src/fandango_watcher/
     __init__.py
     models.py                    # ParsedPageData, release schemas
@@ -151,7 +152,7 @@ fandango_watcher/
 
 - `fandango_profile:/app/browser-profile` — Playwright `user_data_dir` with your logged-in Fandango + AMC Stubs session and CityWalk set as default theater.
 - `fandango_artifacts:/app/artifacts` — screenshots + purchase-attempt traces.
-- `fandango_state:/app/state` — `state.json`.
+- `fandango_state:/app/state` — per-target `*.json` plus `social_x.json` when X polling is enabled.
 
 **First-run flow (one-time):**
 

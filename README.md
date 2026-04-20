@@ -105,7 +105,7 @@ Artifacts produced:
 | `artifacts/purchase-attempts/<ts>/`   | every purchase attempt    | step-by-step PNGs of the checkout flow (scripted + rescue). |
 | `artifacts/videos/`                   | `--video` / `record_video`| `.webm` per browser context (one per crawl, one per purchase). Finalized when the context closes. |
 | `artifacts/traces/`                   | `--trace` / `record_trace`| Playwright `.zip` per context. Open with `npx playwright show-trace artifacts/traces/<file>.zip` for a time-travel debugger (DOM snapshots + screenshots + network + console + sources, per action). |
-| `state/state.json`                    | `state.py`                | per-target last seen schema + last alert time so restarts don't re-alert. |
+| `state/<target-name>.json`            | `state.py`                | per-target last seen schema + last alert time so restarts don't re-alert. |
 | `state/social_x.json`                 | `social_x.py`             | resolved X user_id + last seen tweet id per handle. |
 
 You can also have screenshots and `.webm`s **emailed back** automatically
@@ -250,28 +250,33 @@ recognizable A-List benefit phrase."**
 
 ```
 .
-├── Dockerfile                        # mcr.microsoft.com/playwright/python + uv
+├── Dockerfile                        # python:3.13-slim-bookworm + uv + Playwright Chromium
 ├── docker-compose.yml                # watcher / login services + named volumes
 ├── .env.example                      # Twilio + SMTP + X + OPENROUTER_API_KEY / OPENAI_API_KEY
 ├── config.example.yaml               # targets, formats, seat priority, social_x, agent_fallback
 ├── PLAN.md                           # full architecture + phased plan
 ├── pyproject.toml                    # uv-managed deps; [agent] extra = browser-use + langchain-openai
 └── src/fandango_watcher/
-    ├── cli.py                        # argparse subcommands (lazy-imported)
+    ├── cli/                          # package: parser, commands, logging_setup; entry in __init__.py
+    ├── artifacts.py                # prune old screenshots / videos / traces under artifacts/
     ├── dashboard.py                  # collect_dashboard_state + render_index_html (read-only UI)
-    ├── healthz.py                    # /healthz + optional dashboard + /artifacts static
+    ├── healthz.py                    # /healthz, /metrics, optional dashboard + /artifacts static
     ├── config.py                     # Pydantic Settings + WatcherConfig (incl. BrowserConfig record_video / record_trace)
     ├── models.py                     # ParsedPageData (Schema A / B / C discriminated union)
     ├── reference_pages.py            # canonical Fandango fixtures (Odyssey, Dune Pt 3, Project Hail Mary, Mandalorian + Grogu)
-    ├── watcher.py                    # crawl_target — Playwright + screenshot + classify
+    ├── watcher.py                    # crawl_target / crawl_targets_in_tick — Playwright + classify
     ├── detect.py                     # Schema A/B/C classifier
     ├── state.py                      # per-target state machine + transitions
     ├── notify.py                     # Twilio + SMTP, parallel send, screenshot/video MIME attach
     ├── loop.py                       # poll loop (Fandango + decoupled X poller) + healthz
-    ├── purchase.py                   # PurchaseAttempt + extract_review_state + validate_invariant ($0.00 gate)
-    ├── purchaser.py                  # run_scripted_purchase + agent rescue wiring
+    ├── purchase.py                   # PurchaseAttempt + validate_invariant ($0.00 gate)
+    ├── purchaser.py                  # run_scripted_purchase + extract_review_state + agent rescue wiring
     ├── agent_fallback.py             # AgentFallback Protocol + browser-use provider
-    └── social_x.py                   # X poller (httpx + Bearer) + match_tweet
+    ├── social_x.py                   # X poller (httpx + Bearer) + match_tweet
+    ├── release_intel.py              # optional Grok-backed release intel for dashboard
+    ├── playwright_video.py           # finalize .webm filenames when a context closes
+    ├── extract_page.js               # bundled page extractor for Fandango crawl
+    └── extract_review.js             # bundled review-page hints for purchaser invariant
 ```
 
 ---

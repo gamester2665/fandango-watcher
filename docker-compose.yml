@@ -97,4 +97,4 @@ services:
 volumes:
   fandango_profile:                      # warmed browser session (cookies, A-List)
   fandango_artifacts:                    # screenshots + purchase-attempt traces
-  fandango_state:                        # state.json / SQLite
+  fandango_state:                        # per-target JSON under state/
