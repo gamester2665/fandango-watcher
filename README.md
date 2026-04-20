@@ -42,6 +42,48 @@ phased checklist.
 
 There is no bundled CI. Deploy by building the Docker image (or installing with `uv` on the host), copying `config.yaml` and a populated `.env`, and running `watch` (or `docker compose` as in the repo). Verify the process with `GET http://127.0.0.1:8787/healthz` (or your bound host/port) and optional `GET /metrics` for heartbeat counters. The read-only dashboard on `/` exposes `/api/status`, `/api/purchases` (tail of `state/purchases.jsonl`), and `/api/revision` for live reload.
 
+**Policy:** do not deploy to a VPS until you have manually confirmed behavior locally. Same rule is spelled out in [`PLAN.md`](./PLAN.md) (local sign-off gate).
+
+---
+
+## Operator checklist (local → soak → VPS)
+
+Use this when you want **everything** validated: core behavior, long-running stability, fixtures, social signals, purchase calibration, then portability. Order matters.
+
+### A — Local core (first gate)
+
+1. **Secrets + config:** `.env` from `.env.example`; `config.yaml` from `config.example.yaml` (targets, theater, formats, `notify`, `purchase`).
+2. **Browser session:** `uv run fandango-watcher login --headed` (or Docker `login` profile) so Fandango + AMC Stubs + CityWalk context is real.
+3. **Crawl:** `once` per target; optional `--write-state` to match `watch` persistence. Inspect `state/<target>.json` and `artifacts/screenshots/`.
+4. **Watch + HTTP:** `watch` with healthz on; open `http://127.0.0.1:8787/` (dashboard), hit `/healthz`, `/api/status`, `/api/purchases` if you use purchases.
+5. **Notifications:** `test-notify` for SMS + email pipes.
+6. **Purchaser (no surprise checkout):** `test-purchase` (and `--stub` / `--format-filter-*` as needed). Stay on `purchase.mode: notify_only` until you are ready to escalate.
+
+### B — Long soak (drift, noise, restarts)
+
+7. Run **`watch` in `notify_only`** for at least one overnight or multi-day window. Watch for false transitions, stuck error streaks, and disk growth under `artifacts/` and `state/`. Restart once to confirm clean resume from `state/*.json`.
+
+### C — Review-page fixtures (stronger invariants)
+
+8. For each premium format you care about at CityWalk, capture **`dump-review`** outputs into `tests/fixtures/review_pages/` (see that folder’s README). Re-run `uv run pytest -q` after adding fixtures. Repeat when Fandango changes the review DOM.
+
+### D — X / Twitter (if `social_x` is enabled)
+
+9. `x-poll --check-bearer`, then a real **`x-poll`** against your configured handles. Confirm `state/social_x.json` advances and that X hints do not drown out Fandango truth (they are advisory only).
+
+### E — Purchase mode escalation (only when A–D feel solid)
+
+10. Move **`purchase.mode`** toward `hold_and_confirm` / `full_auto` only after successful **`test-purchase`** runs and you accept operational risk. Keep **`$0.00` invariant** understanding: any non-zero total must halt.
+
+### F — VPS / remote (after local sign-off only)
+
+11. Build or copy the **same image** and volumes; bind healthz/dashboard the same way. Use VNC or equivalent for a **one-time headed re-login** if the IP triggers friction. Re-check `/healthz` and a short `watch` smoke. See **Docker & deployment** / **VPS migration** in [`PLAN.md`](./PLAN.md).
+
+### G — Ongoing
+
+12. **DOM drift:** when crawls misbehave, update selectors and refresh **`dump-review`** fixtures. **Agent rescue:** optional `uv sync --extra agent` and calibration notes in `tests/fixtures/rescue/README.md`.
+13. **Large `state/purchases.jsonl`:** trim or archive periodically on long-lived hosts if the file grows without bound (no automatic rotation in v1).
+
 ---
 
 ## Quick start (local, no Docker)
