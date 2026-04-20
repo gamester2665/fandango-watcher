@@ -3,7 +3,8 @@
 Responsibilities:
 
 1. Load per-target state from disk (``state.py``).
-2. On each tick, crawl every target sequentially (``watcher.crawl_target``)
+2. On each tick, crawl every target in one shared browser context
+   (``watcher.crawl_targets_in_tick``), or use an injected ``crawl_fn`` in tests.
    and pipe the parsed result through :func:`state.transition` /
    :func:`state.record_error`.
 3. Emit notifications for any resulting events that are enabled in
@@ -23,15 +24,17 @@ Playwright, SMTP, or wall-clock sleeps.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import signal
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig
+from .artifacts import prune_artifact_trees
+from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig, plain_secret
 from .dashboard import DashboardData, DashboardPaths
 from .healthz import Heartbeat, HealthzContext, start_healthz_server
 from .models import ParsedPageData
@@ -53,7 +56,7 @@ from .state import (
     save_target_state,
     transition,
 )
-from .watcher import crawl_target
+from .watcher import crawl_target, crawl_targets_in_tick
 
 logger = logging.getLogger(__name__)
 
@@ -426,7 +429,7 @@ def _maybe_poll_social_x(
         # so the user only has to declare each handle once (under its movie).
         result = impl(  # type: ignore[misc]
             cfg.effective_social_x(),
-            settings.x_bearer_token,
+            plain_secret(settings.x_bearer_token),
             state_dir,
             now=now,
         )
@@ -435,6 +438,7 @@ def _maybe_poll_social_x(
         return now + _x_interval(cfg, rng)
 
     matches = getattr(result, "matches", []) or []
+    rl_at = getattr(result, "rate_limit_reset_at", None)
     logger.info(
         "social_x poll done: %d matches, %d handles polled, %d failed",
         len(matches),
@@ -443,7 +447,10 @@ def _maybe_poll_social_x(
     )
     if matches:
         _emit_social_x_matches(notifier, cfg, matches)
-    return now + _x_interval(cfg, rng)
+    base_next = now + _x_interval(cfg, rng)
+    if rl_at is not None and rl_at > now:
+        return max(base_next, rl_at + timedelta(seconds=2))
+    return base_next
 
 
 def _x_interval(cfg: WatcherConfig, rng: random.Random) -> "timedelta":
@@ -478,6 +485,15 @@ def _next_sleep_seconds(
 # -----------------------------------------------------------------------------
 # Signal handling
 # -----------------------------------------------------------------------------
+
+
+def append_purchase_jsonl(state_dir: Path, row: dict[str, object]) -> None:
+    """Append one JSON line to ``state/purchases.jsonl`` for auditing."""
+    path = state_dir / "purchases.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(row, default=str) + "\n"
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line)
 
 
 def install_signal_handlers(stop_event: threading.Event) -> None:
@@ -533,7 +549,8 @@ def run_watch(
     Returns the process exit code: 0 on clean shutdown.
     """
     local_stop = stop_event if stop_event is not None else threading.Event()
-    crawl_impl: CrawlFn = crawl_fn if crawl_fn is not None else crawl_target
+    crawl_impl: CrawlFn | None = crawl_fn
+    use_shared_playwright = crawl_fn is None
     notify_impl: FanOutNotifier = (
         notifier if notifier is not None else build_notifier(cfg.notify, settings)
     )
@@ -599,45 +616,91 @@ def run_watch(
     try:
         while not local_stop.is_set():
             tick += 1
-            hb.last_tick_at = datetime.now(UTC)
-            hb.total_ticks += 1
+            now_tick = datetime.now(UTC)
+            with hb.mutex:
+                hb.last_tick_at = now_tick
+                hb.total_ticks += 1
 
-            max_streak_this_tick = 0
+            tick_batch: dict[str, ParsedPageData | BaseException] = {}
+            if use_shared_playwright:
+                tick_batch = crawl_targets_in_tick(
+                    cfg.targets,
+                    browser_cfg=cfg.browser,
+                    citywalk_anchor=cfg.theater.fandango_theater_anchor,
+                    screenshot_dir=screenshot_dir,
+                )
 
+            tick_had_successful_crawl = False
             for target in cfg.targets:
                 if local_stop.is_set():
                     break
                 prev = target_states[target.name]
-                try:
-                    parsed = crawl_impl(
-                        target,
-                        browser_cfg=cfg.browser,
-                        citywalk_anchor=cfg.theater.fandango_theater_anchor,
-                        screenshot_dir=screenshot_dir,
-                    )
-                except Exception as e:  # noqa: BLE001 — loop must survive per-target failures
-                    hb.total_errors += 1
-                    logger.exception(
-                        "crawl failed target=%s url=%s", target.name, target.url
-                    )
-                    err_result = record_error(
-                        prev, e, error_streak_threshold=ERROR_STREAK_THRESHOLD
-                    )
-                    target_states[target.name] = err_result.state
-                    save_target_state(state_dir, err_result.state)
-                    _emit_events(
-                        notify_impl,
-                        result=err_result,
-                        cfg=cfg,
-                        target_name=target.name,
-                        target_url=target.url,
-                        parsed=None,
-                        error=e,
-                    )
-                    max_streak_this_tick = max(
-                        max_streak_this_tick, err_result.state.consecutive_errors
-                    )
-                    continue
+                if use_shared_playwright:
+                    raw_out = tick_batch.get(target.name)
+                    assert raw_out is not None
+                    if isinstance(raw_out, BaseException):
+                        e = raw_out
+                        with hb.mutex:
+                            hb.total_errors += 1
+                        logger.exception(
+                            "crawl failed target=%s url=%s",
+                            target.name,
+                            target.url,
+                        )
+                        err_result = record_error(
+                            prev,
+                            e,
+                            error_streak_threshold=ERROR_STREAK_THRESHOLD,
+                        )
+                        target_states[target.name] = err_result.state
+                        save_target_state(state_dir, err_result.state)
+                        _emit_events(
+                            notify_impl,
+                            result=err_result,
+                            cfg=cfg,
+                            target_name=target.name,
+                            target_url=target.url,
+                            parsed=None,
+                            error=e,
+                        )
+                        continue
+                    parsed = raw_out
+                    tick_had_successful_crawl = True
+                else:
+                    assert crawl_impl is not None
+                    try:
+                        parsed = crawl_impl(
+                            target,
+                            browser_cfg=cfg.browser,
+                            citywalk_anchor=cfg.theater.fandango_theater_anchor,
+                            screenshot_dir=screenshot_dir,
+                        )
+                        tick_had_successful_crawl = True
+                    except Exception as e:  # noqa: BLE001
+                        with hb.mutex:
+                            hb.total_errors += 1
+                        logger.exception(
+                            "crawl failed target=%s url=%s",
+                            target.name,
+                            target.url,
+                        )
+                        err_result = record_error(
+                            prev,
+                            e,
+                            error_streak_threshold=ERROR_STREAK_THRESHOLD,
+                        )
+                        target_states[target.name] = err_result.state
+                        save_target_state(state_dir, err_result.state)
+                        _emit_events(
+                            notify_impl,
+                            result=err_result,
+                            cfg=cfg,
+                            target_name=target.name,
+                            target_url=target.url,
+                            parsed=None,
+                            error=e,
+                        )
+                        continue
 
                 ok_result = transition(prev, parsed)
                 target_states[target.name] = ok_result.state
@@ -698,6 +761,19 @@ def run_watch(
                             target_name=target.name,
                             target_url=target.url,
                         )
+                        append_purchase_jsonl(
+                            state_dir,
+                            {
+                                "target": target.name,
+                                "at": datetime.now(UTC).isoformat(),
+                                "attempt": attempt.model_dump(mode="json"),
+                            },
+                        )
+
+            try:
+                prune_artifact_trees(cfg)
+            except Exception:  # noqa: BLE001
+                logger.debug("artifact prune failed", exc_info=True)
 
             next_x_poll_at = _maybe_poll_social_x(
                 cfg=cfg,
@@ -714,18 +790,26 @@ def run_watch(
                 logger.info("max_ticks=%d reached; stopping", max_ticks)
                 break
 
+            err_for_sleep = (
+                0
+                if tick_had_successful_crawl
+                else max(
+                    target_states[t.name].consecutive_errors for t in cfg.targets
+                )
+            )
             sleep_seconds = _next_sleep_seconds(
                 min_seconds=cfg.poll.min_seconds,
                 max_seconds=cfg.poll.max_seconds,
                 backoff_multiplier=cfg.poll.error_backoff_multiplier,
                 cap_seconds=cfg.poll.error_backoff_cap_seconds,
-                consecutive_errors=max_streak_this_tick,
+                consecutive_errors=err_for_sleep,
                 rng=rng_impl,
             )
             logger.debug(
-                "sleeping %.1fs (max_streak_this_tick=%d)",
+                "sleeping %.1fs (err_for_sleep=%d tick_had_ok=%s)",
                 sleep_seconds,
-                max_streak_this_tick,
+                err_for_sleep,
+                tick_had_successful_crawl,
             )
             sleep_impl(sleep_seconds)
     finally:

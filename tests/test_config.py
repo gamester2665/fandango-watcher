@@ -296,8 +296,10 @@ class TestSettings:
         assert s.tz == "America/Los_Angeles"
         assert s.watcher_mode == "watch"
         assert s.twilio_account_sid == ""
-        assert s.openai_api_key == ""
-        assert s.openrouter_api_key == ""
+        from fandango_watcher.config import plain_secret
+
+        assert plain_secret(s.openai_api_key) == ""
+        assert plain_secret(s.openrouter_api_key) == ""
 
     def test_reads_from_environment(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

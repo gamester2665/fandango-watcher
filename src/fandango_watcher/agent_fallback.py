@@ -36,7 +36,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
-from .config import AgentFallbackConfig, Settings
+from .config import AgentFallbackConfig, Settings, plain_secret
+from .purchase import PurchasePlan
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_llm_api_key_for_agent(settings: Settings, base_url: str | None) -> str:
@@ -52,31 +55,30 @@ def resolve_llm_api_key_for_agent(settings: Settings, base_url: str | None) -> s
     * Neither set → ``"EMPTY"`` (some self-hosted vLLM gateways accept this).
     """
     bu = (base_url or "").strip().lower()
+    or_key = plain_secret(settings.openrouter_api_key).strip()
+    oa_key = plain_secret(settings.openai_api_key).strip()
     if "openrouter.ai" in bu:
-        if settings.openrouter_api_key.strip():
-            return settings.openrouter_api_key
-        if settings.openai_api_key.strip():
+        if or_key:
+            return or_key
+        if oa_key:
             logger.warning(
                 "agent_fallback.base_url is OpenRouter but OPENROUTER_API_KEY is "
                 "empty; falling back to OPENAI_API_KEY. Set OPENROUTER_API_KEY to "
                 "keep keys separate."
             )
-            return settings.openai_api_key
+            return oa_key
         return "EMPTY"
 
-    if settings.openai_api_key.strip():
-        return settings.openai_api_key
-    if settings.openrouter_api_key.strip():
+    if oa_key:
+        return oa_key
+    if or_key:
         logger.warning(
             "OPENAI_API_KEY is empty but OPENROUTER_API_KEY is set; using "
             "OPENROUTER_API_KEY as bearer. For non-OpenRouter endpoints set "
             "OPENAI_API_KEY instead."
         )
-        return settings.openrouter_api_key
+        return or_key
     return "EMPTY"
-from .purchase import PurchasePlan
-
-logger = logging.getLogger(__name__)
 
 
 _BROWSER_USE_INSTALL_HINT = (
@@ -315,7 +317,25 @@ class BrowserUseFallback:
         try:
             # ``browser_use.Agent.run`` is async; we own the event loop here
             # because the scripted purchaser is sync.
-            result = asyncio.run(agent.run(**run_kw))
+            async def _run_agent() -> Any:
+                return await asyncio.wait_for(
+                    agent.run(**run_kw),
+                    timeout=float(self._cfg.max_wall_seconds),
+                )
+
+            result = asyncio.run(_run_agent())
+        except TimeoutError:
+            logger.warning(
+                "browser-use rescue exceeded max_wall_seconds=%s",
+                self._cfg.max_wall_seconds,
+            )
+            return RescueResult(
+                outcome=FallbackOutcome.FAILED,
+                notes=(
+                    f"agent rescue wall-clock timeout after {self._cfg.max_wall_seconds}s"
+                ),
+                final_url=getattr(page, "url", None),
+            )
         except Exception as e:  # noqa: BLE001 — surface every failure
             logger.exception("browser-use rescue raised")
             return RescueResult(

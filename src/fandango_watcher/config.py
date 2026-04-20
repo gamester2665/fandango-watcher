@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import FormatTag
@@ -144,6 +144,8 @@ class AgentFallbackConfig(ConfigBase):
     invoke_only_on: list[str] = Field(default_factory=list)
     max_steps: int = Field(default=40, ge=1)
     max_cost_usd: float = Field(default=2.0, gt=0)
+    # Hard wall-clock cap on ``asyncio.run(agent.run(...))`` (browser-use).
+    max_wall_seconds: int = Field(default=300, ge=30, le=3600)
 
 
 class NotifyConfig(ConfigBase):
@@ -464,6 +466,13 @@ def load_config(path: str | Path) -> WatcherConfig:
     return _resolve_paths_against_config_dir(config_path.parent, cfg)
 
 
+def plain_secret(value: SecretStr | str) -> str:
+    """String for Twilio/httpx/SMTP from :class:`~pydantic.types.SecretStr`."""
+    if isinstance(value, SecretStr):
+        return value.get_secret_value()
+    return str(value)
+
+
 # -----------------------------------------------------------------------------
 # Env-var settings (secrets + runtime mode).
 # -----------------------------------------------------------------------------
@@ -492,7 +501,7 @@ class Settings(BaseSettings):
 
     # Twilio
     twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
+    twilio_auth_token: SecretStr = Field(default_factory=lambda: SecretStr(""))
     twilio_from: str = ""
     notify_to_e164: str = ""
 
@@ -500,7 +509,7 @@ class Settings(BaseSettings):
     smtp_host: str = ""
     smtp_port: int = 465
     smtp_user: str = ""
-    smtp_password: str = ""
+    smtp_password: SecretStr = Field(default_factory=lambda: SecretStr(""))
     smtp_from: str = ""
     notify_to_email: str = ""
 
@@ -508,29 +517,29 @@ class Settings(BaseSettings):
     # when ``agent_fallback.base_url`` points at OpenAI proper, Together,
     # Fireworks, a self-hosted vLLM, etc. (anything whose hostname is NOT
     # ``openrouter.ai``).
-    openai_api_key: str = ""
+    openai_api_key: SecretStr = Field(default_factory=lambda: SecretStr(""))
 
     # Dedicated bearer for OpenRouter when ``base_url`` is
     # ``https://openrouter.ai/api/v1``. Lets you keep ``OPENAI_API_KEY`` and
     # ``OPENROUTER_API_KEY`` separate in ``.env``. If this is empty but
     # ``base_url`` is OpenRouter, ``resolve_llm_api_key_for_agent`` in
     # ``agent_fallback.py`` falls back to ``openai_api_key``.
-    openrouter_api_key: str = ""
+    openrouter_api_key: SecretStr = Field(default_factory=lambda: SecretStr(""))
 
     # xAI (Grok) — dashboard ``release_intel`` only; api.x.ai. Not OpenAI keys.
     # Also unrelated to ``x_api_key`` below (that is the Twitter/X Developer API).
     # https://docs.x.ai/docs/api-reference
-    xai_api_key: str = ""
+    xai_api_key: SecretStr = Field(default_factory=lambda: SecretStr(""))
     # Optional alternate env name for the same xAI console key.
-    grok_api_key: str = ""
+    grok_api_key: SecretStr = Field(default_factory=lambda: SecretStr(""))
     # Optional env override for ``release_intel.model`` in config YAML.
     xai_model: str = ""
 
     # X / Twitter Developer API (developer.x.com) — social poll; NOT xAI Grok.
     # Only ``x_bearer_token`` is required for read-only public-tweet polling.
     # Key/secret are kept here for future user-context (OAuth1) flows.
-    x_api_key: str = ""
-    x_api_key_secret: str = ""
-    x_bearer_token: str = ""
-    x_access_token: str = ""
-    x_access_token_secret: str = ""
+    x_api_key: SecretStr = Field(default_factory=lambda: SecretStr(""))
+    x_api_key_secret: SecretStr = Field(default_factory=lambda: SecretStr(""))
+    x_bearer_token: SecretStr = Field(default_factory=lambda: SecretStr(""))
+    x_access_token: SecretStr = Field(default_factory=lambda: SecretStr(""))
+    x_access_token_secret: SecretStr = Field(default_factory=lambda: SecretStr(""))

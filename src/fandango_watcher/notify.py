@@ -20,7 +20,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import NotifyConfig, Settings
+from .config import NotifyConfig, Settings, plain_secret
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -239,7 +239,7 @@ class FanOutNotifier:
 def _twilio_creds_present(settings: Settings) -> bool:
     return bool(
         settings.twilio_account_sid
-        and settings.twilio_auth_token
+        and plain_secret(settings.twilio_auth_token).strip()
         and settings.twilio_from
         and settings.notify_to_e164
     )
@@ -272,7 +272,7 @@ def build_notifier(
                 notifiers.append(
                     TwilioNotifier(
                         account_sid=settings.twilio_account_sid,
-                        auth_token=settings.twilio_auth_token,
+                        auth_token=plain_secret(settings.twilio_auth_token),
                         from_number=settings.twilio_from,
                         to_number=settings.notify_to_e164,
                         client=twilio_client,
@@ -289,7 +289,7 @@ def build_notifier(
                         host=settings.smtp_host,
                         port=settings.smtp_port,
                         user=settings.smtp_user,
-                        password=settings.smtp_password,
+                        password=plain_secret(settings.smtp_password),
                         from_addr=settings.smtp_from,
                         to_addr=settings.notify_to_email,
                         smtp_ssl_cls=smtp_ssl_cls,

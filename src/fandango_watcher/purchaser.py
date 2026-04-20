@@ -18,6 +18,7 @@ import logging
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import cache
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -74,12 +75,21 @@ def _should_invoke_agent_fallback(invoke_only_on: list[str], reason: str) -> boo
     return reason in allowed
 
 
-_REVIEW_SNAPSHOT_JS = """
+_REVIEW_SNAPSHOT_JS_LEGACY = """
 () => ({
   bodyText: (document.body && document.body.innerText) || "",
   title: document.title || "",
 })
 """
+
+
+@cache
+def _review_snapshot_js() -> str:
+    """Bundled ``extract_review.js`` when present; else a minimal inline snapshot."""
+    p = Path(__file__).with_name("extract_review.js")
+    if p.is_file():
+        return p.read_text(encoding="utf-8").strip()
+    return _REVIEW_SNAPSHOT_JS_LEGACY
 
 
 def _attempt_dir(per_purchase_root: Path | None) -> Path | None:
@@ -125,6 +135,23 @@ def extract_review_state(plan: PurchasePlan, snapshot: dict[str, Any]) -> Review
         )
         if m:
             total_text = m.group(1).strip()
+
+    hints = snapshot.get("review_hints")
+    if isinstance(hints, dict) and total_text is None:
+        otl = hints.get("order_total_lines")
+        if isinstance(otl, list):
+            for line in otl:
+                if (
+                    isinstance(line, str)
+                    and re.search(r"\$\s*\d", line)
+                    and re.search(
+                        r"total|order\s*total|amount\s*due|today'?s\s*total",
+                        line,
+                        re.I,
+                    )
+                ):
+                    total_text = line.strip()
+                    break
 
     theater_name: str | None = None
     if plan.theater_name and plan.theater_name.lower() in body.lower():
@@ -378,7 +405,7 @@ def run_scripted_purchase(
             ) -> PurchaseAttempt:
                 snap("after-complete-click")
                 page.wait_for_timeout(2000)
-                raw2 = page.evaluate(_REVIEW_SNAPSHOT_JS)
+                raw2 = page.evaluate(_review_snapshot_js())
                 review2 = extract_review_state(
                     plan, raw2 if isinstance(raw2, dict) else {}
                 )
@@ -444,7 +471,7 @@ def run_scripted_purchase(
                 _advance_toward_review(page)
                 snap("after-advance")
     
-                raw = page.evaluate(_REVIEW_SNAPSHOT_JS)
+                raw = page.evaluate(_review_snapshot_js())
                 if not isinstance(raw, dict):
                     raw = {}
                 review = extract_review_state(plan, raw)
@@ -476,7 +503,7 @@ def run_scripted_purchase(
                     if rr is not None:
                         snap("after-agent-rescue")
                     if rr is not None and rr.outcome == FallbackOutcome.SUCCEEDED:
-                        raw_r = page.evaluate(_REVIEW_SNAPSHOT_JS)
+                        raw_r = page.evaluate(_review_snapshot_js())
                         review_r = extract_review_state(
                             plan, raw_r if isinstance(raw_r, dict) else {}
                         )

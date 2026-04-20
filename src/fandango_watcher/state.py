@@ -61,6 +61,7 @@ class Event:
 class TargetState(BaseModel):
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
 
+    schema_version: int = Field(default=1, ge=1)
     target_name: str
     current_state: WatcherState = WatcherState.IDLE
     last_release_schema: ReleaseSchema | None = None

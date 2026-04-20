@@ -148,6 +148,8 @@ agent_fallback:
   invoke_only_on:
     - scripted_selector_failure
     - scripted_step_timeout
+  # Wall-clock cap for a single vision-agent rescue (seconds).
+  max_wall_seconds: 300
   max_steps: 40
   max_cost_usd: 2.00                  # hard ceiling per invocation
 

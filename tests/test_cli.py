@@ -161,6 +161,21 @@ class TestWatchNoOpen:
         assert ns.no_open is True
         assert ns.no_healthz is True
 
+    def test_watch_accepts_format_filters(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(
+            [
+                "watch",
+                "--no-healthz",
+                "--format-filter-label",
+                "IMAX 3D",
+                "--format-filter-timeout-ms",
+                "15000",
+            ]
+        )
+        assert ns.format_filter_label == "IMAX 3D"
+        assert ns.format_filter_timeout_ms == 15000
+
 
 class TestTestPurchaseParser:
     def test_test_purchase_accepts_expected_flags(self) -> None:
@@ -626,6 +641,20 @@ class TestLoginCommand:
 
 
 class TestTestPurchaseFromFixture:
+    def test_stub_blocked_when_full_auto_without_allow_flag(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        config_path = repo_root / "config.example.yaml"
+        rc = cli.main(
+            ["test-purchase", "--config", str(config_path), "--stub"]
+        )
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "full_auto" in err
+        assert "--allow-stub-with-full-auto" in err
+
     def test_from_fixture_runs_planner_without_playwright(
         self,
         tmp_path: Path,
@@ -767,6 +796,7 @@ class TestTestPurchaseFromFixture:
             "--from-fixture",
             str(fixture_path),
             "--stub",
+            "--allow-stub-with-full-auto",
         ])
         assert rc == 1
         err = capsys.readouterr().err
@@ -842,6 +872,7 @@ class TestTestPurchaseFromFixture:
             "--from-fixture",
             str(fixture_path),
             "--stub",
+            "--allow-stub-with-full-auto",
         ])
         assert rc == 0
         assert captured.get("hold_for_confirm") is True

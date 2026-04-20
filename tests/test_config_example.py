@@ -176,6 +176,8 @@ class TestAgentFallback:
         af = config["agent_fallback"]
         assert af["enabled"] is True  # type: ignore[index]
         assert af["max_steps"] >= 5  # type: ignore[index]
+        mws = af["max_wall_seconds"]  # type: ignore[index]
+        assert isinstance(mws, int) and 30 <= mws <= 3600
         assert 0 < af["max_cost_usd"] <= 10.0, (  # type: ignore[index]
             "max_cost_usd should be a small per-invocation ceiling"
         )

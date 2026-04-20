@@ -35,6 +35,17 @@ class TestExtractReviewState:
         assert rs.total_text is not None
         assert "$0.00" in rs.total_text
 
+    def test_review_hints_order_total_lines(self) -> None:
+        snap = {
+            "bodyText": "loading…",
+            "title": "Checkout",
+            "review_hints": {
+                "order_total_lines": ["Today's order total: $0.00"],
+            },
+        }
+        rs = extract_review_state(_plan(), snap)
+        assert rs.total_text == "Today's order total: $0.00"
+
     def test_theater_from_plan_when_in_body(self) -> None:
         body = "You are at AMC Universal CityWalk 19 for The Odyssey"
         rs = extract_review_state(_plan(), {"bodyText": body, "title": "x"})

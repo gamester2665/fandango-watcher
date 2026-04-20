@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -37,6 +38,41 @@ from .config import (
 logger = logging.getLogger("fandango_watcher")
 
 STUB_EXIT_CODE = 2
+
+
+def configure_logging(level: str) -> None:
+    """Configure root logging; use ``LOG_FORMAT=json`` in the environment for JSON lines."""
+    root = logging.getLogger()
+    level_no = getattr(logging, level.upper(), logging.INFO)
+    root.setLevel(level_no)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    fmt_env = (os.environ.get("LOG_FORMAT") or "").strip().lower()
+    if fmt_env == "json":
+
+        class _JsonFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                payload = {
+                    "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                }
+                if record.exc_info:
+                    payload["exc_info"] = self.formatException(record.exc_info)
+                return json.dumps(payload, default=str)
+
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(_JsonFormatter())
+        root.addHandler(handler)
+        return
+
+    logging.basicConfig(
+        level=level_no,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -216,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Use 0 to disable. Default 10."
         ),
     )
+    _register_format_filter_cli_args(p_watch)
 
     # -- dashboard ----------------------------------------------------------
     p_dash = subparsers.add_parser(
@@ -324,6 +361,14 @@ def build_parser() -> argparse.ArgumentParser:
             "seat selection and review, then stop before clicking "
             "'Complete Reservation' (hold_for_confirm). Requires "
             "purchase.enabled and a bookable plan; uses live Fandango."
+        ),
+    )
+    p_test_purchase.add_argument(
+        "--allow-stub-with-full-auto",
+        action="store_true",
+        help=(
+            "Allow --stub when purchase.mode is full_auto (normally blocked so "
+            "a production-style config is not used for manual checkout drills)."
         ),
     )
     _register_format_filter_cli_args(p_test_purchase)
@@ -602,6 +647,19 @@ def _run_watch(args: argparse.Namespace) -> int:
         return 1
 
     cfg = load_config(config_path)
+    if (
+        args.format_filter_selector is not None
+        or args.format_filter_label is not None
+        or args.format_filter_timeout_ms is not None
+    ):
+        cfg = cfg.model_copy(
+            update={
+                "targets": [
+                    _apply_format_filter_cli_overrides(t, args)
+                    for t in cfg.targets
+                ],
+            },
+        )
     settings = Settings()
 
     overrides: dict[str, Any] = {}
@@ -786,6 +844,19 @@ def _run_test_purchase(args: argparse.Namespace) -> int:
         print(f"error: config file not found: {config_path}", file=sys.stderr)
         return 1
     cfg = load_config(config_path)
+
+    if (
+        args.stub
+        and cfg.purchase.mode == "full_auto"
+        and not args.allow_stub_with_full_auto
+    ):
+        print(
+            "error: --stub is not allowed when purchase.mode is full_auto "
+            "(use hold_and_confirm or notify_only for checkout drills, or pass "
+            "--allow-stub-with-full-auto).",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.target:
         matches = [t for t in cfg.targets if t.name == args.target]
@@ -1168,10 +1239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=args.log_level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging(args.log_level)
 
     if args.command == "once":
         return _run_once(args)

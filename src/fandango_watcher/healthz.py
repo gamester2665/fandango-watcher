@@ -8,11 +8,11 @@ import mimetypes
 import shutil
 import threading
 from dataclasses import dataclass, field
+from typing import Any
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
 from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger(__name__)
@@ -28,18 +28,36 @@ class Heartbeat:
     total_errors: int = 0
     # Optional free-form details the loop may update (e.g. current target).
     extra: dict[str, object] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def snapshot(self) -> dict[str, object]:
-        return {
-            "status": "ok",
-            "started_at": self.started_at.isoformat(),
-            "last_tick_at": (
-                self.last_tick_at.isoformat() if self.last_tick_at else None
-            ),
-            "total_ticks": self.total_ticks,
-            "total_errors": self.total_errors,
-            "extra": dict(self.extra),
-        }
+    @property
+    def mutex(self) -> threading.Lock:
+        """Use for writes from the watch loop (``with hb.mutex:``)."""
+        return self._lock
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "status": "ok",
+                "started_at": self.started_at.isoformat(),
+                "last_tick_at": (
+                    self.last_tick_at.isoformat() if self.last_tick_at else None
+                ),
+                "total_ticks": self.total_ticks,
+                "total_errors": self.total_errors,
+                "extra": dict(self.extra),
+            }
+
+    def revision_fingerprint_parts(self) -> list[str]:
+        """Atomically read fields used by :func:`~.dashboard.compute_dashboard_revision`."""
+        with self._lock:
+            parts = [str(self.total_ticks), str(self.total_errors)]
+            lt = self.last_tick_at
+            parts.append(lt.isoformat() if lt is not None else "")
+            extra = self.extra
+            if isinstance(extra, dict) and extra:
+                parts.append(json.dumps(extra, sort_keys=True, default=str))
+            return parts
 
 
 @dataclass
@@ -68,6 +86,27 @@ def _send_json(
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _prometheus_metrics_text(heartbeat: Heartbeat) -> bytes:
+    """Minimal Prometheus text exposition for the watch-loop heartbeat."""
+    snap = heartbeat.snapshot()
+    ticks = int(snap.get("total_ticks") or 0)
+    errs = int(snap.get("total_errors") or 0)
+    extra = snap.get("extra")
+    extra_len = len(extra) if isinstance(extra, dict) else 0
+    lines = [
+        "# HELP fandango_watcher_heartbeat_ticks_total Completed watch loop ticks.",
+        "# TYPE fandango_watcher_heartbeat_ticks_total counter",
+        f"fandango_watcher_heartbeat_ticks_total {ticks}",
+        "# HELP fandango_watcher_heartbeat_errors_total Errors recorded by the watch loop.",
+        "# TYPE fandango_watcher_heartbeat_errors_total counter",
+        f"fandango_watcher_heartbeat_errors_total {errs}",
+        "# HELP fandango_watcher_heartbeat_extra_keys Number of keys in heartbeat.extra.",
+        "# TYPE fandango_watcher_heartbeat_extra_keys gauge",
+        f"fandango_watcher_heartbeat_extra_keys {extra_len}",
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 def _send_bytes(
@@ -143,6 +182,11 @@ def _make_handler_cls(
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+                return
+
+            if path_only == "/metrics":
+                body = _prometheus_metrics_text(heartbeat)
+                _send_bytes(self, body, "text/plain; version=0.0.4; charset=utf-8")
                 return
 
             if dashboard_data is not None:

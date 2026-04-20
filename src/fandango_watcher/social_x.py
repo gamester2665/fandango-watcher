@@ -267,6 +267,8 @@ class PollResult:
     handles_polled: int = 0
     handles_failed: int = 0
     errors: list[str] = field(default_factory=list)
+    # When X returns HTTP 429, ``x-rate-limit-reset`` (unix epoch seconds).
+    rate_limit_reset_at: datetime | None = None
 
 
 def check_x_signals(
@@ -366,6 +368,24 @@ def check_x_signals(
             handle_state.last_polled_at = effective_now
             handle_state.consecutive_errors = 0
             handle_state.last_error_message = None
+        except httpx.HTTPStatusError as e:
+            result.handles_failed += 1
+            if e.response is not None and e.response.status_code == 429:
+                rh = e.response.headers.get("x-rate-limit-reset")
+                try:
+                    ts = int(rh) if rh else 0
+                    if ts > 0:
+                        result.rate_limit_reset_at = datetime.fromtimestamp(
+                            ts, tz=UTC
+                        )
+                except (TypeError, ValueError, OSError):
+                    pass
+            err_txt = f"@{norm_handle}: {type(e).__name__}: {e}"
+            result.errors.append(err_txt)
+            handle_state.last_error_at = effective_now
+            handle_state.last_error_message = err_txt
+            handle_state.consecutive_errors += 1
+            logger.exception("social_x poll failed for @%s", norm_handle)
         except Exception as e:  # noqa: BLE001 — per-handle isolation
             result.handles_failed += 1
             result.errors.append(f"@{norm_handle}: {type(e).__name__}: {e}")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -63,6 +63,8 @@ class DashboardData:
     settings: Settings | None = None
     # HTML meta refresh interval; 0 disables auto-reload.
     refresh_seconds: int = 10
+    # ``(revision_hex, raw_fingerprint)`` — skip re-hashing when inputs unchanged.
+    _revision_cache: tuple[str, str] | None = field(default=None, repr=False)
 
 
 def _latest_artifact_for_target(
@@ -116,7 +118,7 @@ def _fmt_pt(iso: str | None) -> str:
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
         return dt.astimezone(_PT).strftime("%Y-%m-%d %H:%M:%S %Z")
-    except (ValueError, OSError):
+    except (ValueError, OSError, TypeError):
         return str(iso)
 
 
@@ -213,7 +215,9 @@ def compute_dashboard_revision(data: DashboardData) -> str:
     """
     parts: list[str] = []
     hb = data.heartbeat
-    if hb is not None:
+    if hb is not None and hasattr(hb, "revision_fingerprint_parts"):
+        parts.extend(hb.revision_fingerprint_parts())
+    elif hb is not None:
         parts.append(str(getattr(hb, "total_ticks", 0)))
         parts.append(str(getattr(hb, "total_errors", 0)))
         lt = getattr(hb, "last_tick_at", None)
@@ -236,7 +240,13 @@ def compute_dashboard_revision(data: DashboardData) -> str:
     ric = paths.state_dir / "release_intel_cache.json"
     parts.append(str(ric.stat().st_mtime_ns) if ric.is_file() else "0")
     raw = "|".join(parts)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    if data._revision_cache is not None:
+        prev_rev, prev_raw = data._revision_cache
+        if prev_raw == raw:
+            return prev_rev
+    rev = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    data._revision_cache = (rev, raw)
+    return rev
 
 
 def _render_release_intel_panel(

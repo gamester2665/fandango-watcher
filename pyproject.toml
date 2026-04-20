@@ -35,7 +35,15 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "ruff>=0.9.0",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

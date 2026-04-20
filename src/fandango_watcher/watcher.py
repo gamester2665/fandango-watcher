@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .config import BrowserConfig, TargetConfig
 from .playwright_video import rename_page_video_after_close
@@ -40,6 +40,17 @@ from .detect import (
 from .models import ParsedPageData, ReleaseSchema
 
 logger = logging.getLogger(__name__)
+
+_EXTRACTOR_JS_CACHE: str | None = None
+
+
+def _extractor_js() -> str:
+    """Load shipped ``extract_page.js`` (same extractor as legacy inline string)."""
+    global _EXTRACTOR_JS_CACHE
+    if _EXTRACTOR_JS_CACHE is None:
+        path = Path(__file__).with_name("extract_page.js")
+        _EXTRACTOR_JS_CACHE = path.read_text(encoding="utf-8")
+    return _EXTRACTOR_JS_CACHE
 
 
 def _wait_for_fandango_showtime_dom(page: Page, *, timeout_ms: int = 15_000) -> None:
@@ -116,205 +127,13 @@ def _maybe_click_format_filter(page: Page, target: TargetConfig) -> None:
     _wait_for_fandango_showtime_dom(page, timeout_ms=min(12_000, timeout))
 
 
-# -----------------------------------------------------------------------------
-# JS extractor. Kept inline so the whole data path is visible in one file.
-#
-# Returns a plain JSON-compatible dict shaped like PageSnapshot's extractor
-# fields. All selectors are broad/substring-based because Fandango rotates
-# utility class names; refine once we have captured DOM samples.
-# -----------------------------------------------------------------------------
-
-_EXTRACTOR_JS = r"""
-() => {
-  const text = (el) => (el && el.textContent ? el.textContent.trim() : "");
-  const bodyText = (document.body && document.body.innerText) || "";
-
-  // --- Positive/negative text signals -------------------------------------
-  const fanalertPresent =
-    /FanAlert|Notify Me/i.test(bodyText);
-  const notifyMePresent = /Notify Me/i.test(bodyText);
-  const loadingCalendarPresent = /Loading calendar/i.test(bodyText);
-  const loadingFormatFiltersPresent = /Loading format filters/i.test(bodyText);
-
-  // --- Format filter chips ------------------------------------------------
-  const filterSelectors = [
-    '[data-testid*="format-filter"]',
-    '[class*="format-filter" i]',
-    '[class*="FormatFilter"]',
-    'button[aria-pressed][class*="format" i]',
-  ];
-  const filterEls = new Set();
-  for (const sel of filterSelectors) {
-    document.querySelectorAll(sel).forEach((el) => filterEls.add(el));
-  }
-  const formatFilterLabels = Array.from(filterEls)
-    .map(text)
-    .filter((s) => s && s.length <= 40);
-
-  // --- Theater cards ------------------------------------------------------
-  const cardSelectors = [
-    '[data-testid*="theater-card"]',
-    '[data-testid*="theater"]',
-    '[class*="theater-card" i]',
-    '[class*="TheaterCard"]',
-    '[class*="theaterCard"]',
-  ];
-  const cardEls = new Set();
-  for (const sel of cardSelectors) {
-    document.querySelectorAll(sel).forEach((el) => cardEls.add(el));
-  }
-
-  const theaters = [];
-  cardEls.forEach((card) => {
-    const heading =
-      card.querySelector(
-        'h1, h2, h3, h4, [class*="theater-name" i], [class*="TheaterName"], [data-testid*="theater-name"]'
-      ) || null;
-    const name = text(heading);
-    if (!name) return;
-
-    // Format sections within the card.
-    const sections = [];
-    const sectionHeaderSelectors = [
-      '[class*="format-header" i]',
-      '[class*="FormatHeader"]',
-      '[data-testid*="format-header"]',
-      '[class*="format-section" i] > :first-child',
-    ];
-    const sectionHeaders = new Set();
-    for (const sel of sectionHeaderSelectors) {
-      card.querySelectorAll(sel).forEach((el) => sectionHeaders.add(el));
-    }
-
-    // Fall back: treat each "format"-ish container as a section if no
-    // explicit headers exist. This keeps extraction non-empty on DOM drift.
-    if (sectionHeaders.size === 0) {
-      card
-        .querySelectorAll('[class*="format" i], [data-testid*="format"]')
-        .forEach((el) => {
-          const label = text(el);
-          if (label && label.length <= 60) sectionHeaders.add(el);
-        });
-    }
-
-    sectionHeaders.forEach((hdr) => {
-      const label = text(hdr);
-      if (!label) return;
-
-      const container =
-        hdr.closest(
-          '[class*="format-section" i], [class*="FormatSection"], [class*="showtimes-section" i]'
-        ) || hdr.parentElement;
-
-      const showtimes = [];
-      if (container) {
-        const showtimeEls = container.querySelectorAll(
-          'a[href*="ticketing"], a[href*="buy"], a[class*="showtime" i], button[class*="showtime" i], [data-testid*="showtime"]'
-        );
-        showtimeEls.forEach((el) => {
-          const label = text(el);
-          if (!label) return;
-          if (!/\d{1,2}:\d{2}/.test(label)) return;
-          showtimes.push({
-            label,
-            ticket_url: el.href || null,
-            is_buyable: !el.disabled && el.getAttribute("aria-disabled") !== "true",
-            date_label: null,
-          });
-        });
-      }
-
-      sections.push({
-        label,
-        attributes: [],
-        showtimes,
-      });
-    });
-
-    theaters.push({
-      name,
-      address: null,
-      distance_miles: null,
-      format_sections: sections,
-    });
-  });
-
-  // --- Fandango "shared showtimes" layout (2025+) -------------------------
-  // Many movie-times pages use h2.shared-theater-header__name inside
-  // .shared-showtimes__container. Those pages often have **no** elements
-  // matching theater-card data-testids, so the legacy loop above yields
-  // zero theaters and we mis-classify ticketed pages as not_on_sale.
-  if (theaters.length === 0) {
-    document
-      .querySelectorAll(
-        'h2.shared-theater-header__name, h3.shared-theater-header__name'
-      )
-      .forEach((heading) => {
-        const name = text(heading);
-        if (!name) return;
-        const container =
-          heading.closest('.shared-showtimes__container') ||
-          heading.closest('[class*="shared-showtimes"]');
-        if (!container) return;
-        const showtimes = [];
-        container.querySelectorAll('a').forEach((el) => {
-          const lbl = text(el);
-          if (!lbl) return;
-          if (!/\d{1,2}:\d{2}/.test(lbl)) return;
-          showtimes.push({
-            label: lbl,
-            ticket_url: el.href || null,
-            is_buyable:
-              !el.disabled && el.getAttribute('aria-disabled') !== 'true',
-            date_label: null,
-          });
-        });
-        // One theater with zero parsed times still yields partial_release
-        // (theater_count > 0) vs not_on_sale; prefer real showtime rows when present.
-        theaters.push({
-          name,
-          address: null,
-          distance_miles: null,
-          format_sections: [
-            {
-              label: 'Standard',
-              attributes: [],
-              showtimes,
-            },
-          ],
-        });
-      });
-  }
-
-  return {
-    page_title: document.title || "",
-    movie_title:
-      text(document.querySelector('h1[class*="movie" i], h1[data-testid*="movie"], h1')) || null,
-    format_filter_labels: Array.from(new Set(formatFilterLabels)),
-    theaters,
-    fanalert_present: fanalertPresent,
-    notify_me_present: notifyMePresent,
-    loading_calendar_present: loadingCalendarPresent,
-    loading_format_filters_present: loadingFormatFiltersPresent,
-    // The most prominent "Get Tickets"-style anchor, if any.
-    ticket_url: (() => {
-      const a = document.querySelector(
-        'a[href*="ticketing"], a[href*="buy-tickets"], a[data-testid*="get-tickets"]'
-      );
-      return a ? a.href || null : null;
-    })(),
-  };
-}
-"""
-
-
 def _build_snapshot(
     *,
     page: Page,
     url: str,
     screenshot_path: Path | None,
 ) -> PageSnapshot:
-    raw: dict[str, Any] = page.evaluate(_EXTRACTOR_JS)
+    raw: dict[str, Any] = page.evaluate(_extractor_js())
 
     theaters = [
         ExtractedTheater(
@@ -364,6 +183,140 @@ def _screenshot_path_for(
     return screenshot_dir / f"{target_name}-{stamp}.png"
 
 
+def _context_kwargs(browser_cfg: BrowserConfig) -> dict[str, Any]:
+    return {
+        "locale": browser_cfg.locale,
+        "timezone_id": browser_cfg.timezone,
+        "viewport": {
+            "width": browser_cfg.viewport.width,
+            "height": browser_cfg.viewport.height,
+        },
+        **browser_cfg.playwright_video_options(),
+    }
+
+
+def _open_context(
+    pw: Any, browser_cfg: BrowserConfig
+) -> tuple[BrowserContext, Browser | None]:
+    """Launch persistent or ephemeral Chromium context (mirrors prior ``crawl_target``)."""
+    profile_path = Path(browser_cfg.user_data_dir)
+    use_persistent = profile_path.exists() and any(profile_path.iterdir())
+    kwargs = _context_kwargs(browser_cfg)
+    if use_persistent:
+        context = pw.chromium.launch_persistent_context(
+            str(profile_path),
+            headless=browser_cfg.headless,
+            **kwargs,
+        )
+        return context, None
+    browser = pw.chromium.launch(headless=browser_cfg.headless)
+    return browser.new_context(**kwargs), browser
+
+
+def crawl_open_page(
+    page: Page,
+    target: TargetConfig,
+    *,
+    citywalk_anchor: str,
+    screenshot_dir: Path | None,
+    extra_wait_ms: int = 2500,
+) -> ParsedPageData:
+    """Navigate ``page`` to ``target`` and return classified data (no browser launch)."""
+    page.goto(
+        target.url,
+        wait_until=target.wait_until,
+        timeout=target.timeout_ms,
+    )
+    if extra_wait_ms > 0:
+        page.wait_for_timeout(extra_wait_ms)
+    _wait_for_fandango_showtime_dom(page)
+    _maybe_click_format_filter(page, target)
+
+    screenshot_path: Path | None = None
+    if screenshot_dir is not None:
+        screenshot_path = _screenshot_path_for(target.name, screenshot_dir)
+        page.screenshot(path=str(screenshot_path), full_page=True)
+
+    snapshot = _build_snapshot(
+        page=page, url=target.url, screenshot_path=screenshot_path
+    )
+    parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
+    if (
+        parsed.release_schema == ReleaseSchema.NOT_ON_SALE
+        and snapshot.ticket_url
+        and "ticketing" in snapshot.ticket_url
+    ):
+        logger.info(
+            "crawl_open_page: not_on_sale but ticketing URL present; "
+            "waiting 4s and re-extracting once (slow showtime paint)"
+        )
+        page.wait_for_timeout(4000)
+        snapshot = _build_snapshot(
+            page=page, url=target.url, screenshot_path=screenshot_path
+        )
+        parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
+    return parsed
+
+
+def crawl_targets_in_tick(
+    targets: list[TargetConfig],
+    *,
+    browser_cfg: BrowserConfig,
+    citywalk_anchor: str,
+    screenshot_dir: Path | None,
+    extra_wait_ms: int = 2500,
+) -> dict[str, ParsedPageData | BaseException]:
+    """One Playwright sync session: single browser context, one page per target.
+
+    Tracing (if enabled) records the whole tick into one ``watch-tick-*.zip``.
+    Per-target failures become :class:`BaseException` values so other targets
+    still run in the same tick.
+    """
+    if not targets:
+        return {}
+    out: dict[str, ParsedPageData | BaseException] = {}
+    with sync_playwright() as pw:
+        context, browser = _open_context(pw, browser_cfg)
+        trace_dir = browser_cfg.trace_dir_path()
+        if trace_dir is not None:
+            context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        tick_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        try:
+            for target in targets:
+                page = context.new_page()
+                pstamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                try:
+                    try:
+                        out[target.name] = crawl_open_page(
+                            page,
+                            target,
+                            citywalk_anchor=citywalk_anchor,
+                            screenshot_dir=screenshot_dir,
+                            extra_wait_ms=extra_wait_ms,
+                        )
+                    except Exception as e:  # noqa: BLE001 — isolate per-target
+                        out[target.name] = e
+                finally:
+                    rename_page_video_after_close(
+                        page,
+                        browser_cfg=browser_cfg,
+                        label=target.name,
+                        stamp=pstamp,
+                    )
+                    page.close()
+        finally:
+            if trace_dir is not None:
+                trace_path = trace_dir / f"watch-tick-{tick_stamp}.zip"
+                try:
+                    context.tracing.stop(path=str(trace_path))
+                except Exception:  # noqa: BLE001
+                    pass
+            context.close()
+            if browser is not None:
+                browser.close()
+    return out
+
+
 def crawl_target(
     target: TargetConfig,
     *,
@@ -376,73 +329,27 @@ def crawl_target(
 
     ``extra_wait_ms`` lets JS-rendered theater cards settle after
     ``wait_until`` fires. Increase if the page routinely ships empty cards.
+
+    Uses one browser context and one page (full cold start). For the watch
+    loop prefer :func:`crawl_targets_in_tick` to reuse the context across
+    targets.
     """
-    profile_path = Path(browser_cfg.user_data_dir)
-    use_persistent = profile_path.exists() and any(profile_path.iterdir())
-
-    context_kwargs: dict[str, Any] = {
-        "locale": browser_cfg.locale,
-        "timezone_id": browser_cfg.timezone,
-        "viewport": {
-            "width": browser_cfg.viewport.width,
-            "height": browser_cfg.viewport.height,
-        },
-        **browser_cfg.playwright_video_options(),
-    }
-
     with sync_playwright() as pw:
-        if use_persistent:
-            context = pw.chromium.launch_persistent_context(
-                str(profile_path),
-                headless=browser_cfg.headless,
-                **context_kwargs,
-            )
-            browser = None
-        else:
-            browser = pw.chromium.launch(headless=browser_cfg.headless)
-            context = browser.new_context(**context_kwargs)
-
+        context, browser = _open_context(pw, browser_cfg)
         trace_dir = browser_cfg.trace_dir_path()
         if trace_dir is not None:
             context.tracing.start(screenshots=True, snapshots=True, sources=True)
-
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         page: Page | None = None
         try:
             page = context.new_page()
-            page.goto(
-                target.url,
-                wait_until=target.wait_until,
-                timeout=target.timeout_ms,
+            parsed = crawl_open_page(
+                page,
+                target,
+                citywalk_anchor=citywalk_anchor,
+                screenshot_dir=screenshot_dir,
+                extra_wait_ms=extra_wait_ms,
             )
-            if extra_wait_ms > 0:
-                page.wait_for_timeout(extra_wait_ms)
-            _wait_for_fandango_showtime_dom(page)
-            _maybe_click_format_filter(page, target)
-
-            screenshot_path: Path | None = None
-            if screenshot_dir is not None:
-                screenshot_path = _screenshot_path_for(target.name, screenshot_dir)
-                page.screenshot(path=str(screenshot_path), full_page=True)
-
-            snapshot = _build_snapshot(
-                page=page, url=target.url, screenshot_path=screenshot_path
-            )
-            parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
-            if (
-                parsed.release_schema == ReleaseSchema.NOT_ON_SALE
-                and snapshot.ticket_url
-                and "ticketing" in snapshot.ticket_url
-            ):
-                logger.info(
-                    "crawl_target: not_on_sale but ticketing URL present; "
-                    "waiting 4s and re-extracting once (slow showtime paint)"
-                )
-                page.wait_for_timeout(4000)
-                snapshot = _build_snapshot(
-                    page=page, url=target.url, screenshot_path=screenshot_path
-                )
-                parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
         finally:
             if trace_dir is not None:
                 trace_path = trace_dir / f"{target.name}-{stamp}.zip"

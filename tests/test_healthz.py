@@ -124,6 +124,20 @@ class TestHealthz:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
 
+    def test_metrics_returns_prometheus_text(self) -> None:
+        hb = Heartbeat()
+        hb.total_ticks = 3
+        hb.total_errors = 1
+        with _running_server(hb) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/metrics"
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                assert resp.status == 200
+                assert "text/plain" in resp.headers["Content-Type"]
+                body = resp.read().decode("utf-8")
+        assert "fandango_watcher_heartbeat_ticks_total 3" in body
+        assert "fandango_watcher_heartbeat_errors_total 1" in body
+        assert "# HELP fandango_watcher_heartbeat_ticks_total" in body
+
     def test_stop_is_idempotent(self) -> None:
         hb = Heartbeat()
         ctx = start_healthz_server(hb, host="127.0.0.1", port=0)

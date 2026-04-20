@@ -9,26 +9,28 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from .config import Settings, WatcherConfig
+from .config import Settings, WatcherConfig, plain_secret
 
 logger = logging.getLogger(__name__)
 
 CACHE_BASENAME = "release_intel_cache.json"
 XAI_CHAT_COMPLETIONS_URL = "https://api.x.ai/v1/chat/completions"
+_CACHE_WRITE_LOCK = threading.Lock()
 
 
 def _resolve_xai_api_key(settings: Settings) -> str:
     """Bearer for api.x.ai — ``XAI_API_KEY`` or ``GROK_API_KEY`` (same key)."""
-    x = (settings.xai_api_key or "").strip()
+    x = plain_secret(settings.xai_api_key).strip()
     if x:
         return x
-    return (settings.grok_api_key or "").strip()
+    return plain_secret(settings.grok_api_key).strip()
 
 
 def _cache_path(state_dir: Path) -> Path:
@@ -189,10 +191,7 @@ def refresh_release_intel(
             "movies": {},
             "note": "no movies in config registry",
         }
-        _cache_path(state_dir).write_text(
-            json.dumps(payload, indent=2, default=str),
-            encoding="utf-8",
-        )
+        _atomic_write_json(_cache_path(state_dir), payload)
         return payload
 
     prompt = _compose_prompt(rows)
@@ -213,11 +212,18 @@ def refresh_release_intel(
         "movies": movies_out,
         "error": None,
     }
-    _cache_path(state_dir).write_text(
-        json.dumps(out, indent=2, default=str),
-        encoding="utf-8",
-    )
+    _atomic_write_json(_cache_path(state_dir), out)
     return out
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Serialize JSON with tmp+rename under a process-wide lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(payload, indent=2, default=str)
+    with _CACHE_WRITE_LOCK:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(data, encoding="utf-8")
+        tmp.replace(path)
 
 
 def load_cached_intel(state_dir: Path) -> dict[str, Any] | None:
