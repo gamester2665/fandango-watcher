@@ -12,11 +12,13 @@ Covers:
   ``watcher_stuck_on_error_streak`` event at threshold
 * ``max_ticks`` honored; per-target state is persisted across ticks
 * ``_next_sleep_seconds`` exponential backoff + cap
+* ``append_purchase_jsonl`` writes newline-delimited JSON under ``state/``
 * ``build_notification`` copy for both implemented event types
 """
 
 from __future__ import annotations
 
+import json
 import random
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +41,7 @@ from fandango_watcher.config import (
 from fandango_watcher.loop import (
     ERROR_STREAK_THRESHOLD,
     _next_sleep_seconds,
+    append_purchase_jsonl,
     build_notification,
     build_purchase_outcome_notification,
     run_watch,
@@ -404,6 +407,19 @@ class TestNextSleepSeconds:
             rng=rng,
         )
         assert s_capped == 1800.0
+
+
+class TestAppendPurchaseJsonl:
+    def test_creates_file_and_appends_ndjson(self, tmp_path: Path) -> None:
+        state_dir = tmp_path / "deep" / "state"
+        append_purchase_jsonl(state_dir, {"outcome": "held", "target": "t1"})
+        append_purchase_jsonl(state_dir, {"outcome": "success", "target": "t1"})
+        path = state_dir / "purchases.jsonl"
+        assert path.is_file()
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0]) == {"outcome": "held", "target": "t1"}
+        assert json.loads(lines[1]) == {"outcome": "success", "target": "t1"}
 
 
 # -----------------------------------------------------------------------------
