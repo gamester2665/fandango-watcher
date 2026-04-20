@@ -337,7 +337,7 @@ recognizable A-List benefit phrase."**
 ## Tests
 
 ```bash
-uv run pytest -q                               # full suite (~10s, 422 tests)
+uv run pytest -q                               # full suite (~10s, 430+ tests)
 uv run ruff check src tests                      # lint (needs: uv sync --group dev)
 uv run mypy src/fandango_watcher                 # typecheck (needs dev group)
 uv run pytest tests/test_review_fixtures.py    # auto-discovered $0.00 invariant fixtures
@@ -370,12 +370,25 @@ between two listeners. To clear it:
   (and `--healthz-port` on `watch`), or set **`WATCHER_HEALTHZ_PORT`** in `.env`
   as the default when those flags are omitted.
 
-**`uv sync` fails with “fandango-watcher.exe in use” (Windows)** — Stop the
-running dashboard or `watch` first (the console script stays locked). Use
-`scripts/restart-dashboard.ps1` or `scripts/restart-dashboard.sh` to kill the
-listener on `WATCHER_HEALTHZ_PORT` / `8787` and start `dashboard` again, or run
-`python -m fandango_watcher dashboard` from the project `.venv` so `uv` does
-not replace the `fandango-watcher.exe` shim while the app is running.
+**`uv sync` / `uv run …` fails with “fandango-watcher.exe in use” (Windows)** —
+`uv` may reinstall or replace the **console script shim** under `.venv\Scripts\`
+while a previous **`fandango-watcher.exe`** (or anything that loaded it) is
+still running. That includes a long-lived **`watch`**, **`dashboard`**, or even
+a stray process after closing a terminal.
+
+1. **Stop the watcher UI** (if the problem is the healthz port): see **Port
+   already in use** above, or `scripts/restart-dashboard.ps1` /
+   `scripts/restart-dashboard.sh`.
+2. **Kill the CLI shim** so `uv` can update the file:
+   ```bat
+   taskkill /F /IM fandango-watcher.exe
+   ```
+   (From **cmd.exe**; in Git Bash use `cmd.exe //c "taskkill /F /IM fandango-watcher.exe"`.)
+3. Retry: `uv sync` or `uv run pytest -q`.
+
+**Workaround (no shim):** run the package as a module so nothing holds
+`fandango-watcher.exe`: `python -m fandango_watcher …` using the project
+`.venv\Scripts\python.exe`.
 
 **No `config.yaml` yet** — If `config.yaml` is missing but `config.example.yaml`
 exists in the current directory (fresh clone or Docker `/app`), commands that

@@ -34,7 +34,24 @@ Stay on **`purchase.mode: notify_only`** until you deliberately escalate after c
 
 ## 5. Windows / `uv` notes
 
-If **`uv run`** fails while **`fandango-watcher.exe`** is still running (file lock), stop the process or use **`python -m fandango_watcher`** from the project environment. **`scripts/restart-dashboard.ps1`** (or `.sh`) can help cycle a stuck dashboard. Heavy shells sometimes hit memory limits; closing other apps or increasing the page file can help.
+If **`uv run`** or **`uv sync`** fails with **“fandango-watcher.exe in use”**,
+the Windows shim under `.venv\Scripts\` is still locked by a previous
+`watch` / `dashboard` / CLI process (or a stray `fandango-watcher.exe`).
+
+1. Stop the app if it is still running, or free the port (see README **Troubleshooting → Port already in use**).
+2. Force-kill the shim so `uv` can replace it:
+   ```bat
+   taskkill /F /IM fandango-watcher.exe
+   ```
+   From Git Bash: `cmd.exe //c "taskkill /F /IM fandango-watcher.exe"`.
+3. Retry your command (e.g. `uv run pytest -q`).
+
+**Alternative:** run without touching the shim:  
+`.venv\Scripts\python.exe -m pytest -q` or `python -m fandango_watcher …`.
+
+**Dashboard stuck:** **`scripts/restart-dashboard.ps1`** (or `.sh`) can cycle the listener on the healthz port.
+
+Heavy shells sometimes hit memory limits; closing other apps or increasing the page file can help.
 
 ## 6. Before VPS
 
