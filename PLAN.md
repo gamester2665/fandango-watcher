@@ -65,7 +65,7 @@ Reconciled with the codebase (2026-04): implementation status, not your personal
 - [x] Preferred seat sold out → `HALTED_PREFERRED_SOLD_OUT` + notify (`on_preferred_sold_out`).
 - [x] `purchase.mode: notify_only` skips auto-purchase; `test-purchase` plans without completing checkout; `test-purchase --stub` runs flow to review without completing.
 - [x] Screenshot pruning + per-attempt artifact dirs (`screenshots.max_age_days`, `per_purchase_dir`).
-- [ ] Same image on a **VPS** — not CI-verified here; Docker layout supports it (Phase 7).
+- [ ] Same image on a **VPS** — deploy and verify manually; Docker layout supports it (Phase 7).
 
 ---
 

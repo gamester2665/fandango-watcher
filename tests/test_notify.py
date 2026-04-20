@@ -346,7 +346,7 @@ class TestBuildNotifier:
         assert fan.channel_names == []
 
     def test_injected_twilio_client_used_even_when_creds_empty(self) -> None:
-        """Lets `test-notify` smoke-test the Twilio path in CI without creds."""
+        """Lets `test-notify` smoke-test the Twilio path without real account creds."""
         cfg = NotifyConfig(channels=["twilio"], on_events=[])
         settings = self._settings()
         fan = build_notifier(
