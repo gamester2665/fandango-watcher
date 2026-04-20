@@ -125,6 +125,7 @@ fandango_watcher/
   state/
     <target>.json                # one file per configured target (+ transitions, error streak)
     social_x.json                # X poller cursor state (when social_x.enabled)
+    purchases.jsonl              # optional append-only purchase outcome audit (watch loop)
   src/fandango_watcher/
     __init__.py
     models.py                    # ParsedPageData, release schemas

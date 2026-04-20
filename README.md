@@ -107,6 +107,7 @@ Artifacts produced:
 | `artifacts/traces/`                   | `--trace` / `record_trace`| Playwright `.zip` per context. Open with `npx playwright show-trace artifacts/traces/<file>.zip` for a time-travel debugger (DOM snapshots + screenshots + network + console + sources, per action). |
 | `state/<target-name>.json`            | `state.py`                | per-target last seen schema + last alert time so restarts don't re-alert. |
 | `state/social_x.json`                 | `social_x.py`             | resolved X user_id + last seen tweet id per handle. |
+| `state/purchases.jsonl`               | `loop.py`                 | append-only JSON lines for purchase outcomes (when purchases run). |
 
 You can also have screenshots and `.webm`s **emailed back** automatically
 on transitions / purchase outcomes — set in `config.yaml`:
@@ -181,7 +182,7 @@ Volumes (declared in `docker-compose.yml`):
 | -------------------- | ---------------------- | ------------------------------------------------------ |
 | `fandango_profile`   | `/app/browser-profile` | Playwright `user_data_dir` (Fandango / AMC Stubs login) |
 | `fandango_artifacts` | `/app/artifacts`       | Screenshots, videos, traces, purchase-attempt steps    |
-| `fandango_state`     | `/app/state`           | `state.json` + `social_x.json`                          |
+| `fandango_state`     | `/app/state`           | Per-target `*.json`, `social_x.json`, optional `purchases.jsonl` audit log |
 
 ---
 
