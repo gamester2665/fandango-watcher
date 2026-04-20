@@ -184,6 +184,11 @@ class TestDashboardRoutes:
                 rev = json.loads(resp.read())
                 assert "revision" in rev
                 assert len(rev["revision"]) == 64
+            with urllib.request.urlopen(f"{base}/api/purchases", timeout=5) as resp:
+                assert resp.status == 200
+                pur = json.loads(resp.read())
+                assert "lines" in pur
+                assert isinstance(pur["lines"], list)
             with urllib.request.urlopen(f"{base}/api/movies", timeout=5) as resp:
                 assert resp.status == 200
                 assert "movies" in json.loads(resp.read())

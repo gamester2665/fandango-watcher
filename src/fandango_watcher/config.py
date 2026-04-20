@@ -183,6 +183,13 @@ class StateConfig(ConfigBase):
     dir: str = "/app/state"
 
 
+class DashboardConfig(ConfigBase):
+    """Read-only HTML/JSON dashboard served with ``watch`` / ``dashboard``."""
+
+    show_purchase_history: bool = True
+    purchase_history_max_lines: int = Field(default=50, ge=1, le=500)
+
+
 class ReleaseIntelConfig(ConfigBase):
     """Dashboard summaries via xAI (Grok) OpenAI-compatible API."""
 
@@ -347,6 +354,7 @@ class WatcherConfig(ConfigBase):
     notify: NotifyConfig
     screenshots: ScreenshotsConfig = Field(default_factory=ScreenshotsConfig)
     state: StateConfig = Field(default_factory=StateConfig)
+    dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     social_x: SocialXConfig = Field(default_factory=SocialXConfig)
     release_intel: ReleaseIntelConfig = Field(default_factory=ReleaseIntelConfig)

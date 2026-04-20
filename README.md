@@ -34,7 +34,13 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced; calibration workflow in `tests/fixtures/rescue/README.md`. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-422 unit + integration tests; run `uv run pytest -q`.
+425+ unit + integration tests; run `uv run pytest -q`.
+
+---
+
+## VPS / production (manual)
+
+There is no bundled CI. Deploy by building the Docker image (or installing with `uv` on the host), copying `config.yaml` and a populated `.env`, and running `watch` (or `docker compose` as in the repo). Verify the process with `GET http://127.0.0.1:8787/healthz` (or your bound host/port) and optional `GET /metrics` for heartbeat counters. The read-only dashboard on `/` exposes `/api/status`, `/api/purchases` (tail of `state/purchases.jsonl`), and `/api/revision` for live reload.
 
 ---
 

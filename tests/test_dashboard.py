@@ -95,6 +95,8 @@ def test_collect_dashboard_state_roundtrip(tmp_path: Path) -> None:
     )
     assert "release_intel" in snap
     assert snap["release_intel"]["status"] == "unconfigured"
+    assert snap.get("purchases_history") == []
+    assert "purchases_jsonl" in (snap.get("paths") or {})
     assert snap["healthz"]["total_ticks"] == 0
     assert len(snap["targets"]) == 1
     t0 = snap["targets"][0]
@@ -153,6 +155,58 @@ def test_render_index_html_live_reload_includes_fetch_and_noscript_fallback() ->
     assert "fetch(" in html_out
     assert '<noscript><meta http-equiv="refresh" content="10"' in html_out
     assert "  <meta http-equiv=" not in html_out.split("<noscript>")[0]
+
+
+def test_collect_dashboard_state_includes_purchase_lines(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    paths = DashboardPaths.from_config(cfg)
+    paths.state_dir.mkdir(parents=True)
+    pj = paths.state_dir / "purchases.jsonl"
+    pj.write_text(
+        '{"at": "2026-01-01T00:00:00Z", "target": "alpha", "attempt": {"outcome": "ok"}}\n',
+        encoding="utf-8",
+    )
+    snap = collect_dashboard_state(
+        DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+    )
+    ph = snap.get("purchases_history") or []
+    assert len(ph) == 1
+    assert ph[0].get("target") == "alpha"
+
+
+def test_render_index_html_purchase_panel(tmp_path: Path) -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "purchases_history": [
+            {
+                "at": "2026-01-02T00:00:00Z",
+                "target": "t1",
+                "attempt": {"outcome": "skipped", "error": None},
+            }
+        ],
+        "paths": {"purchases_jsonl": str(tmp_path / "state" / "purchases.jsonl")},
+        "dashboard": {"show_purchase_history": True},
+    }
+    html_out = render_index_html(snap)
+    assert "Purchase history" in html_out
+    assert "skipped" in html_out
+
+
+def test_compute_dashboard_revision_changes_with_purchases_jsonl(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    paths = DashboardPaths.from_config(cfg)
+    paths.state_dir.mkdir(parents=True)
+    hb = Heartbeat()
+    dd = DashboardData(cfg=cfg, paths=paths, heartbeat=hb)
+    r1 = compute_dashboard_revision(dd)
+    pj = paths.state_dir / "purchases.jsonl"
+    pj.write_text('{"x": 1}\n', encoding="utf-8")
+    r2 = compute_dashboard_revision(dd)
+    assert r1 != r2
 
 
 def test_compute_dashboard_revision_changes_with_state_mtime(tmp_path: Path) -> None:

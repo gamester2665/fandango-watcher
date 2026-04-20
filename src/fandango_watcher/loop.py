@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import signal
 import threading
@@ -494,6 +495,8 @@ def append_purchase_jsonl(state_dir: Path, row: dict[str, object]) -> None:
     line = json.dumps(row, default=str) + "\n"
     with path.open("a", encoding="utf-8") as f:
         f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def install_signal_handlers(stop_event: threading.Event) -> None:

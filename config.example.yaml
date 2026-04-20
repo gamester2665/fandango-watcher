@@ -198,6 +198,14 @@ state:
   dir: /app/state
 
 # -----------------------------------------------------------------------------
+# Read-only dashboard (HTML + JSON on the healthz port with watch / dashboard).
+# Purchase history tails state/purchases.jsonl (newest rows shown first in the UI).
+# -----------------------------------------------------------------------------
+dashboard:
+  show_purchase_history: true
+  purchase_history_max_lines: 50
+
+# -----------------------------------------------------------------------------
 # Dashboard: xAI (Grok) release/ticketing news summaries (optional).
 # Set XAI_API_KEY in .env. Responses are cached as state/release_intel_cache.json.
 # -----------------------------------------------------------------------------

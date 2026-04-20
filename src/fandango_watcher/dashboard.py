@@ -122,6 +122,28 @@ def _fmt_pt(iso: str | None) -> str:
         return str(iso)
 
 
+def _tail_purchases_jsonl(state_dir: Path, *, max_lines: int) -> list[dict[str, Any]]:
+    """Last ``max_lines`` non-empty JSON objects from ``state/purchases.jsonl``."""
+    path = state_dir / "purchases.jsonl"
+    if not path.is_file():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    tail = raw_lines[-max_lines:]
+    out: list[dict[str, Any]] = []
+    for ln in tail:
+        try:
+            row = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
 def _relative_ago(
     iso: str | None,
     *,
@@ -192,16 +214,31 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
         settings=data.settings,
     )
 
+    dash = data.cfg.dashboard
+    purchases_path = paths.state_dir / "purchases.jsonl"
+    purchases_history: list[dict[str, Any]] = []
+    if dash.show_purchase_history:
+        purchases_history = _tail_purchases_jsonl(
+            paths.state_dir,
+            max_lines=dash.purchase_history_max_lines,
+        )
+
     return {
         "healthz": healthz,
         "targets": targets_out,
         "social_x": social_x,
         "movies": movies,
         "release_intel": release_intel,
+        "purchases_history": purchases_history,
+        "dashboard": {
+            "show_purchase_history": dash.show_purchase_history,
+            "purchase_history_max_lines": dash.purchase_history_max_lines,
+        },
         "paths": {
             "state_dir": str(paths.state_dir),
             "social_x_state_path": str(paths.social_x_state_path),
             "artifacts_root": str(paths.artifacts_root),
+            "purchases_jsonl": str(purchases_path),
         },
     }
 
@@ -239,6 +276,8 @@ def compute_dashboard_revision(data: DashboardData) -> str:
     parts.append(str(sx.stat().st_mtime_ns) if sx.is_file() else "0")
     ric = paths.state_dir / "release_intel_cache.json"
     parts.append(str(ric.stat().st_mtime_ns) if ric.is_file() else "0")
+    pj = paths.state_dir / "purchases.jsonl"
+    parts.append(str(pj.stat().st_mtime_ns) if pj.is_file() else "0")
     raw = "|".join(parts)
     if data._revision_cache is not None:
         prev_rev, prev_raw = data._revision_cache
@@ -353,6 +392,61 @@ def _render_release_intel_panel(
 """
 
 
+def _render_purchases_panel(
+    rows: list[dict[str, Any]],
+    *,
+    file_path: str,
+) -> str:
+    """Collapsible table of recent purchase attempts from ``purchases.jsonl``."""
+    if not rows:
+        return (
+            '<section class="panel panel-secondary">'
+            '<details class="panel-fold" open>'
+            '<summary><span class="fold-title">Purchase history</span>'
+            '<span class="fold-badge">0 lines</span></summary>'
+            '<div class="fold-body">'
+            "<p class=\"hint\">No rows in <code>"
+            f"{html.escape(file_path)}</code> yet.</p>"
+            "</div></details></section>"
+        )
+    pr_rows: list[str] = []
+    for row in reversed(rows):
+        at = html.escape(str(row.get("at") or "—"))
+        tgt = html.escape(str(row.get("target") or "—"))
+        att = row.get("attempt")
+        oc = "—"
+        err = ""
+        if isinstance(att, dict):
+            oc = html.escape(str(att.get("outcome") or "—"))
+            e_raw = att.get("error")
+            if e_raw:
+                es = str(e_raw).replace("\n", " ").strip()
+                if len(es) > 120:
+                    es = es[:117] + "…"
+                err = html.escape(es)
+        err_cell = f'<span class="purchase-err">{err}</span>' if err else "—"
+        pr_rows.append(
+            f"<tr><td>{at}</td><td>{tgt}</td><td>{oc}</td><td>{err_cell}</td></tr>"
+        )
+    body = "".join(pr_rows)
+    n = len(rows)
+    return f"""
+<section class="panel panel-secondary">
+  <details class="panel-fold" open>
+    <summary><span class="fold-title">Purchase history</span>
+    <span class="fold-badge">{n} lines</span></summary>
+    <div class="fold-body">
+      <p class="hint meta">Tail of <code>{html.escape(file_path)}</code> (newest first).</p>
+      <table>
+        <thead><tr><th>at (UTC)</th><th>target</th><th>outcome</th><th>error</th></tr></thead>
+        <tbody>{body}</tbody>
+      </table>
+    </div>
+  </details>
+</section>
+"""
+
+
 def render_index_html(
     snapshot: dict[str, Any],
     *,
@@ -371,6 +465,16 @@ def render_index_html(
     social_x = snapshot.get("social_x") or {}
     movies = snapshot.get("movies") or []
     release_intel = snapshot.get("release_intel") or {}
+    dash_meta = snapshot.get("dashboard") or {}
+    paths_meta = snapshot.get("paths") or {}
+    purchases_raw = snapshot.get("purchases_history")
+    if purchases_raw is None:
+        show_ph = False
+        purchases_history: list[Any] = []
+    else:
+        show_ph = bool(dash_meta.get("show_purchase_history", True))
+        purchases_history = purchases_raw if isinstance(purchases_raw, list) else []
+    pj_path = str(paths_meta.get("purchases_jsonl") or "state/purchases.jsonl")
 
     ticks = healthz.get("total_ticks", "—")
     errs = healthz.get("total_errors", "—")
@@ -504,6 +608,13 @@ def render_index_html(
     )
 
     intel_panel = _render_release_intel_panel(movies, release_intel)
+    purchases_panel = ""
+    if show_ph:
+        ph_rows = purchases_history if isinstance(purchases_history, list) else []
+        purchases_panel = _render_purchases_panel(
+            [x for x in ph_rows if isinstance(x, dict)],
+            file_path=pj_path,
+        )
 
     rs = max(0, int(refresh_seconds))
     use_live = rs > 0 and live_revision is not None
@@ -685,6 +796,7 @@ def render_index_html(
     th {{ background: var(--surface2); color: var(--muted); font-weight: 600; font-size: 0.75rem;
       text-transform: uppercase; letter-spacing: 0.04em; }}
     tr:nth-child(even) td {{ background: rgba(255,255,255,0.02); }}
+    .purchase-err {{ font-size: 0.78rem; color: #e8c4a8; }}
     code {{ font-size: 0.72rem; word-break: break-all; color: #c5cce0; }}
     p.hint {{ font-size: 0.88rem; opacity: 0.9; margin: 0.5rem 0 0 0; color: var(--muted); }}
     p.hint.meta {{ font-size: 0.78rem; opacity: 0.85; margin-bottom: 0.65rem; }}
@@ -717,6 +829,7 @@ def render_index_html(
   </header>
   <main class="dash">
   {intel_panel}
+  {purchases_panel}
   <section class="section-head">
     <h2 class="section-label">Fandango crawl</h2>
     <p class="panel-tagline">Per-target state · expand <strong>Media &amp; traces</strong> for screenshots / video / Playwright trace</p>
@@ -734,6 +847,7 @@ def render_index_html(
   <footer class="dash-foot">
     <p class="refresh-hint">{html.escape(refresh_note)}</p>
     JSON: <a href="/api/status">/api/status</a> ·
+    <a href="/api/purchases">/api/purchases</a> ·
     <a href="/api/release_intel">/api/release_intel</a> ·
     <a href="/api/movies">/api/movies</a> ·
     <a href="/healthz">/healthz</a>

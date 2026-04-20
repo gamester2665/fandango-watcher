@@ -210,6 +210,17 @@ def _make_handler_cls(
                     snap = collect_dashboard_state(dd)
                     _send_json(self, snap)
                     return
+                if path_only == "/api/purchases":
+                    snap = collect_dashboard_state(dd)
+                    _send_json(
+                        self,
+                        {
+                            "lines": snap.get("purchases_history") or [],
+                            "path": snap.get("paths", {}).get("purchases_jsonl"),
+                            "dashboard": snap.get("dashboard") or {},
+                        },
+                    )
+                    return
                 if path_only == "/api/movies":
                     movies = [
                         m.model_dump(mode="json") for m in dd.cfg.movies
@@ -269,9 +280,9 @@ def start_healthz_server(
     ephemeral port (read it back via ``ctx.port``).
 
     When ``dashboard_data`` is set, also serves ``/`` (HTML), ``/api/status``,
-    ``/api/revision`` (fingerprint for live tab reload), ``/api/movies``,
-    ``/api/release_intel`` (xAI Grok release summaries), and static files under
-    ``/artifacts/...``.
+    ``/api/revision`` (fingerprint for live tab reload), ``/api/purchases``,
+    ``/api/movies``, ``/api/release_intel`` (xAI Grok release summaries), and
+    static files under ``/artifacts/...``.
     """
     server = _ExclusiveThreadingHTTPServer(
         (host, port),
@@ -290,7 +301,7 @@ def start_healthz_server(
     if dashboard_data is not None:
         logger.info(
             "dashboard ready: http://%s:%d/  (also /api/status, /api/revision, "
-            "/api/movies, /artifacts/)",
+            "/api/purchases, /api/movies, /artifacts/)",
             host,
             bound,
         )
