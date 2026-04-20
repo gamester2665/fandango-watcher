@@ -12,7 +12,7 @@ Covers:
   ``watcher_stuck_on_error_streak`` event at threshold
 * ``max_ticks`` honored; per-target state is persisted across ticks
 * ``_next_sleep_seconds`` exponential backoff + cap
-* ``append_purchase_jsonl`` writes newline-delimited JSON under ``state/``
+* ``append_purchase_jsonl`` / ``purchases.jsonl`` after purchase attempts (injected ``purchase_fn`` tests)
 * ``build_notification`` copy for both implemented event types
 """
 
@@ -736,6 +736,12 @@ class TestRunWatchPurchaseHook:
         assert Event.RELEASE_TRANSITION_BAD_TO_GOOD in evs
         assert Event.PURCHASE_SUCCEEDED in evs
 
+        pj = tmp_path / "state" / "purchases.jsonl"
+        assert pj.is_file()
+        row = json.loads(pj.read_text(encoding="utf-8").strip().splitlines()[0])
+        assert row["target"] == "odyssey"
+        assert row["attempt"]["outcome"] == "success"
+
     def test_skips_purchase_when_mode_notify_only(self, tmp_path: Path) -> None:
         cfg = _minimal_cfg(tmp_path)
         cfg = cfg.model_copy(
@@ -787,6 +793,7 @@ class TestRunWatchPurchaseHook:
         )
         assert calls == []
         assert all(m.event != Event.PURCHASE_SUCCEEDED for m in capture.sent)
+        assert not (tmp_path / "state2" / "purchases.jsonl").exists()
 
     def test_purchase_fn_exception_emits_failed_scripted_event(
         self, tmp_path: Path
@@ -834,3 +841,10 @@ class TestRunWatchPurchaseHook:
         evs = [m.event for m in capture.sent]
         assert Event.PURCHASE_FAILED_SCRIPTED in evs
         assert any("no playwright" in m.body for m in capture.sent)
+
+        pj = tmp_path / "state3" / "purchases.jsonl"
+        assert pj.is_file()
+        row = json.loads(pj.read_text(encoding="utf-8").strip().splitlines()[0])
+        assert row["target"] == "odyssey"
+        assert row["attempt"]["outcome"] == "failed_scripted"
+        assert "no playwright" in (row["attempt"].get("error_message") or "")
