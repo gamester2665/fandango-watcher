@@ -549,6 +549,7 @@ Not required for v1 (home PC). **Do not migrate until** you have manually verifi
 - [x] `.env.example` — Twilio, SMTP, LLM keys, X API, `WATCHER_HEALTHZ_PORT`, etc.
 - [x] `config.example.yaml` — targets, theater anchor, formats, seat priority, notify, purchase, agent_fallback, social_x, movies.
 - [x] Example routes + CityWalk anchor in config (operator edits `config.yaml` for each title).
+- [x] First-run helpers: `docs/FIRST_RUN.md`, `scripts/bootstrap.{sh,ps1}`, and `fandango-watcher doctor` (YAML load + notify channel vs env alignment + risky-setting hints).
 
 ### Phase 2 — Watcher & classifier (detection only, no purchase)
 

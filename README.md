@@ -54,37 +54,38 @@ Use this when you want **everything** validated: core behavior, long-running sta
 
 ### A — Local core (first gate)
 
-1. **Secrets + config:** `.env` from `.env.example`; `config.yaml` from `config.example.yaml` (targets, theater, formats, `notify`, `purchase`).
-2. **Browser session:** `uv run fandango-watcher login --headed` (or Docker `login` profile) so Fandango + AMC Stubs + CityWalk context is real.
-3. **Crawl:** `once` per target; optional `--write-state` to match `watch` persistence. Inspect `state/<target>.json` and `artifacts/screenshots/`.
-4. **Watch + HTTP:** `watch` with healthz on; open `http://127.0.0.1:8787/` (dashboard), hit `/healthz`, `/api/status`, `/api/purchases` if you use purchases.
-5. **Notifications:** `test-notify` for SMS + email pipes.
-6. **Purchaser (no surprise checkout):** `test-purchase` (and `--stub` / `--format-filter-*` as needed). Stay on `purchase.mode: notify_only` until you are ready to escalate.
+1. **Secrets + config:** `.env` from `.env.example`; `config.yaml` from `config.example.yaml` (targets, theater, formats, `notify`, `purchase`). Optional: `scripts/bootstrap.ps1` or `scripts/bootstrap.sh` creates `config.yaml` from the example when missing.
+2. **Validate:** `fandango-watcher doctor` — confirms YAML loads, `notify.channels` match env-backed credentials, and surfaces risky settings (`full_auto`, `social_x` without bearer token, empty browser profile). Use `--json` for scripts.
+3. **Browser session:** `uv run fandango-watcher login --headed` (or Docker `login` profile) so Fandango + AMC Stubs + CityWalk context is real.
+4. **Crawl:** `once` per target; optional `--write-state` to match `watch` persistence. Inspect `state/<target>.json` and `artifacts/screenshots/`.
+5. **Watch + HTTP:** `watch` with healthz on; open `http://127.0.0.1:8787/` (dashboard), hit `/healthz`, `/api/status`, `/api/purchases` if you use purchases.
+6. **Notifications:** `test-notify` for SMS + email pipes.
+7. **Purchaser (no surprise checkout):** `test-purchase` (and `--stub` / `--format-filter-*` as needed). Stay on `purchase.mode: notify_only` until you are ready to escalate.
 
 ### B — Long soak (drift, noise, restarts)
 
-7. Run **`watch` in `notify_only`** for at least one overnight or multi-day window. Watch for false transitions, stuck error streaks, and disk growth under `artifacts/` and `state/`. Restart once to confirm clean resume from `state/*.json`.
+8. Run **`watch` in `notify_only`** for at least one overnight or multi-day window. Watch for false transitions, stuck error streaks, and disk growth under `artifacts/` and `state/`. Restart once to confirm clean resume from `state/*.json`.
 
 ### C — Review-page fixtures (stronger invariants)
 
-8. For each premium format you care about at CityWalk, capture **`dump-review`** outputs into `tests/fixtures/review_pages/` (see that folder’s README). Re-run `uv run pytest -q` after adding fixtures. Repeat when Fandango changes the review DOM.
+9. For each premium format you care about at CityWalk, capture **`dump-review`** outputs into `tests/fixtures/review_pages/` (see that folder’s README). Re-run `uv run pytest -q` after adding fixtures. Repeat when Fandango changes the review DOM.
 
 ### D — X / Twitter (if `social_x` is enabled)
 
-9. `x-poll --check-bearer`, then a real **`x-poll`** against your configured handles. Confirm `state/social_x.json` advances and that X hints do not drown out Fandango truth (they are advisory only).
+10. `x-poll --check-bearer`, then a real **`x-poll`** against your configured handles. Confirm `state/social_x.json` advances and that X hints do not drown out Fandango truth (they are advisory only).
 
 ### E — Purchase mode escalation (only when A–D feel solid)
 
-10. Move **`purchase.mode`** toward `hold_and_confirm` / `full_auto` only after successful **`test-purchase`** runs and you accept operational risk. Keep **`$0.00` invariant** understanding: any non-zero total must halt.
+11. Move **`purchase.mode`** toward `hold_and_confirm` / `full_auto` only after successful **`test-purchase`** runs and you accept operational risk. Keep **`$0.00` invariant** understanding: any non-zero total must halt.
 
 ### F — VPS / remote (after local sign-off only)
 
-11. Build or copy the **same image** and volumes; bind healthz/dashboard the same way. Use VNC or equivalent for a **one-time headed re-login** if the IP triggers friction. Re-check `/healthz` and a short `watch` smoke. See **Docker & deployment** / **VPS migration** in [`PLAN.md`](./PLAN.md).
+12. Build or copy the **same image** and volumes; bind healthz/dashboard the same way. Use VNC or equivalent for a **one-time headed re-login** if the IP triggers friction. Re-check `/healthz` and a short `watch` smoke. See **Docker & deployment** / **VPS migration** in [`PLAN.md`](./PLAN.md).
 
 ### G — Ongoing
 
-12. **DOM drift:** when crawls misbehave, update selectors and refresh **`dump-review`** fixtures. **Agent rescue:** optional `uv sync --extra agent` and calibration notes in `tests/fixtures/rescue/README.md`.
-13. **`state/purchases.jsonl` rotation:** controlled by `purchase_audit:` in `config.yaml` (default cap **5 MB**, keep **3** rotated copies as `purchases.jsonl.1` … `.3`). Set `max_bytes: null` to disable rotation if you prefer to manage it manually.
+13. **DOM drift:** when crawls misbehave, update selectors and refresh **`dump-review`** fixtures. **Agent rescue:** optional `uv sync --extra agent` and calibration notes in `tests/fixtures/rescue/README.md`.
+14. **`state/purchases.jsonl` rotation:** controlled by `purchase_audit:` in `config.yaml` (default cap **5 MB**, keep **3** rotated copies as `purchases.jsonl.1` … `.3`). Set `max_bytes: null` to disable rotation if you prefer to manage it manually.
 
 ---
 
@@ -99,6 +100,7 @@ uv run playwright install chromium
 # 2. Secrets + config
 cp .env.example .env                       # Twilio + SMTP + X bearer + OPENROUTER_API_KEY/OPENAI_API_KEY
 cp config.example.yaml config.yaml         # edit targets, formats, seat priority
+uv run fandango-watcher doctor             # validate YAML + notify env vs channels
 
 # 3. Sanity checks (no network side effects beyond what each command says)
 uv run fandango-watcher --help
