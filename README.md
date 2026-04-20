@@ -366,6 +366,17 @@ between two listeners. To clear it:
   (and `--healthz-port` on `watch`), or set **`WATCHER_HEALTHZ_PORT`** in `.env`
   as the default when those flags are omitted.
 
+**`uv sync` fails with “fandango-watcher.exe in use” (Windows)** — Stop the
+running dashboard or `watch` first (the console script stays locked). Use
+`scripts/restart-dashboard.ps1` or `scripts/restart-dashboard.sh` to kill the
+listener on `WATCHER_HEALTHZ_PORT` / `8787` and start `dashboard` again, or run
+`python -m fandango_watcher dashboard` from the project `.venv` so `uv` does
+not replace the `fandango-watcher.exe` shim while the app is running.
+
+**No `config.yaml` yet** — If `config.yaml` is missing but `config.example.yaml`
+exists in the current directory (fresh clone or Docker `/app`), commands that
+need config automatically load the example and log that they did.
+
 **Crawl shows `theater_count: 0` / `not_on_sale` but the movie is on sale** —
 (1) Fandango may need a **ZIP or location** before it renders theater cards —
 use a format-filtered URL, warm the profile (`fandango-watcher login`), or

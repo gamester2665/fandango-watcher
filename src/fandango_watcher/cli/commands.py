@@ -23,8 +23,28 @@ from ..config import (
 logger = logging.getLogger("fandango_watcher")
 
 def _resolve_config_path(explicit: str | None) -> Path:
+    """Resolve YAML config path.
+
+    If ``config.yaml`` / ``WATCHER_CONFIG`` is missing, fall back to
+    ``config.example.yaml`` in the **current working directory**, or
+    ``/app/config.example.yaml`` in Docker (image ships a copy). This avoids a
+    dead dashboard on a fresh clone before ``cp config.example.yaml config.yaml``,
+    without breaking tests that run from an empty temp directory (no silent
+    load of a repo-wide example via ``__file__``).
+    """
     candidate = explicit or os.environ.get("WATCHER_CONFIG") or "config.yaml"
-    return Path(candidate)
+    p = Path(candidate)
+    if p.is_file():
+        return p.resolve()
+    for fb in (Path("config.example.yaml"), Path("/app/config.example.yaml")):
+        if fb.is_file():
+            logger.info(
+                "using bundled example config %s (config %s not found)",
+                fb,
+                p,
+            )
+            return fb.resolve()
+    return p.resolve()
 
 
 def _apply_format_filter_cli_overrides(

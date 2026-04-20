@@ -31,6 +31,35 @@ from fandango_watcher.models import (
 # -----------------------------------------------------------------------------
 
 
+class TestResolveConfigPath:
+    def test_fallback_to_config_example_in_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fandango_watcher.cli.commands import _resolve_config_path
+
+        repo = Path(__file__).resolve().parent.parent
+        (tmp_path / "config.example.yaml").write_text(
+            (repo / "config.example.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WATCHER_CONFIG", raising=False)
+        got = _resolve_config_path(None)
+        assert got.name == "config.example.yaml"
+        assert got.is_file()
+
+    def test_no_fallback_in_empty_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fandango_watcher.cli.commands import _resolve_config_path
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WATCHER_CONFIG", raising=False)
+        got = _resolve_config_path(None)
+        assert got.name == "config.yaml"
+        assert not got.is_file()
+
+
 class TestBuildParser:
     def test_subcommand_is_required(self) -> None:
         parser = cli.build_parser()
