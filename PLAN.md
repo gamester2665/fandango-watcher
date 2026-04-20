@@ -134,9 +134,9 @@ fandango_watcher/
     notify.py                    # Twilio + SMTP (FanOutNotifier)
     state.py                     # per-target transitions + events
     dashboard.py                 # read-only HTTP + /api/revision live reload
-    healthz.py                   # /healthz + static /artifacts
+    healthz.py                   # /healthz, /metrics, optional dashboard + static /artifacts
     config.py                    # YAML → WatcherConfig; Settings (.env)
-    cli.py                       # watch | once | dashboard | test-notify | test-purchase | login | …
+    cli/                         # argparse + subcommands (watch | once | dashboard | …)
     agent_fallback.py            # browser-use + VLM (optional extra)
     social_x.py                  # X advisory poller
 ```
@@ -155,10 +155,10 @@ fandango_watcher/
 
 **First-run flow (one-time):**
 
-1. `docker compose run --rm watcher login` — launches a **headed** Chromium (via X11/RDP on the home PC, or VNC on a VPS). You log into Fandango, link AMC Stubs, confirm CityWalk Hollywood as the default theater, and walk through one real checkout to $0.00 (cancel before committing) so fraud-detection flags clear. Session persists to the volume.
+1. `docker compose --profile tools run --rm login` — launches a **headed** Chromium (via X11 on the home PC, or VNC on a VPS). You log into Fandango, link AMC Stubs, confirm CityWalk Hollywood as the default theater, and walk through one real checkout to $0.00 (cancel before committing) so fraud-detection flags clear. Session persists to the volume.
 2. `docker compose up -d` — container starts in headless mode using the warmed profile.
 
-**Health:** `/healthz` HTTP endpoint returning last-crawl timestamp, last `release_schema`, last error streak.
+**Health:** `GET /healthz` JSON (liveness; Docker healthcheck). `GET /metrics` exposes minimal Prometheus counters (ticks, errors) for local scraping.
 
 **Environment** — see `.env.example` (Twilio, SMTP, X bearer, LLM keys, optional `WATCHER_HEALTHZ_PORT` for default dashboard/healthz bind port):
 

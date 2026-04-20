@@ -76,8 +76,7 @@ RUN mkdir -p \
 
 EXPOSE 8787
 
-# Watcher serves /healthz on 8787 once implemented in Phase 2; until then the
-# healthcheck will report unhealthy, which is expected in this scaffold.
+# Same URL as compose `healthcheck`: liveness JSON from the watch loop.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
     CMD curl --fail --silent --show-error http://127.0.0.1:8787/healthz || exit 1
 
