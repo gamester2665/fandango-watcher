@@ -395,6 +395,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format (default: table).",
     )
 
+    # -- doctor -------------------------------------------------------------
+    p_doctor = subparsers.add_parser(
+        "doctor",
+        help=(
+            "Validate config load + env readiness (notify channels, purchase mode, "
+            "X polling). Exits 1 if the config file is missing or invalid."
+        ),
+    )
+    p_doctor.add_argument(
+        "--config",
+        default=None,
+        help="Path to YAML config (default: $WATCHER_CONFIG or ./config.yaml).",
+    )
+    p_doctor.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable JSON to stdout.",
+    )
+
     # -- refs ---------------------------------------------------------------
     p_refs = subparsers.add_parser(
         "refs",

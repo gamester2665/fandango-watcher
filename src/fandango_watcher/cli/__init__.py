@@ -9,6 +9,7 @@ Subcommands mirror the phased plan:
 * ``test-purchase``-- Phase 4: plan + JSON; optional ``--stub`` runs scripted
                        checkout to the review page without clicking Complete
 * ``refs``         -- print bundled development reference Fandango URLs (Schema A/B/C)
+* ``doctor``       -- validate config + environment hints (notify creds, purchase mode)
 
 ``watch`` wires ``purchaser.run_scripted_purchase`` on release transitions
 when ``purchase.mode`` allows. ``test-purchase`` plans only; add ``--stub``
@@ -21,6 +22,7 @@ from collections.abc import Sequence
 
 from .commands import (
     _run_dashboard,
+    _run_doctor,
     _run_dump_review,
     _run_login,
     _run_movies,
@@ -70,6 +72,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_movies(args)
     if args.command == "dump-review":
         return _run_dump_review(args)
+    if args.command == "doctor":
+        return _run_doctor(args)
 
     parser.error(f"unknown command: {args.command}")
     return 2  # unreachable; argparse.error exits

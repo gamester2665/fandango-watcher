@@ -86,6 +86,7 @@ class TestBuildParser:
             "x-poll",
             "movies",
             "dump-review",
+            "doctor",
         }
 
     def test_once_accepts_expected_flags(self) -> None:
@@ -127,6 +128,48 @@ class TestBuildParser:
         parser = cli.build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["--log-level", "CHATTY", "watch"])
+
+
+class TestDoctor:
+    def test_missing_config_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WATCHER_CONFIG", raising=False)
+        rc = cli.main(["doctor", "--config", "nope.yaml"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "config not found" in err.lower()
+
+    def test_invalid_yaml_exits_1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("targets: [", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        rc = cli.main(["doctor", "--config", str(bad)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "invalid config" in err.lower()
+
+    def test_json_mode_on_example_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo = Path(__file__).resolve().parent.parent
+        (tmp_path / "config.yaml").write_text(
+            (repo / "config.example.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WATCHER_CONFIG", raising=False)
+        rc = cli.main(["doctor", "--json"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["ok"] is True
+        assert data["purchase_mode"] == "full_auto"
+        assert any("full_auto" in w for w in data["warnings"])
+        assert isinstance(data["notify"]["active_channels"], list)
 
 
 # -----------------------------------------------------------------------------

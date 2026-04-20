@@ -48,6 +48,8 @@ There is no bundled CI. Deploy by building the Docker image (or installing with 
 
 ## Operator checklist (local → soak → VPS)
 
+A shorter **first-run** path (bootstrap scripts, `doctor`, smoke commands) is in [`docs/FIRST_RUN.md`](./docs/FIRST_RUN.md).
+
 Use this when you want **everything** validated: core behavior, long-running stability, fixtures, social signals, purchase calibration, then portability. Order matters.
 
 ### A — Local core (first gate)

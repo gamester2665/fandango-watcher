@@ -745,6 +745,92 @@ def _run_dump_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_doctor(args: argparse.Namespace) -> int:
+    """Check config path, YAML validity, and common env/channel mismatches."""
+    from ..notify import build_notifier
+
+    config_path = _resolve_config_path(args.config)
+    if not config_path.is_file():
+        print(f"error: config not found: {config_path}", file=sys.stderr)
+        return 1
+    try:
+        cfg = load_config(config_path)
+    except Exception as e:
+        print(f"error: invalid config: {e}", file=sys.stderr)
+        return 1
+
+    settings = Settings()
+    notifier = build_notifier(cfg.notify, settings)
+    configured = set(cfg.notify.channels)
+    active = set(notifier.channel_names)
+    missing_creds = sorted(configured - active)
+
+    warnings: list[str] = []
+    infos: list[str] = []
+
+    if missing_creds:
+        warnings.append(
+            "notify channels are listed in YAML but credentials are incomplete "
+            f"(skipped at runtime): {missing_creds}"
+        )
+    if not configured:
+        infos.append(
+            "notify.channels is empty — transition notifications will not send."
+        )
+
+    if cfg.purchase.mode == "full_auto":
+        warnings.append(
+            "purchase.mode is full_auto — checkout can complete without manual "
+            "confirmation when the invariant passes."
+        )
+
+    if cfg.social_x.enabled and not plain_secret(settings.x_bearer_token).strip():
+        warnings.append(
+            "social_x.enabled is true but X_BEARER_TOKEN is empty — x-poll will fail."
+        )
+
+    profile = Path(cfg.browser.user_data_dir)
+    if not profile.is_dir():
+        infos.append(
+            f"browser profile directory does not exist yet ({profile}); "
+            "run `fandango-watcher login` to create and warm it."
+        )
+    elif not any(profile.iterdir()):
+        infos.append(
+            f"browser profile at {profile} is empty; run `login` to warm cookies."
+        )
+
+    payload: dict[str, Any] = {
+        "ok": True,
+        "config_path": str(config_path),
+        "purchase_mode": cfg.purchase.mode,
+        "warnings": warnings,
+        "infos": infos,
+        "notify": {
+            "configured_channels": sorted(configured),
+            "active_channels": sorted(active),
+        },
+    }
+
+    if args.json:
+        json.dump(payload, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    print(f"config: {config_path}")
+    print(f"purchase.mode: {cfg.purchase.mode}")
+    print(
+        "notify: "
+        f"configured={sorted(configured) or '[]'}; "
+        f"active (env-ready)={sorted(active) or '[]'}"
+    )
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    for i in infos:
+        print(f"note: {i}")
+    return 0
+
+
 def _run_refs(args: argparse.Namespace) -> int:
     from ..reference_pages import REFERENCE_PAGE_KEYS, REFERENCE_PAGES, get_reference_page
 
