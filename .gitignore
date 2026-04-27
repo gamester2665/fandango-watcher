@@ -26,3 +26,5 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+# Accidental `NUL` file from a bad Windows shell redirect (not the reserved device)
+/NUL
