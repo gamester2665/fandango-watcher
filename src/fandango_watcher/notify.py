@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import urllib.error
+import urllib.parse
+import urllib.request
 from abc import ABC, abstractmethod
+from base64 import b64encode
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from pathlib import Path
@@ -62,11 +66,7 @@ class Notifier(ABC):
 
 
 class TwilioNotifier(Notifier):
-    """Send SMS via Twilio's REST API.
-
-    The ``twilio`` client is imported lazily so tests that monkeypatch
-    ``twilio.rest.Client`` don't have to intercept package-import time.
-    """
+    """Send SMS via Twilio's REST API."""
 
     def __init__(
         self,
@@ -75,16 +75,15 @@ class TwilioNotifier(Notifier):
         auth_token: str,
         from_number: str,
         to_number: str,
+        timeout_seconds: float = 30.0,
         client: object | None = None,
     ) -> None:
-        if client is not None:
-            self._client = client
-        else:
-            from twilio.rest import Client  # local import; see class docstring
-
-            self._client = Client(account_sid, auth_token)
+        self._client = client
+        self._account_sid = account_sid
+        self._auth_token = auth_token
         self._from = from_number
         self._to = to_number
+        self._timeout = timeout_seconds
 
     @property
     def name(self) -> str:
@@ -99,11 +98,40 @@ class TwilioNotifier(Notifier):
         body = f"[{msg.event}] {msg.subject}\n\n{msg.body}"
         if len(body) > _SMS_MAX_CHARS:
             body = body[: _SMS_MAX_CHARS - 3] + "..."
-        # ``client.messages.create`` raises ``TwilioRestException`` on failure;
-        # letting it propagate lets FanOutNotifier record the channel failure.
-        self._client.messages.create(  # type: ignore[attr-defined]
-            body=body, from_=self._from, to=self._to
+        if self._client is not None:
+            self._client.messages.create(  # type: ignore[attr-defined]
+                body=body, from_=self._from, to=self._to
+            )
+            return
+
+        data = urllib.parse.urlencode(
+            {"Body": body, "From": self._from, "To": self._to}
+        ).encode()
+        req = urllib.request.Request(
+            (
+                "https://api.twilio.com/2010-04-01/Accounts/"
+                f"{self._account_sid}/Messages.json"
+            ),
+            data=data,
+            method="POST",
         )
+        req.add_header(
+            "Authorization",
+            "Basic "
+            + b64encode(
+                f"{self._account_sid}:{self._auth_token}".encode()
+            ).decode(),
+        )
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                # Drain the response so the connection can close promptly.
+                resp.read()
+        except urllib.error.HTTPError as e:
+            detail = e.read(500).decode("utf-8", errors="replace")
+            raise RuntimeError(f"twilio HTTP {e.code}: {detail}") from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"twilio request failed: {e}") from e
 
 
 # -----------------------------------------------------------------------------

@@ -111,12 +111,15 @@ class _StubXClient:
         tweets_by_user: dict[str, list[dict[str, Any]]],
         *,
         fail_users: set[str] | None = None,
+        tweet_by_id: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._users = users
         self._tweets = tweets_by_user
         self._fail_users = fail_users or set()
+        self._tweet_by_id = dict(tweet_by_id or {})
         self.user_id_calls: list[str] = []
         self.tweet_calls: list[tuple[str, str | None]] = []
+        self.get_tweet_calls: list[str] = []
 
     def get_user_id(self, handle: str) -> str:
         clean = handle.lstrip("@").lower()
@@ -137,6 +140,10 @@ class _StubXClient:
         if since_id is None:
             return list(all_tweets)
         return [t for t in all_tweets if int(str(t["id"])) > int(since_id)]
+
+    def get_tweet(self, tweet_id: str) -> dict[str, Any] | None:
+        self.get_tweet_calls.append(tweet_id)
+        return self._tweet_by_id.get(tweet_id)
 
 
 def _cfg(handles: list[SocialXHandleConfig], **overrides: Any) -> SocialXConfig:
@@ -208,12 +215,51 @@ class TestCheckXSignals:
             "IMAX", "imax".upper()  # handle preserved as-is from cfg
         ) or match.url.endswith("/status/10")
 
+        rstate = load_social_x_state(tmp_path)
+        imax_hs = rstate.handles["imax"]
+        assert imax_hs.last_seen_tweet_id == "10"
+        assert imax_hs.last_seen_tweet_text == "tickets on sale!"
+        assert imax_hs.last_seen_tweet_created_at == "t1"
+
         # Second poll: with since_id=10, the stub returns nothing new.
         client.tweet_calls.clear()
         result2 = check_x_signals(cfg, "tok", tmp_path, client=client)
         assert result2.matches == []
         # Confirm we passed the persisted since_id.
         assert client.tweet_calls == [("111", "10")]
+        # Text already in state; no single-tweet backfill.
+        assert client.get_tweet_calls == []
+
+    def test_backfills_tweet_text_when_timeline_empty(self, tmp_path: Path) -> None:
+        # Cursor from a previous run, but no body yet (e.g. old state file).
+        s = SocialXState()
+        h = s.for_handle("IMAX")
+        h.user_id = "111"
+        h.last_seen_tweet_id = "10"
+        save_social_x_state(tmp_path, s)
+
+        client = _StubXClient(
+            users={"imax": "111"},
+            tweets_by_user={"111": []},
+            tweet_by_id={
+                "10": {
+                    "id": "10",
+                    "text": "Steady-state tweet body",
+                    "created_at": "2026-01-01T00:00:00.000Z",
+                }
+            },
+        )
+        cfg = _cfg(
+            [SocialXHandleConfig(handle="IMAX", keywords=["tickets"])]
+        )
+        result = check_x_signals(cfg, "tok", tmp_path, client=client)
+        assert result.matches == []
+        rstate = load_social_x_state(tmp_path)
+        assert rstate.handles["imax"].last_seen_tweet_text == "Steady-state tweet body"
+        assert rstate.handles["imax"].last_seen_tweet_created_at == (
+            "2026-01-01T00:00:00.000Z"
+        )
+        assert client.get_tweet_calls == ["10"]
 
     def test_no_keywords_means_no_matches_even_on_new_tweets(
         self, tmp_path: Path
@@ -231,6 +277,10 @@ class TestCheckXSignals:
         )
         result = check_x_signals(cfg, "tok", tmp_path, client=client)
         assert result.matches == []
+
+        rstate = load_social_x_state(tmp_path)
+        assert rstate.handles["imax"].last_seen_tweet_text == "trailer"
+        assert rstate.handles["imax"].last_seen_tweet_id == "1"
 
     def test_handle_failure_isolated(self, tmp_path: Path) -> None:
         client = _StubXClient(

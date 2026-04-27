@@ -246,6 +246,19 @@ def _make_handler_cls(
                     )
                     return
 
+            if dashboard_data is not None:
+                from .dashboard import render_dashboard_not_found_html
+
+                body = render_dashboard_not_found_html(
+                    request_path=path_only
+                ).encode("utf-8")
+                self.send_response(HTTPStatus.NOT_FOUND)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
     return Handler

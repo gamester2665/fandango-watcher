@@ -17,15 +17,19 @@ API surface used (X API v2):
   per handle, then cached forever in state.
 * ``GET /2/users/{id}/tweets`` — paged recent tweets, filtered by
   ``since_id`` so we only see what's new since the last poll.
+* ``GET /2/tweets/{id}`` — optional: backfill body for ``last_seen_tweet_id``
+  when a steady-state poll returns no rows (dashboard copy).
 
-Auth: Bearer token only (read-only public-tweet endpoints). The OAuth1
-key/secret pair is unused here but kept in ``Settings`` for a future
-posting / user-context flow.
+Auth: app-only Bearer token for read-only public-tweet endpoints. X API
+Key/Secret can also mint an app-only Bearer token, but the App still must be
+attached to a Project with API v2 access.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
+import urllib.parse
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -59,6 +63,9 @@ class HandleState(BaseModel):
     handle: str
     user_id: str | None = None
     last_seen_tweet_id: str | None = None
+    # Newest-seen tweet in the last successful poll batch (for dashboard copy).
+    last_seen_tweet_text: str | None = None
+    last_seen_tweet_created_at: str | None = None
     last_polled_at: datetime | None = None
     last_error_at: datetime | None = None
     last_error_message: str | None = None
@@ -159,7 +166,7 @@ class XClient:
     ) -> None:
         if not bearer_token:
             raise ValueError("X bearer token is required (set X_BEARER_TOKEN)")
-        self._bearer = bearer_token
+        self._bearer = _normalize_bearer_token(bearer_token)
         self._http: HttpClient = (
             http if http is not None else httpx.Client(timeout=timeout)
         )
@@ -175,7 +182,7 @@ class XClient:
             f"{X_API_BASE}/users/by/username/{clean}",
             headers=self._auth_headers,
         )
-        resp.raise_for_status()
+        _raise_for_x_status(resp)
         payload = resp.json()
         data = payload.get("data") or {}
         user_id = data.get("id")
@@ -212,13 +219,103 @@ class XClient:
             params=params,
             headers=self._auth_headers,
         )
-        resp.raise_for_status()
+        _raise_for_x_status(resp)
         payload = resp.json()
         return list(payload.get("data") or [])
+
+    def get_tweet(self, tweet_id: str) -> dict[str, Any] | None:
+        """Return one tweet by id, or None if the API has no such tweet (404)."""
+        resp = self._http.get(
+            f"{X_API_BASE}/tweets/{tweet_id}",
+            params={"tweet.fields": "created_at,text,author_id"},
+            headers=self._auth_headers,
+        )
+        if resp.status_code == 404:
+            return None
+        _raise_for_x_status(resp)
+        payload = resp.json()
+        data = payload.get("data")
+        return data if isinstance(data, dict) else None
 
 
 class XApiError(RuntimeError):
     """Raised on a structurally-bad X API response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        headers: httpx.Headers | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.headers = headers
+
+
+def _normalize_bearer_token(token: str) -> str:
+    clean = token.strip()
+    if clean.lower().startswith("bearer "):
+        return clean[7:].strip()
+    return clean
+
+
+def _raise_for_x_status(resp: httpx.Response) -> None:
+    if resp.status_code < 400:
+        return
+    message = f"X API HTTP {resp.status_code}"
+    try:
+        payload = resp.json()
+    except ValueError:
+        detail = resp.text[:500]
+        if detail:
+            message = f"{message}: {detail}"
+    else:
+        parts = [
+            payload.get("title"),
+            payload.get("reason"),
+            payload.get("required_enrollment"),
+            payload.get("detail"),
+            payload.get("registration_url"),
+        ]
+        rendered = " | ".join(str(p) for p in parts if p)
+        if rendered:
+            message = f"{message}: {rendered}"
+    raise XApiError(message, status_code=resp.status_code, headers=resp.headers)
+
+
+def generate_app_only_bearer_token(
+    api_key: str,
+    api_key_secret: str,
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
+    """Mint an app-only Bearer token from X API Key/Secret.
+
+    This helps recover from a stale ``X_BEARER_TOKEN``. It does not bypass X's
+    Project/API-access checks: a non-enrolled App will still receive 403 on v2
+    endpoints after token generation.
+    """
+    if not api_key or not api_key_secret:
+        raise ValueError("X_API_KEY and X_API_KEY_SECRET are required")
+    encoded_key = urllib.parse.quote(api_key, safe="")
+    encoded_secret = urllib.parse.quote(api_key_secret, safe="")
+    basic = base64.b64encode(f"{encoded_key}:{encoded_secret}".encode()).decode()
+    resp = httpx.post(
+        "https://api.twitter.com/oauth2/token",
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        data={"grant_type": "client_credentials"},
+        timeout=timeout,
+    )
+    _raise_for_x_status(resp)
+    payload = resp.json()
+    token = str(payload.get("access_token") or "")
+    if not token:
+        raise XApiError(f"oauth2/token returned no access_token: {payload!r}")
+    return token
 
 
 # -----------------------------------------------------------------------------
@@ -367,6 +464,58 @@ def check_x_signals(
             handle_state.last_polled_at = effective_now
             handle_state.consecutive_errors = 0
             handle_state.last_error_message = None
+            if tweets and new_max_id:
+                for tw in tweets:
+                    if str(tw.get("id") or "") == new_max_id:
+                        txt = str(tw.get("text") or "").strip()
+                        handle_state.last_seen_tweet_text = txt or None
+                        ca = tw.get("created_at")
+                        handle_state.last_seen_tweet_created_at = (
+                            str(ca) if ca is not None else None
+                        )
+                        break
+            elif (
+                not tweets
+                and new_max_id
+                and not (str(handle_state.last_seen_tweet_text or "").strip())
+            ):
+                # Steady-state: ``since_id`` returns nothing, but the dashboard
+                # still needs body text for the cursor — fetch the tweet by id.
+                try:
+                    one = x.get_tweet(new_max_id)
+                except XApiError as e:
+                    logger.debug(
+                        "social_x: backfill tweet %s for @%s: %s",
+                        new_max_id,
+                        norm_handle,
+                        e,
+                    )
+                else:
+                    if one:
+                        txt = str(one.get("text") or "").strip()
+                        handle_state.last_seen_tweet_text = txt or None
+                        ca = one.get("created_at")
+                        handle_state.last_seen_tweet_created_at = (
+                            str(ca) if ca is not None else None
+                        )
+        except XApiError as e:
+            result.handles_failed += 1
+            if e.status_code == 429 and e.headers is not None:
+                rh = e.headers.get("x-rate-limit-reset")
+                try:
+                    ts = int(rh) if rh else 0
+                    if ts > 0:
+                        result.rate_limit_reset_at = datetime.fromtimestamp(
+                            ts, tz=UTC
+                        )
+                except (TypeError, ValueError, OSError):
+                    pass
+            err_txt = f"@{norm_handle}: {e}"
+            result.errors.append(err_txt)
+            handle_state.last_error_at = effective_now
+            handle_state.last_error_message = err_txt
+            handle_state.consecutive_errors += 1
+            logger.exception("social_x poll failed for @%s", norm_handle)
         except httpx.HTTPStatusError as e:
             result.handles_failed += 1
             if e.response is not None and e.response.status_code == 429:
@@ -440,6 +589,7 @@ __all__ = [
     "XClient",
     "XSignalMatch",
     "check_x_signals",
+    "generate_app_only_bearer_token",
     "load_social_x_state",
     "match_tweet",
     "matches_to_jsonable",

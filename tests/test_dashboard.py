@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from fandango_watcher.dashboard import (
     artifact_url,
     collect_dashboard_state,
     compute_dashboard_revision,
+    render_dashboard_not_found_html,
     render_index_html,
 )
 from fandango_watcher.healthz import Heartbeat
@@ -105,6 +107,20 @@ def test_collect_dashboard_state_roundtrip(tmp_path: Path) -> None:
     assert t0["latest_screenshot_url"] is not None
     assert t0["latest_screenshot_url"].startswith("/artifacts/")
 
+    snap = collect_dashboard_state(
+        DashboardData(
+            cfg=cfg,
+            paths=paths,
+            heartbeat=hb,
+            public_host="127.0.0.1",
+            public_port=9999,
+        )
+    )
+    assert snap["runtime"]["public_base_url"] == "http://127.0.0.1:9999/"
+    assert snap["runtime"]["host"] == "127.0.0.1"
+    assert snap["runtime"]["dashboard_port"] == 9999
+    assert snap["runtime"]["purchase_enabled"] is True
+
 
 def test_render_index_html_escapes_movie_title() -> None:
     snap = {
@@ -149,12 +165,95 @@ def test_render_index_html_live_reload_includes_fetch_and_noscript_fallback() ->
         "social_x": {"handles": {}},
         "release_intel": {"status": "unconfigured", "reason": "test"},
         "movies": [],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
     }
     html_out = render_index_html(snap, refresh_seconds=10, live_revision="abc")
     assert "/api/revision" in html_out
     assert "fetch(" in html_out
+    assert "sessionStorage" in html_out
+    assert "dash-conn" in html_out
     assert '<noscript><meta http-equiv="refresh" content="10"' in html_out
     assert "  <meta http-equiv=" not in html_out.split("<noscript>")[0]
+
+
+def test_render_index_html_triage_and_skip_and_zero_targets() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "runtime": {
+            "fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800},
+            "public_base_url": "http://127.0.0.1:8787/",
+        },
+    }
+    html_out = render_index_html(snap)
+    assert "At a glance" in html_out
+    assert "Target priority" in html_out
+    assert "triage-table" in html_out or "No targets configured" in html_out
+    assert 'href="#main"' in html_out
+    assert "No <code>targets:</code> in this config" in html_out
+    assert 'id="triage"' in html_out
+
+
+def test_release_intel_empty_dict_operator_copy() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {"handles": {}},
+        "release_intel": {},
+        "movies": [],
+    }
+    html_out = render_index_html(snap)
+    assert "internal" not in html_out
+    assert "empty" in html_out.lower() or "payload" in html_out
+
+
+def test_x_poller_section_opens_by_default_with_tweet_snapshot_table() -> None:
+    """UX: X panel must not stay collapsed; table exposes tweet text preview column."""
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {
+            "last_polled_at": "2026-01-01T00:00:00Z",
+            "handles": {
+                "testacct": {
+                    "handle": "testacct",
+                    "user_id": "9",
+                    "last_seen_tweet_id": "1",
+                    "last_polled_at": "2026-01-01T00:00:00Z",
+                    "consecutive_errors": 0,
+                }
+            },
+        },
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "runtime": {
+            "social_x_poll": {
+                "enabled": True,
+                "min_seconds": 900,
+                "max_seconds": 1200,
+                "max_results_per_handle": 10,
+                "state_path": "state/social_x.json",
+            }
+        },
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert 'id="x" aria-label="X / Twitter poller">' in html_out
+    assert "tweet text (preview)" in html_out
+    assert "sx-snapshot" in html_out
+    assert re.search(
+        r'id="x"[^>]*>\s*<details class="panel-fold" open>',
+        html_out,
+    )
+
+
+def test_render_dashboard_not_found_includes_routes() -> None:
+    h = render_dashboard_not_found_html(request_path="/nope")
+    assert "404" in h
+    assert "/nope" in h or "nope" in h
+    assert 'href="/"' in h
 
 
 def test_collect_dashboard_state_includes_purchase_lines(tmp_path: Path) -> None:

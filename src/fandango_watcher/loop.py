@@ -652,6 +652,8 @@ def run_watch(
                 port=healthz_port,
                 dashboard_data=dashboard_data,
             )
+            dashboard_data.public_host = healthz_host
+            dashboard_data.public_port = healthz_ctx.port
             base = f"http://{healthz_host}:{healthz_ctx.port}/"
             if open_browser:
                 import webbrowser

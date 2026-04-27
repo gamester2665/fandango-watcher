@@ -282,6 +282,8 @@ def _run_dashboard(args: argparse.Namespace) -> int:
             port=bind_port,
             dashboard_data=dd,
         )
+        dd.public_host = args.host
+        dd.public_port = ctx.port
     except OSError as e:
         print(
             f"error: failed to bind dashboard on {args.host}:{bind_port}: {e}\n"
@@ -534,6 +536,19 @@ def _run_movies(args: argparse.Namespace) -> int:
     return 0
 
 
+def _plain_x_bearer(settings: Settings) -> str:
+    return plain_secret(settings.x_bearer_token).strip()
+
+
+def _generated_x_bearer(settings: Settings) -> str:
+    from ..social_x import generate_app_only_bearer_token
+
+    return generate_app_only_bearer_token(
+        plain_secret(settings.x_api_key).strip(),
+        plain_secret(settings.x_api_key_secret).strip(),
+    )
+
+
 def _run_x_poll(args: argparse.Namespace) -> int:
     from ..social_x import check_x_signals, matches_to_jsonable
 
@@ -544,6 +559,9 @@ def _run_x_poll(args: argparse.Namespace) -> int:
     cfg = load_config(config_path)
     settings = Settings()
 
+    if args.check_bearer:
+        return _check_x_bearer(cfg, settings)
+
     if not cfg.social_x.enabled:
         print(
             "error: social_x.enabled=false in config. Set it to true and "
@@ -551,16 +569,36 @@ def _run_x_poll(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    if not plain_secret(settings.x_bearer_token):
+    bearer_token = _plain_x_bearer(settings)
+    if not bearer_token:
+        if (
+            plain_secret(settings.x_api_key).strip()
+            and plain_secret(settings.x_api_key_secret).strip()
+        ):
+            try:
+                bearer_token = _generated_x_bearer(settings)
+            except Exception as e:  # noqa: BLE001
+                print(
+                    "error: X_BEARER_TOKEN missing and generating one from "
+                    f"X_API_KEY/X_API_KEY_SECRET failed: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            print(
+                "error: X_BEARER_TOKEN missing from .env. "
+                "Get one at https://developer.x.com/en/portal/dashboard.",
+                file=sys.stderr,
+            )
+            return 1
+
+    if not bearer_token:
         print(
             "error: X_BEARER_TOKEN missing from .env. "
             "Get one at https://developer.x.com/en/portal/dashboard.",
             file=sys.stderr,
         )
         return 1
-
-    if args.check_bearer:
-        return _check_x_bearer(cfg, settings)
 
     state_dir = Path(args.state_dir or cfg.state.dir)
     if args.reset:
@@ -585,7 +623,7 @@ def _run_x_poll(args: argparse.Namespace) -> int:
     )
     result = check_x_signals(
         effective,
-        plain_secret(settings.x_bearer_token),
+        bearer_token,
         state_dir,
     )
 
@@ -619,21 +657,52 @@ def _check_x_bearer(cfg: Any, settings: Any) -> int:
         return 1
     handle = effective.handles[0].handle.lstrip("@")
 
-    try:
-        client = XClient(plain_secret(settings.x_bearer_token))
-        user_id = client.get_user_id(handle)
-    except XApiError as e:
-        print(f"X API rejected the lookup: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:  # noqa: BLE001 — surface httpx + auth errors verbatim
+    attempts: list[tuple[str, str]] = []
+    bearer = _plain_x_bearer(settings)
+    if bearer:
+        attempts.append(("X_BEARER_TOKEN", bearer))
+
+    if (
+        plain_secret(settings.x_api_key).strip()
+        and plain_secret(settings.x_api_key_secret).strip()
+    ):
+        try:
+            attempts.append((
+                "generated from X_API_KEY/X_API_KEY_SECRET",
+                _generated_x_bearer(settings),
+            ))
+        except Exception as e:  # noqa: BLE001
+            print(
+                "X API key/secret bearer generation failed: "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+
+    if not attempts:
         print(
-            f"X bearer check failed: {type(e).__name__}: {e}",
+            "error: set X_BEARER_TOKEN or X_API_KEY/X_API_KEY_SECRET in .env.",
             file=sys.stderr,
         )
         return 1
 
-    print(f"OK: bearer token resolved @{handle} -> user_id={user_id}")
-    return 0
+    failures: list[str] = []
+    for label, token in attempts:
+        try:
+            client = XClient(token)
+            user_id = client.get_user_id(handle)
+        except XApiError as e:
+            failures.append(f"{label}: {e}")
+            continue
+        except Exception as e:  # noqa: BLE001 — surface httpx + auth errors verbatim
+            failures.append(f"{label}: {type(e).__name__}: {e}")
+            continue
+        print(f"OK: {label} resolved @{handle} -> user_id={user_id}")
+        return 0
+
+    print("X API rejected every available app-only credential:", file=sys.stderr)
+    for failure in failures:
+        print(f"- {failure}", file=sys.stderr)
+    return 1
 
 
 def _run_dump_review(args: argparse.Namespace) -> int:

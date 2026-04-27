@@ -117,6 +117,23 @@ class TestHealthz:
                 urllib.request.urlopen(url, timeout=5)
             assert excinfo.value.code == 404
 
+    def test_unknown_path_with_dashboard_returns_html_404(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/definitely-missing"
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(url, timeout=5)
+            assert excinfo.value.code == 404
+            body = excinfo.value.read().decode("utf-8")
+        assert "404" in body
+        assert "fandango-watcher" in body
+        assert 'href="/"' in body
+
     def test_health_alias_also_returns_200(self) -> None:
         hb = Heartbeat()
         with _running_server(hb) as ctx:
