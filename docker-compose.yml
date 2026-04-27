@@ -13,6 +13,10 @@
 #
 #   # Tail logs:
 #   docker compose logs -f watcher
+#
+# Development overlay (bind-mount src/tests + dev toolchain image target):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#   See docs/DOCKER_DEV.md
 # =============================================================================
 
 x-common-env: &common-env
@@ -39,6 +43,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: app
     image: fandango_watcher:latest
     container_name: fandango_watcher
     restart: unless-stopped

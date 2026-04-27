@@ -1,0 +1,23 @@
+# =============================================================================
+# Development overlay — merge with docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Or set COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml (Unix shell /
+# Docker Desktop env) and use plain `docker compose up`.
+#
+# Effects:
+# - Builds image target `development` (pytest, ruff, mypy from uv dev group).
+# - Bind-mounts ./src → /app/src so edits apply after `compose restart watcher`.
+# - PYTHONPATH=/app/src prefers live source over the baked wheel (same as Dockerfile dev stage).
+# =============================================================================
+
+services:
+  watcher:
+    build:
+      target: development
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests

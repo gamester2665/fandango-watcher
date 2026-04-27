@@ -84,3 +84,20 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
 # `docker compose down`, which matters for closing the browser profile.
 ENTRYPOINT ["/usr/bin/tini", "--", "fandango-watcher"]
 CMD ["watch"]
+
+# -----------------------------------------------------------------------------
+# Stage 4 (optional): pytest / ruff / mypy — use compose build target development.
+# Compose defaults must pin target app so production images stay slim.
+# -----------------------------------------------------------------------------
+FROM app AS development
+
+COPY tests/ ./tests/
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --group dev
+
+# Prefer mounted ./src over site-packages when docker-compose.dev.yml bind-mounts src/.
+ENV PYTHONPATH=/app/src
+
+ENTRYPOINT ["/usr/bin/tini", "--", "fandango-watcher"]
+CMD ["watch"]

@@ -53,6 +53,10 @@ the Windows shim under `.venv\Scripts\` is still locked by a previous
 
 Heavy shells sometimes hit memory limits; closing other apps or increasing the page file can help.
 
-## 6. Before VPS
+## 6. Docker-first iteration
+
+If you prefer developing **inside Compose** (same Chromium + Debian Playwright stack as CI/VPS), use **[DOCKER_DEV.md](./DOCKER_DEV.md)** — merge `docker-compose.yml` + `docker-compose.dev.yml`, bind-mount `src/` + `tests/`, build target `development`, then `restart watcher` after code changes.
+
+## 7. Before VPS
 
 Do not deploy until local behavior is signed off (see README **VPS / production** and [PLAN.md](../PLAN.md)).

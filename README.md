@@ -228,6 +228,8 @@ docker compose up -d
 docker compose logs -f watcher
 ```
 
+**Docker-first development:** merge **`docker-compose.dev.yml`** so `src/` and `tests/` bind-mount into the container, the image builds target **`development`** (pytest / ruff / mypy via uv dev deps), and you restart **`watcher`** after edits instead of rebuilding every time. See **[docs/DOCKER_DEV.md](./docs/DOCKER_DEV.md)** or **`scripts/docker-compose-dev.sh`** / **`scripts/docker-compose-dev.ps1`**.
+
 Volumes (declared in `docker-compose.yml`):
 
 | Volume               | Mount                  | Purpose                                                |
@@ -304,9 +306,12 @@ recognizable A-List benefit phrase."**
 ```
 .
 ├── Dockerfile                        # python:3.13-slim-bookworm + uv + Playwright Chromium
-├── docker-compose.yml                # watcher / login services + named volumes
+├── docker-compose.yml                # watcher / login services + named volumes (build target app)
+├── docker-compose.dev.yml            # optional overlay: development image + bind-mount src/tests
 ├── .env.example                      # Twilio + SMTP + X + OPENROUTER_API_KEY / OPENAI_API_KEY
 ├── config.example.yaml               # targets, formats, seat priority, social_x, agent_fallback
+├── docs/
+│   └── DOCKER_DEV.md                 # Docker-first development (compose overlay + workflows)
 ├── PLAN.md                           # full architecture + phased plan
 ├── pyproject.toml                    # uv-managed deps; [agent] extra = browser-use + langchain-openai
 └── src/fandango_watcher/
