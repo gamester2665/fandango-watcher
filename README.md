@@ -34,7 +34,7 @@ phased checklist.
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced; calibration workflow in `tests/fixtures/rescue/README.md`. |
 | 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
 
-430+ unit + integration tests; run `uv run pytest -q`.
+440+ unit + integration tests; run `uv run pytest -q`.
 
 ---
 
@@ -342,7 +342,7 @@ recognizable A-List benefit phrase."**
 ## Tests
 
 ```bash
-uv run pytest -q                               # full suite (~10s, 430+ tests)
+uv run pytest -q                               # full suite (~10–15s, 440+ tests)
 uv run ruff check src tests                      # lint (needs: uv sync --group dev)
 uv run mypy src/fandango_watcher                 # typecheck (needs dev group)
 uv run pytest tests/test_review_fixtures.py    # auto-discovered $0.00 invariant fixtures

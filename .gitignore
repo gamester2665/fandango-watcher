@@ -22,6 +22,7 @@ dist/
 *.egg-info/
 
 # IDE / OS
+.cursor/
 .vscode/
 .idea/
 .DS_Store
