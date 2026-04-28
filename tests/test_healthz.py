@@ -28,7 +28,11 @@ from fandango_watcher.config import (
     ViewportConfig,
     WatcherConfig,
 )
-from fandango_watcher.dashboard import DashboardData, DashboardPaths
+from fandango_watcher.dashboard import (
+    DashboardData,
+    DashboardPaths,
+    collect_dashboard_state,
+)
 from fandango_watcher.healthz import (
     HealthzContext,
     Heartbeat,
@@ -234,6 +238,27 @@ class TestDashboardRoutes:
                 assert resp.headers.get("Cache-Control") == "no-store"
                 ri = json.loads(resp.read())
                 assert ri.get("status") == "unconfigured"
+
+    def test_api_status_contract_matches_collect_dashboard_state(
+        self, tmp_path: Path
+    ) -> None:
+        """``/api/status`` must serialize the same object as collect_dashboard_state.
+
+        Uses ``json.dumps(..., default=str)`` to mirror :func:`~.healthz._send_json`
+        so parity matches the HTTP codec, not accidental Python identity quirks.
+        """
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/api/status"
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                got = json.loads(resp.read())
+
+        expected_raw = json.dumps(collect_dashboard_state(dd), default=str)
+        expected = json.loads(expected_raw)
+        assert got == expected
 
     def test_artifact_file_includes_private_cache(
         self, tmp_path: Path
