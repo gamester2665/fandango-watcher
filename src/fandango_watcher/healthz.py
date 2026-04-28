@@ -132,6 +132,11 @@ def _send_bytes(
     if cache_control:
         handler.send_header("Cache-Control", cache_control)
     _send_no_sniff(handler)
+    if content_type.split(";")[0].strip().lower() == "text/html":
+        handler.send_header(
+            "Referrer-Policy",
+            "strict-origin-when-cross-origin",
+        )
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -283,6 +288,10 @@ def _make_handler_cls(
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
                 _send_no_sniff(self)
+                self.send_header(
+                    "Referrer-Policy",
+                    "strict-origin-when-cross-origin",
+                )
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

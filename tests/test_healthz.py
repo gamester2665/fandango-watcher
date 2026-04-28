@@ -132,6 +132,10 @@ class TestHealthz:
             assert excinfo.value.code == 404
             assert excinfo.value.headers.get("Cache-Control") == "no-store"
             assert excinfo.value.headers.get("X-Content-Type-Options") == "nosniff"
+            assert (
+                excinfo.value.headers.get("Referrer-Policy")
+                == "strict-origin-when-cross-origin"
+            )
             body = excinfo.value.read().decode("utf-8")
         assert "404" in body
         assert "fandango-watcher" in body
@@ -195,6 +199,10 @@ class TestDashboardRoutes:
                 assert "text/html" in resp.headers["Content-Type"]
                 assert resp.headers.get("Cache-Control") == "no-store"
                 assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+                assert (
+                    resp.headers.get("Referrer-Policy")
+                    == "strict-origin-when-cross-origin"
+                )
                 body = resp.read().decode("utf-8")
                 assert "fandango-watcher" in body
                 assert "color-scheme" in body
