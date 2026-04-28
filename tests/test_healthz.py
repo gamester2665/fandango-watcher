@@ -282,6 +282,7 @@ class TestDashboardRoutes:
                 assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 assert resp.headers.get("ETag", "").startswith('W/"')
                 assert resp.headers.get("Last-Modified")
+                assert resp.headers.get("Accept-Ranges") == "none"
 
     def test_artifact_head_matches_get_headers_without_body(
         self, tmp_path: Path
@@ -302,6 +303,7 @@ class TestDashboardRoutes:
             with urllib.request.urlopen(url, timeout=5) as rget:
                 get_etag = rget.headers["ETag"]
                 get_lm = rget.headers["Last-Modified"]
+                assert rget.headers.get("Accept-Ranges") == "none"
                 assert rget.read() == b"xyz"
 
             req = urllib.request.Request(url, method="HEAD")
@@ -310,6 +312,7 @@ class TestDashboardRoutes:
                 assert rhead.headers.get("Content-Length") == "3"
                 assert rhead.headers["ETag"] == get_etag
                 assert rhead.headers["Last-Modified"] == get_lm
+                assert rhead.headers.get("Accept-Ranges") == "none"
                 assert rhead.read() == b""
 
     def test_head_non_artifact_with_dashboard_returns_501(
@@ -358,6 +361,7 @@ class TestDashboardRoutes:
             assert err304.headers.get("ETag") == etag
             assert err304.headers.get("Last-Modified")
             assert err304.headers.get("X-Content-Type-Options") == "nosniff"
+            assert err304.headers.get("Accept-Ranges") == "none"
 
     def test_artifact_if_modified_since_returns_304(self, tmp_path: Path) -> None:
         cfg = _dash_cfg(tmp_path)
@@ -384,6 +388,7 @@ class TestDashboardRoutes:
             err304 = excinfo304.value
             assert err304.code == 304
             assert err304.read() == b""
+            assert err304.headers.get("Accept-Ranges") == "none"
 
     def test_artifact_stale_if_modified_since_returns_200(
         self, tmp_path: Path

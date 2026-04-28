@@ -201,6 +201,7 @@ def _send_artifact_validation_headers(
     handler.send_header("Cache-Control", "private, max-age=300")
     handler.send_header("ETag", etag)
     handler.send_header("Last-Modified", last_modified)
+    handler.send_header("Accept-Ranges", "none")
     _send_no_sniff(handler)
 
 
