@@ -283,6 +283,51 @@ class TestDashboardRoutes:
                 assert resp.headers.get("ETag", "").startswith('W/"')
                 assert resp.headers.get("Last-Modified")
 
+    def test_artifact_head_matches_get_headers_without_body(
+        self, tmp_path: Path
+    ) -> None:
+        """``HEAD /artifacts/...`` returns same validators as GET, no payload."""
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "head.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"xyz")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            with urllib.request.urlopen(url, timeout=5) as rget:
+                get_etag = rget.headers["ETag"]
+                get_lm = rget.headers["Last-Modified"]
+                assert rget.read() == b"xyz"
+
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as rhead:
+                assert rhead.status == 200
+                assert rhead.headers.get("Content-Length") == "3"
+                assert rhead.headers["ETag"] == get_etag
+                assert rhead.headers["Last-Modified"] == get_lm
+                assert rhead.read() == b""
+
+    def test_head_non_artifact_with_dashboard_returns_501(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{ctx.port}/",
+                method="HEAD",
+            )
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(req, timeout=5)
+            assert excinfo.value.code == 501
+
     def test_artifact_if_none_match_returns_304(self, tmp_path: Path) -> None:
         cfg = _dash_cfg(tmp_path)
         paths = DashboardPaths.from_config(cfg)

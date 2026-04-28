@@ -209,8 +209,13 @@ def _serve_artifact_file(
     *,
     artifacts_root: Path,
     relative_url_path: str,
+    send_body: bool = True,
 ) -> bool:
-    """Stream a file under ``artifacts_root``. Returns True if handled."""
+    """Stream a file under ``artifacts_root``. Returns True if handled.
+
+    When ``send_body`` is false (typically ``HEAD``), response headers match
+    ``GET`` but no bytes follow (RFC 7231).
+    """
     rel = relative_url_path.lstrip("/")
     if ".." in rel.split("/"):
         handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
@@ -255,8 +260,9 @@ def _serve_artifact_file(
         )
         handler.send_header("Content-Length", str(st.st_size))
         handler.end_headers()
-        with candidate.open("rb") as f:
-            shutil.copyfileobj(f, handler.wfile)
+        if send_body:
+            with candidate.open("rb") as f:
+                shutil.copyfileobj(f, handler.wfile)
     except OSError:
         handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
     return True
@@ -381,6 +387,25 @@ def _make_handler_cls(
 
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
+        def do_HEAD(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+            """RFC 7231: same headers as GET for artifacts; no payload."""
+            parsed = urlparse(self.path)
+            path_only = unquote(parsed.path) or "/"
+            dd = dashboard_data
+            if dd is None or not path_only.startswith("/artifacts/"):
+                self.send_error(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    "Unsupported method for this path",
+                )
+                return
+            rel = path_only[len("/artifacts/") :]
+            _serve_artifact_file(
+                self,
+                artifacts_root=dd.paths.artifacts_root,
+                relative_url_path=rel,
+                send_body=False,
+            )
+
     return Handler
 
 
@@ -414,8 +439,9 @@ def start_healthz_server(
 
     When ``dashboard_data`` is set, also serves ``/`` (HTML), ``/api/status``,
     ``/api/revision`` (fingerprint for live tab reload), ``/api/purchases``,
-    ``/api/movies``, ``/api/release_intel`` (xAI Grok release summaries), and
-    static files under ``/artifacts/...``.
+    ``/api/movies``, ``/api/release_intel`` (xAI Grok release summaries), static
+    files under ``/artifacts/...``, and ``HEAD`` on artifact URLs (same headers
+    as ``GET``, no body).
     """
     server = _ExclusiveThreadingHTTPServer(
         (host, port),
