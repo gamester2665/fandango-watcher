@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import shutil
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from email.utils import formatdate
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -142,6 +144,36 @@ def _send_bytes(
     handler.wfile.write(body)
 
 
+def _artifact_weak_etag(st: os.stat_result) -> str:
+    """RFC 7232 weak entity-tag for conditional GET on static files."""
+    return f'W/"{st.st_mtime_ns}-{st.st_size}"'
+
+
+def _etag_in_if_none_match(if_none_match: str | None, etag: str) -> bool:
+    """True if ``If-None-Match`` allows a ``304 Not Modified`` for ``etag``."""
+    if not if_none_match:
+        return False
+    s = if_none_match.strip()
+    if s == "*":
+        return True
+    for part in s.split(","):
+        if part.strip() == etag:
+            return True
+    return False
+
+
+def _send_artifact_validation_headers(
+    handler: BaseHTTPRequestHandler,
+    *,
+    etag: str,
+    last_modified: str,
+) -> None:
+    handler.send_header("Cache-Control", "private, max-age=300")
+    handler.send_header("ETag", etag)
+    handler.send_header("Last-Modified", last_modified)
+    _send_no_sniff(handler)
+
+
 def _serve_artifact_file(
     handler: BaseHTTPRequestHandler,
     *,
@@ -164,14 +196,22 @@ def _serve_artifact_file(
     mime, _enc = mimetypes.guess_type(str(candidate))
     ctype = mime or "application/octet-stream"
     try:
+        st = candidate.stat()
+        etag = _artifact_weak_etag(st)
+        last_modified = formatdate(st.st_mtime, usegmt=True)
+        if _etag_in_if_none_match(handler.headers.get("If-None-Match"), etag):
+            handler.send_response(HTTPStatus.NOT_MODIFIED)
+            _send_artifact_validation_headers(
+                handler, etag=etag, last_modified=last_modified
+            )
+            handler.end_headers()
+            return True
         handler.send_response(HTTPStatus.OK)
         handler.send_header("Content-Type", ctype)
-        handler.send_header(
-            "Cache-Control",
-            "private, max-age=300",
+        _send_artifact_validation_headers(
+            handler, etag=etag, last_modified=last_modified
         )
-        _send_no_sniff(handler)
-        handler.send_header("Content-Length", str(candidate.stat().st_size))
+        handler.send_header("Content-Length", str(st.st_size))
         handler.end_headers()
         with candidate.open("rb") as f:
             shutil.copyfileobj(f, handler.wfile)

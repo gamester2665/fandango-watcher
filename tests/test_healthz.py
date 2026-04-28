@@ -255,6 +255,60 @@ class TestDashboardRoutes:
                 assert resp.status == 200
                 assert resp.headers.get("Cache-Control") == "private, max-age=300"
                 assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+                assert resp.headers.get("ETag", "").startswith('W/"')
+                assert resp.headers.get("Last-Modified")
+
+    def test_artifact_if_none_match_returns_304(self, tmp_path: Path) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "snap.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"z")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                etag = resp.headers["ETag"]
+                assert resp.status == 200
+                resp.read()
+
+            req304 = urllib.request.Request(url)
+            req304.add_header("If-None-Match", etag)
+            # ``urlopen`` raises :class:`urllib.error.HTTPError` for 304.
+            with pytest.raises(urllib.error.HTTPError) as excinfo304:
+                urllib.request.urlopen(req304, timeout=5)
+            err304 = excinfo304.value
+            assert err304.code == 304
+            assert err304.read() == b""
+            assert err304.headers.get("Cache-Control") == "private, max-age=300"
+            assert err304.headers.get("ETag") == etag
+            assert err304.headers.get("Last-Modified")
+            assert err304.headers.get("X-Content-Type-Options") == "nosniff"
+
+    def test_artifact_mismatched_if_none_match_returns_200(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "mismatch.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"data")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            req = urllib.request.Request(url)
+            req.add_header("If-None-Match", 'W/"0-0"')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                assert resp.status == 200
+                assert resp.read() == b"data"
 
     def test_artifacts_path_traversal_returns_404(
         self, tmp_path: Path
