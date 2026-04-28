@@ -1,3 +1,4 @@
+# mypy: disable-error-code=arg-type
 """Tests for ``src/fandango_watcher/purchase.py``.
 
 Three sections:

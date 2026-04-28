@@ -212,6 +212,17 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
     targets_out: list[dict[str, Any]] = []
     for t in data.cfg.targets:
         st = _load_target_state_json(paths.state_dir, t.name)
+        direct_api_state = {
+            "status": st.get("direct_api_last_status"),
+            "used_direct_api": st.get("direct_api_last_used"),
+            "used_browser_fallback": st.get("direct_api_last_fallback"),
+            "inspected_dates": st.get("direct_api_last_inspected_dates") or [],
+            "formats_seen": st.get("direct_api_last_formats_seen") or [],
+            "unknown_formats": st.get("direct_api_last_unknown_formats") or [],
+            "matching_showtime_hashes": st.get("direct_api_last_matching_hashes") or [],
+            "fallback_count": st.get("direct_api_fallback_count") or 0,
+            "last_drift_warning": st.get("direct_api_last_drift_warning"),
+        }
         shot = _latest_artifact_for_target(t.name, paths.screenshot_dir, ".png")
         vid = _latest_artifact_for_target(t.name, paths.video_dir, ".webm")
         tr = _latest_artifact_for_target(t.name, paths.trace_dir, ".zip")
@@ -220,6 +231,7 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
                 "name": t.name,
                 "url": t.url,
                 "state": st,
+                "direct_api": direct_api_state,
                 "latest_screenshot": str(shot) if shot else None,
                 "latest_screenshot_url": artifact_url(paths.artifacts_root, shot),
                 "latest_video": str(vid) if vid else None,
@@ -280,6 +292,14 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
                 "max_seconds": data.cfg.poll.max_seconds,
                 "error_backoff_multiplier": data.cfg.poll.error_backoff_multiplier,
                 "error_backoff_cap_seconds": data.cfg.poll.error_backoff_cap_seconds,
+            },
+            "direct_api": {
+                "enabled": data.cfg.direct_api.enabled,
+                "fallback_to_browser": data.cfg.direct_api.fallback_to_browser,
+                "theater_id": data.cfg.direct_api.theater_id,
+                "max_dates_per_tick": data.cfg.direct_api.max_dates_per_tick,
+                "stop_on_first_match": data.cfg.direct_api.stop_on_first_match,
+                "alert_unknown_formats": data.cfg.direct_api.alert_unknown_formats,
             },
             "social_x_poll": {
                 "enabled": data.cfg.social_x.enabled,
@@ -1384,7 +1404,36 @@ def _render_target_card(
         trace_html = f'<p><a href="{html.escape(tz)}">latest trace (.zip)</a></p>'
 
     media_inner = f"{media_meta_p}{img_html}{vid_html}{trace_html}"
-    details_inner = f"{err_meta}{err_html}{stale_html}{media_inner}"
+    direct_api_raw = t.get("direct_api")
+    direct_api: dict[str, Any] = direct_api_raw if isinstance(direct_api_raw, dict) else {}
+    api_status = str(direct_api.get("status") or st.get("direct_api_last_status") or "—")
+    api_dates = direct_api.get("inspected_dates") or st.get("direct_api_last_inspected_dates") or []
+    api_formats = direct_api.get("formats_seen") or st.get("direct_api_last_formats_seen") or []
+    api_unknown = direct_api.get("unknown_formats") or st.get("direct_api_last_unknown_formats") or []
+    api_fallbacks = direct_api.get("fallback_count") or st.get("direct_api_fallback_count") or 0
+    api_warning = direct_api.get("last_drift_warning") or st.get("direct_api_last_drift_warning")
+    api_bits = [
+        f"status <code>{html.escape(api_status)}</code>",
+        f"dates <code>{html.escape(str(len(api_dates)))}</code>",
+        f"fallbacks <code>{html.escape(str(api_fallbacks))}</code>",
+    ]
+    if api_formats:
+        api_bits.append(
+            "formats <code>"
+            + html.escape(", ".join(str(x) for x in api_formats[:8]))
+            + ("…" if len(api_formats) > 8 else "")
+            + "</code>"
+        )
+    if api_unknown:
+        api_bits.append(
+            "unknown <code>"
+            + html.escape(", ".join(str(x) for x in api_unknown))
+            + "</code>"
+        )
+    if api_warning:
+        api_bits.append("warning " + html.escape(str(api_warning)))
+    api_html = f'<p class="card-api-meta"><strong>Direct API</strong> · {" · ".join(api_bits)}</p>'
+    details_inner = f"{err_meta}{err_html}{stale_html}{api_html}{media_inner}"
     details_block = ""
     if details_inner.strip():
         details_block = render_inline_disclosure(
@@ -1398,6 +1447,7 @@ def _render_target_card(
             (html.escape("Schema"), f"<code>{schema}</code>"),
             (html.escape("Last OK"), f"{su}{rel_html}"),
             (html.escape("Ticks"), tticks),
+            (html.escape("Direct API"), f"<code>{html.escape(api_status)}</code>"),
         ]
     )
 
@@ -2077,6 +2127,7 @@ def render_index_html(
         path_handle = h_raw.lstrip("@")
         tw_text = hst.get("last_seen_tweet_text")
         tw_at = hst.get("last_seen_tweet_created_at")
+        ticket_analysis = hst.get("last_seen_ticket_analysis")
         ce = html.escape(str(hst.get("consecutive_errors") or 0))
         err = hst.get("last_error_message")
         err_html = (
@@ -2122,11 +2173,37 @@ def render_index_html(
         le_short = "—" if not err else html.escape(str(err).replace("\n", " ")[:100])
         if err and len(str(err)) > 100:
             le_short += "…"
+        analysis_cell = "—"
+        analysis_card = ""
+        if isinstance(ticket_analysis, dict):
+            status = str(ticket_analysis.get("status") or "unknown")
+            announces = bool(ticket_analysis.get("announces_tickets"))
+            confidence = str(ticket_analysis.get("confidence") or "unknown")
+            reason = str(ticket_analysis.get("reason") or "")
+            phrases = ticket_analysis.get("matched_phrases") or []
+            phrase_text = ", ".join(str(p) for p in phrases if str(p).strip())
+            title_bits = [f"confidence: {confidence}"]
+            if reason:
+                title_bits.append(reason)
+            if phrase_text:
+                title_bits.append(f"matched: {phrase_text}")
+            variants = ("pill-ok",) if announces else ("pill-muted",)
+            if announces and status == "soon":
+                variants = ("pill-warn",)
+            analysis_cell = render_status_pill(
+                html.escape(status.replace("_", " ")),
+                variants=variants,
+                title_esc=" · ".join(title_bits),
+            )
+            analysis_card = (
+                '<p class="sx-ticket-analysis"><strong>Ticket analysis:</strong> '
+                f"{analysis_cell}</p>"
+            )
         sx_table_rows.append(
             f"<tr><td><strong>@{handle_display}</strong></td><td><code>{uid}</code></td>"
             f"<td><code>{polled}</code></td><td><code>{tid_disp}</code></td>"
             f'<td class="sx-tweet-preview-cell">{preview_cell}</td>'
-            f"<td>{ce}</td><td>{le_short}</td><td>{open_cell}</td></tr>"
+            f"<td>{analysis_cell}</td><td>{ce}</td><td>{le_short}</td><td>{open_cell}</td></tr>"
         )
 
         sx_cards.append(
@@ -2135,6 +2212,7 @@ def render_index_html(
             f'<p class="sx-meta">user_id <code>{uid}</code> · polled <code>{polled}</code> · err streak {ce}</p>'
             f"{tid_row}"
             f"{at_line}"
+            f"{analysis_card}"
             f'<blockquote class="sx-tweet-body">{body}</blockquote>'
             f"{err_html}"
             f"</article>"
@@ -2147,6 +2225,7 @@ def render_index_html(
             "last_polled_at",
             "last_seen_tweet_id",
             "tweet text (preview)",
+            "ticket analysis",
             "errors",
             "last_error",
             "open",

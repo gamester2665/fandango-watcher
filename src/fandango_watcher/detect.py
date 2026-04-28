@@ -98,6 +98,7 @@ def normalize_format_label(label: str) -> FormatTag:
 
     has_imax = "IMAX" in norm
     has_70mm = "70MM" in norm or "70 MM" in norm
+    has_3d = "3D" in norm or "REALD 3D" in norm or "REALD3D" in norm
     has_laser = "LASER" in norm
     has_recliner = "RECLINER" in norm
     has_dolby_or_prime = "DOLBY" in norm or "PRIME" in norm
@@ -106,6 +107,8 @@ def normalize_format_label(label: str) -> FormatTag:
         return FormatTag.IMAX_70MM
     if has_imax:
         return FormatTag.IMAX
+    if has_3d:
+        return FormatTag.THREE_D
     if has_70mm:
         return FormatTag.SEVENTY_MM
     if has_laser and has_recliner:

@@ -37,6 +37,8 @@ from pathlib import Path
 from .artifacts import prune_artifact_trees
 from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig, plain_secret
 from .dashboard import DashboardData, DashboardPaths
+from .direct_api_detect import DirectApiDetectionMeta, detect_target_direct_api
+from .fandango_api import FandangoApiError
 from .healthz import HealthzContext, Heartbeat, start_healthz_server
 from .models import ParsedPageData
 from .notify import (
@@ -57,7 +59,7 @@ from .state import (
     save_target_state,
     transition,
 )
-from .watcher import crawl_targets_in_tick
+from .watcher import crawl_target, crawl_targets_in_tick
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +186,31 @@ def build_notification(
         body = (
             f"{streak} consecutive errors on target={target_name} "
             f"url={target_url}. Last error: {error!r}"
+        )
+        return NotificationMessage(event=event, subject=subject, body=body)
+
+    if event == Event.DIRECT_API_UNKNOWN_FORMATS:
+        subject = f"Direct API drift: {target_name}"
+        details = ""
+        if parsed is not None:
+            unknown = [
+                item.removeprefix("direct_api_unknown_format=")
+                for item in parsed.schema_evidence
+                if item.startswith("direct_api_unknown_format=")
+            ]
+            if unknown:
+                details = "\nUnknown formats: " + ", ".join(unknown)
+        body = (
+            f"Direct Fandango API saw unknown format values for target={target_name}."
+            f"{details}\nURL: {target_url}"
+        )
+        return NotificationMessage(event=event, subject=subject, body=body)
+
+    if event == Event.DIRECT_API_FAILURE_STREAK:
+        subject = f"Direct API failing: {target_name}"
+        body = (
+            f"Direct Fandango API failed repeatedly for target={target_name}; "
+            f"browser fallback may be in use. Last error: {error!r}"
         )
         return NotificationMessage(event=event, subject=subject, body=body)
 
@@ -336,6 +363,33 @@ def _emit_events(
         )
         all_results.extend(notifier.send(msg))
     return all_results
+
+
+def _apply_direct_api_meta(
+    state: TargetState,
+    meta: DirectApiDetectionMeta | None,
+    *,
+    fallback: bool = False,
+) -> TargetState:
+    if meta is None:
+        return state
+    return state.model_copy(
+        update={
+            "direct_api_last_status": meta.status,
+            "direct_api_last_used": meta.used_direct_api,
+            "direct_api_last_fallback": fallback or meta.used_browser_fallback,
+            "direct_api_last_inspected_dates": meta.inspected_dates,
+            "direct_api_last_formats_seen": meta.formats_seen,
+            "direct_api_last_unknown_formats": meta.unknown_formats,
+            "direct_api_last_matching_hashes": meta.matching_showtime_hashes,
+            "direct_api_fallback_count": (
+                state.direct_api_fallback_count + 1
+                if fallback or meta.used_browser_fallback
+                else state.direct_api_fallback_count
+            ),
+            "direct_api_last_drift_warning": meta.drift_warning,
+        }
+    )
 
 
 def _emit_purchase_outcome(
@@ -681,7 +735,8 @@ def run_watch(
                 hb.total_ticks += 1
 
             tick_batch: dict[str, ParsedPageData | BaseException] = {}
-            if use_shared_playwright:
+            use_direct_api = use_shared_playwright and cfg.direct_api.enabled
+            if use_shared_playwright and not use_direct_api:
                 tick_batch = crawl_targets_in_tick(
                     cfg.targets,
                     browser_cfg=cfg.browser,
@@ -694,11 +749,94 @@ def run_watch(
                 if local_stop.is_set():
                     break
                 prev = target_states[target.name]
-                if use_shared_playwright:
+                direct_meta: DirectApiDetectionMeta | None = None
+                if use_direct_api:
+                    try:
+                        direct_result = detect_target_direct_api(target, cfg)
+                        parsed = direct_result.parsed
+                        direct_meta = direct_result.meta
+                        tick_had_successful_crawl = True
+                    except Exception as e:  # noqa: BLE001
+                        if not cfg.direct_api.fallback_to_browser:
+                            with hb.mutex:
+                                hb.total_errors += 1
+                            logger.exception(
+                                "direct API detection failed target=%s url=%s",
+                                target.name,
+                                target.url,
+                            )
+                            err_result = record_error(
+                                prev,
+                                e,
+                                error_streak_threshold=ERROR_STREAK_THRESHOLD,
+                            )
+                            if isinstance(e, FandangoApiError) and err_result.state.consecutive_errors >= ERROR_STREAK_THRESHOLD:
+                                err_result.events.append(Event.DIRECT_API_FAILURE_STREAK)
+                            target_states[target.name] = err_result.state
+                            save_target_state(state_dir, err_result.state)
+                            _emit_events(
+                                notify_impl,
+                                result=err_result,
+                                cfg=cfg,
+                                target_name=target.name,
+                                target_url=target.url,
+                                parsed=None,
+                                error=e,
+                            )
+                            continue
+                        logger.warning(
+                            "direct API failed for target=%s; falling back to browser",
+                            target.name,
+                            exc_info=True,
+                        )
+                        direct_meta = DirectApiDetectionMeta(
+                            status="fallback",
+                            used_direct_api=False,
+                            used_browser_fallback=True,
+                            drift_warning=f"{type(e).__name__}: {e}",
+                        )
+                        try:
+                            parsed = crawl_target(
+                                target,
+                                browser_cfg=cfg.browser,
+                                citywalk_anchor=cfg.theater.fandango_theater_anchor,
+                                screenshot_dir=screenshot_dir,
+                            )
+                            tick_had_successful_crawl = True
+                        except Exception as browser_error:  # noqa: BLE001
+                            with hb.mutex:
+                                hb.total_errors += 1
+                            logger.exception(
+                                "browser fallback failed target=%s url=%s",
+                                target.name,
+                                target.url,
+                            )
+                            err_result = record_error(
+                                prev,
+                                browser_error,
+                                error_streak_threshold=ERROR_STREAK_THRESHOLD,
+                            )
+                            target_states[target.name] = _apply_direct_api_meta(
+                                err_result.state,
+                                direct_meta,
+                                fallback=True,
+                            )
+                            save_target_state(state_dir, target_states[target.name])
+                            _emit_events(
+                                notify_impl,
+                                result=err_result,
+                                cfg=cfg,
+                                target_name=target.name,
+                                target_url=target.url,
+                                parsed=None,
+                                error=browser_error,
+                            )
+                            continue
+                elif use_shared_playwright:
                     raw_out = tick_batch.get(target.name)
                     assert raw_out is not None
                     if isinstance(raw_out, BaseException):
-                        e = raw_out
+                        crawl_error = raw_out
                         with hb.mutex:
                             hb.total_errors += 1
                         logger.exception(
@@ -708,7 +846,7 @@ def run_watch(
                         )
                         err_result = record_error(
                             prev,
-                            e,
+                            crawl_error,
                             error_streak_threshold=ERROR_STREAK_THRESHOLD,
                         )
                         target_states[target.name] = err_result.state
@@ -720,7 +858,7 @@ def run_watch(
                             target_name=target.name,
                             target_url=target.url,
                             parsed=None,
-                            error=e,
+                            error=crawl_error,
                         )
                         continue
                     parsed = raw_out
@@ -762,8 +900,21 @@ def run_watch(
                         continue
 
                 ok_result = transition(prev, parsed)
-                target_states[target.name] = ok_result.state
-                save_target_state(state_dir, ok_result.state)
+                if (
+                    direct_meta is not None
+                    and direct_meta.unknown_formats
+                    and cfg.direct_api.alert_unknown_formats
+                ):
+                    ok_result.events.append(Event.DIRECT_API_UNKNOWN_FORMATS)
+                ok_state = _apply_direct_api_meta(ok_result.state, direct_meta)
+                if (
+                    direct_meta is not None
+                    and direct_meta.used_browser_fallback
+                    and ok_state.direct_api_fallback_count >= ERROR_STREAK_THRESHOLD
+                ):
+                    ok_result.events.append(Event.DIRECT_API_FAILURE_STREAK)
+                target_states[target.name] = ok_state
+                save_target_state(state_dir, ok_state)
                 _emit_events(
                     notify_impl,
                     result=ok_result,

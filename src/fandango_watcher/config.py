@@ -46,6 +46,11 @@ class TargetConfig(ConfigBase):
     format_filter_click_selector: str | None = None
     format_filter_click_label: str | None = None
     format_filter_click_timeout_ms: int = Field(default=12000, ge=1000, le=120000)
+    # Optional direct-API matching overrides. If unset, movies[] registry values
+    # and top-level formats are used.
+    direct_api_movie_id: int | None = None
+    direct_api_movie_title: str | None = None
+    direct_api_formats: list[FormatTag] = Field(default_factory=list)
 
     @field_validator("format_filter_click_selector", "format_filter_click_label", mode="before")
     @classmethod
@@ -65,6 +70,25 @@ class FormatsConfig(ConfigBase):
     include: list[FormatTag] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+
+class DirectApiConfig(ConfigBase):
+    """Direct Fandango JSON API detection.
+
+    This is the fast path for release detection. Browser crawling remains the
+    fallback for private-API drift and is still required for login/purchase.
+    """
+
+    enabled: bool = True
+    fallback_to_browser: bool = True
+    theater_id: str = "AAAWX"
+    chain_code: str = "AMC"
+    zip_code: str = "91608"
+    base_url: str = "https://www.fandango.com"
+    timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    max_dates_per_tick: int = Field(default=90, ge=1, le=365)
+    stop_on_first_match: bool = True
+    alert_unknown_formats: bool = True
 
 
 class PollConfig(ConfigBase):
@@ -294,6 +318,7 @@ class MovieConfig(ConfigBase):
 
     key: str = Field(min_length=1)
     title: str = Field(min_length=1)
+    fandango_movie_id: int | None = None
     fandango_targets: list[str] = Field(default_factory=list)
     preferred_formats: list[FormatTag] = Field(default_factory=list)
     x_handles: list[str] = Field(default_factory=list)
@@ -359,6 +384,7 @@ class WatcherConfig(ConfigBase):
     targets: list[TargetConfig] = Field(min_length=1)
     theater: TheaterConfig
     formats: FormatsConfig
+    direct_api: DirectApiConfig = Field(default_factory=DirectApiConfig)
     poll: PollConfig
     signal: SignalConfig = Field(default_factory=SignalConfig)
     purchase: PurchaseConfig

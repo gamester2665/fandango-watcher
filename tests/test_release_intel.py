@@ -1,3 +1,4 @@
+# mypy: disable-error-code="arg-type,unused-ignore"
 """Tests for src/fandango_watcher/release_intel.py."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# mypy: disable-error-code="unused-ignore,attr-defined"
 """Static tests for Dockerfile, docker-compose.yml, .dockerignore, .gitignore.
 
 We can't (and shouldn't) run `docker build` inside pytest, but we can assert

@@ -1,3 +1,4 @@
+# mypy: disable-error-code="arg-type,unused-ignore,dict-item"
 """Tests for ``fandango_watcher.cli`` (package under ``src/fandango_watcher/cli/``).
 
 Covers:
@@ -79,6 +80,7 @@ class TestBuildParser:
             "once",
             "watch",
             "dashboard",
+            "api-drift",
             "login",
             "test-notify",
             "test-purchase",
@@ -88,6 +90,97 @@ class TestBuildParser:
             "dump-review",
             "doctor",
         }
+
+    def test_api_drift_accepts_expected_flags(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(
+            [
+                "api-drift",
+                "--config",
+                "foo.yaml",
+                "--max-dates",
+                "3",
+                "--output",
+                "json",
+            ]
+        )
+        assert ns.command == "api-drift"
+        assert ns.config == "foo.yaml"
+        assert ns.max_dates == 3
+        assert ns.output == "json"
+
+
+class TestApiDriftCommand:
+    def test_api_drift_prints_json_with_mocked_client(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg_path = tmp_path / "cfg.yaml"
+        cfg_path.write_text(
+            """
+targets:
+  - name: t1
+    url: https://example.com/m
+theater:
+  display_name: CW
+  fandango_theater_anchor: AMC Universal CityWalk
+formats:
+  require: []
+  include: []
+direct_api:
+  theater_id: AAAWX
+poll:
+  min_seconds: 30
+  max_seconds: 30
+purchase:
+  enabled: false
+  mode: notify_only
+notify:
+  channels: []
+  on_events: []
+""",
+            encoding="utf-8",
+        )
+
+        class FakeClient:
+            def __init__(self, **_kwargs: Any) -> None:
+                pass
+
+            def __enter__(self) -> FakeClient:
+                return self
+
+            def __exit__(self, *_exc_info: object) -> None:
+                pass
+
+        def fake_drift_check(_client: FakeClient, *, max_dates: int) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "inspected_dates": ["2026-04-28"][:max_dates],
+                "format_names_seen": ["IMAX"],
+                "calendar_date_count": 1,
+            }
+
+        monkeypatch.setattr("fandango_watcher.fandango_api.FandangoApiClient", FakeClient)
+        monkeypatch.setattr("fandango_watcher.fandango_api.drift_check", fake_drift_check)
+
+        rc = cli.main(
+            [
+                "api-drift",
+                "--config",
+                str(cfg_path),
+                "--max-dates",
+                "1",
+                "--output",
+                "json",
+            ]
+        )
+
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["ok"] is True
+        assert out["format_names_seen"] == ["IMAX"]
 
     def test_once_accepts_expected_flags(self) -> None:
         parser = cli.build_parser()
@@ -482,13 +575,20 @@ class TestOnceViaExampleConfig:
 
         captured: dict[str, Any] = {}
 
-        def fake_crawl(target, *, browser_cfg, citywalk_anchor, screenshot_dir):  # type: ignore[no-untyped-def]
+        def fake_direct(target, cfg):  # type: ignore[no-untyped-def]
+            from types import SimpleNamespace
+
+            from fandango_watcher.direct_api_detect import DirectApiDetectionMeta
+
             captured["target_name"] = target.name
             captured["target_url"] = target.url
-            captured["citywalk_anchor"] = citywalk_anchor
-            return _make_stub_result()
+            captured["citywalk_anchor"] = cfg.theater.fandango_theater_anchor
+            return SimpleNamespace(
+                parsed=_make_stub_result(),
+                meta=DirectApiDetectionMeta(inspected_dates=["2026-04-28"]),
+            )
 
-        monkeypatch.setattr("fandango_watcher.watcher.crawl_target", fake_crawl)
+        monkeypatch.setattr("fandango_watcher.direct_api_detect.detect_target_direct_api", fake_direct)
 
         rc = cli.main(
             [
@@ -614,6 +714,8 @@ state:
 browser:
   headless: true
   user_data_dir: {repr(str(tmp_path / "profile"))}
+direct_api:
+  enabled: false
 """
         cfg_path = tmp_path / "cfg.yaml"
         cfg_path.write_text(cfg_text, encoding="utf-8")

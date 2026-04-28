@@ -1,3 +1,4 @@
+# mypy: disable-error-code=arg-type
 """Tests for src/fandango_watcher/social_x.py.
 
 Covers:
@@ -34,6 +35,7 @@ from fandango_watcher.loop import build_social_x_notification
 from fandango_watcher.social_x import (
     SocialXState,
     XSignalMatch,
+    analyze_ticket_announcement,
     check_x_signals,
     load_social_x_state,
     match_tweet,
@@ -64,6 +66,36 @@ class TestMatchTweet:
 
     def test_no_match_returns_empty(self) -> None:
         assert match_tweet("just a trailer drop", ["tickets", "presale"]) == []
+
+
+class TestAnalyzeTicketAnnouncement:
+    def test_detects_tickets_on_sale(self) -> None:
+        got = analyze_ticket_announcement("Tickets for The Odyssey are on sale now!")
+        assert got["announces_tickets"] is True
+        assert got["status"] == "available"
+        assert got["confidence"] == "high"
+        assert "on sale now" in got["matched_phrases"]
+
+    def test_detects_ticket_timing_hint(self) -> None:
+        got = analyze_ticket_announcement("Tickets drop this Friday.")
+        assert got["announces_tickets"] is True
+        assert got["status"] == "soon"
+        assert got["confidence"] == "medium"
+
+    def test_ticket_mention_without_availability_is_not_announcement(self) -> None:
+        got = analyze_ticket_announcement("A ticket stub appears in the new poster.")
+        assert got["announces_tickets"] is False
+        assert got["status"] == "mentions_tickets"
+
+    def test_negative_availability_is_not_announcement(self) -> None:
+        got = analyze_ticket_announcement("Tickets are not on sale now.")
+        assert got["announces_tickets"] is False
+        assert got["status"] == "not_available"
+
+    def test_avoids_substring_false_positive(self) -> None:
+        got = analyze_ticket_announcement("The Matrix returns to theaters.")
+        assert got["announces_tickets"] is False
+        assert got["matched_phrases"] == []
 
 
 # -----------------------------------------------------------------------------
@@ -220,6 +252,9 @@ class TestCheckXSignals:
         assert imax_hs.last_seen_tweet_id == "10"
         assert imax_hs.last_seen_tweet_text == "tickets on sale!"
         assert imax_hs.last_seen_tweet_created_at == "t1"
+        assert imax_hs.last_seen_ticket_analysis is not None
+        assert imax_hs.last_seen_ticket_analysis["announces_tickets"] is True
+        assert imax_hs.last_seen_ticket_analysis["status"] == "available"
 
         # Second poll: with since_id=10, the stub returns nothing new.
         client.tweet_calls.clear()
@@ -259,6 +294,11 @@ class TestCheckXSignals:
         assert rstate.handles["imax"].last_seen_tweet_created_at == (
             "2026-01-01T00:00:00.000Z"
         )
+        assert rstate.handles["imax"].last_seen_ticket_analysis is not None
+        assert (
+            rstate.handles["imax"].last_seen_ticket_analysis["announces_tickets"]
+            is False
+        )
         assert client.get_tweet_calls == ["10"]
 
     def test_no_keywords_means_no_matches_even_on_new_tweets(
@@ -281,6 +321,8 @@ class TestCheckXSignals:
         rstate = load_social_x_state(tmp_path)
         assert rstate.handles["imax"].last_seen_tweet_text == "trailer"
         assert rstate.handles["imax"].last_seen_tweet_id == "1"
+        assert rstate.handles["imax"].last_seen_ticket_analysis is not None
+        assert rstate.handles["imax"].last_seen_ticket_analysis["status"] == "not_announcement"
 
     def test_handle_failure_isolated(self, tmp_path: Path) -> None:
         client = _StubXClient(

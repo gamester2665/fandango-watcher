@@ -1,3 +1,4 @@
+# mypy: disable-error-code="misc,str-bytes-safe"
 """Integration: ``crawl_target`` against a minimal static HTML page over HTTP.
 
 Uses a local ``ThreadingHTTPServer`` (no Fandango network). Exercises the

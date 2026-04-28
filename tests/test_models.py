@@ -1,3 +1,4 @@
+# mypy: disable-error-code=arg-type
 """Tests for src/fandango_watcher/models.py.
 
 These tests lock in the behavior of the Pydantic schemas that the rest of the
@@ -42,6 +43,7 @@ class TestFormatTag:
         assert values == {
             "IMAX",
             "IMAX_70MM",
+            "THREE_D",
             "SEVENTY_MM",
             "DOLBY",
             "LASER_RECLINER",

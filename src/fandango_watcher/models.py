@@ -22,6 +22,7 @@ class WatchStatus(StrEnum):
 class FormatTag(StrEnum):
     IMAX = "IMAX"
     IMAX_70MM = "IMAX_70MM"
+    THREE_D = "THREE_D"
     SEVENTY_MM = "SEVENTY_MM"
     DOLBY = "DOLBY"
     LASER_RECLINER = "LASER_RECLINER"

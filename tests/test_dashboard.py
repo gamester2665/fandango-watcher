@@ -84,6 +84,10 @@ def test_collect_dashboard_state_roundtrip(tmp_path: Path) -> None:
                 "current_state": "watching",
                 "last_release_schema": "not_on_sale",
                 "total_ticks": 3,
+                "direct_api_last_status": "ok",
+                "direct_api_last_inspected_dates": ["2026-04-28"],
+                "direct_api_last_formats_seen": ["IMAX"],
+                "direct_api_last_unknown_formats": ["MYSTERY FORMAT"],
             }
         ),
         encoding="utf-8",
@@ -104,6 +108,9 @@ def test_collect_dashboard_state_roundtrip(tmp_path: Path) -> None:
     t0 = snap["targets"][0]
     assert t0["name"] == "alpha"
     assert t0["state"]["total_ticks"] == 3
+    assert t0["direct_api"]["status"] == "ok"
+    assert t0["direct_api"]["inspected_dates"] == ["2026-04-28"]
+    assert snap["runtime"]["direct_api"]["enabled"] is True
     assert t0["latest_screenshot_url"] is not None
     assert t0["latest_screenshot_url"].startswith("/artifacts/")
 
@@ -283,6 +290,14 @@ def test_x_poller_section_prioritizes_snapshot_table_over_detail_cards() -> None
                     "handle": "testacct",
                     "user_id": "9",
                     "last_seen_tweet_id": "1",
+                    "last_seen_tweet_text": "Tickets are on sale now",
+                    "last_seen_ticket_analysis": {
+                        "announces_tickets": True,
+                        "status": "available",
+                        "confidence": "high",
+                        "matched_phrases": ["on sale now"],
+                        "reason": "ticket availability language found",
+                    },
                     "last_polled_at": "2026-01-01T00:00:00Z",
                     "consecutive_errors": 0,
                 }
@@ -303,6 +318,9 @@ def test_x_poller_section_prioritizes_snapshot_table_over_detail_cards() -> None
     html_out = render_index_html(snap, refresh_seconds=0)
     assert 'id="x" aria-label="X / Twitter poller">' in html_out
     assert "tweet text (preview)" in html_out
+    assert "ticket analysis" in html_out
+    assert "available" in html_out
+    assert "ticket availability language found" in html_out
     assert "sx-snapshot" in html_out
     assert "Per-handle details" in html_out
     assert re.search(

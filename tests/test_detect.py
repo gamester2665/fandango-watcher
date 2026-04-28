@@ -52,6 +52,8 @@ class TestNormalizeFormatLabel:
             ("IMAX 70 MM", FormatTag.IMAX_70MM),
             ("IMAX", FormatTag.IMAX),
             ("IMAX Digital", FormatTag.IMAX),
+            ("3D", FormatTag.THREE_D),
+            ("RealD 3D", FormatTag.THREE_D),
             ("70MM", FormatTag.SEVENTY_MM),
             ("70 MM", FormatTag.SEVENTY_MM),
             ("Dolby Cinema at AMC", FormatTag.DOLBY),

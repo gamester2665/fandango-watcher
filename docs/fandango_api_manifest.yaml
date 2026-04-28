@@ -1,0 +1,80 @@
+fandango_direct_api:
+  status: private_observed_contract
+  observed_at: "2026-04-28"
+  base_url: "https://www.fandango.com"
+  citywalk:
+    theater_id_upper: "AAAWX"
+    theater_id_lower: "aaawx"
+    chain_code: "AMC"
+    zip_code: "91608"
+    source_page: "https://www.fandango.com/universal-cinema-amc-at-citywalk-hollywood-aaawx/theater-page?format=all"
+  endpoints:
+    calendar: "/napi/theaterCalendar/{theater_id_lower}"
+    showtimes: "/napi/theaterMovieShowtimes/{theater_id_upper}?chainCode={chain_code}&startDate={date}&isdesktop=true&partnerRestrictedTicketing="
+    nearby_theaters: "/napi/nearbyTheaters?limit={limit}&zipCode={zip_code}"
+  primary_json_pointers:
+    date_list: "/showtimeDates"
+    showtime_payload: "/viewModel"
+    date_formats: "/viewModel/formats"
+    movies: "/viewModel/movies"
+    movie_variants: "/viewModel/movies/*/variants"
+    amenity_groups: "/viewModel/movies/*/variants/*/amenityGroups"
+    showtimes: "/viewModel/movies/*/variants/*/amenityGroups/*/showtimes"
+    showtime_formats: "/viewModel/movies/*/variants/*/amenityGroups/*/showtimes/*/filmFormat"
+    showtime_filter_name: "/viewModel/movies/*/variants/*/amenityGroups/*/showtimes/*/filmFormat/*/filterName"
+    ticket_url: "/viewModel/movies/*/variants/*/amenityGroups/*/showtimes/*/ticketingJumpPageURL"
+  observed_format_values:
+    ui_sentinel:
+      - all
+    api_filter_names:
+      - IMAX
+      - 3D
+      - IMAX 70MM
+    standard_rule: "filmFormat == [] means STANDARD"
+  format_tag_mapping:
+    IMAX: IMAX
+    "IMAX 70MM": IMAX_70MM
+    "3D": THREE_D
+    "RealD 3D": THREE_D
+    "70MM": SEVENTY_MM
+    "Dolby": DOLBY
+    "Laser at AMC": LASER_RECLINER
+    "": STANDARD
+    unknown: OTHER
+  tested_ineffective_showtimes_query_params:
+    - "format=IMAX"
+    - "format=3D"
+    - "format=all"
+    - "filter=IMAX"
+    - "filmFormat=IMAX"
+  buyable_showtime_rule:
+    require_ticketingJumpPageURL: true
+    require_expired_false: true
+    accepted_type_values:
+      - available
+  watcher_integration:
+    primary_detector_when_enabled: true
+    config_block: direct_api
+    fallback: Playwright browser crawl when direct_api.fallback_to_browser is true
+    scan_limit_key: direct_api.max_dates_per_tick
+    stop_early_key: direct_api.stop_on_first_match
+    matching_priority:
+      - targets[].direct_api_movie_id
+      - targets[].direct_api_movie_title
+      - targets[].direct_api_formats
+      - movies[].fandango_movie_id
+      - movies[].title
+      - movies[].preferred_formats
+      - formats.require
+      - formats.include
+    persisted_state_fields:
+      - direct_api_last_status
+      - direct_api_last_used
+      - direct_api_last_fallback
+      - direct_api_last_inspected_dates
+      - direct_api_last_formats_seen
+      - direct_api_last_unknown_formats
+      - direct_api_last_matching_hashes
+      - direct_api_fallback_count
+      - direct_api_last_drift_warning
+    drift_command: "fandango-watcher api-drift --max-dates 3"

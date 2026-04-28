@@ -1,3 +1,4 @@
+# mypy: disable-error-code=arg-type
 """Unit tests for ``src/fandango_watcher/purchaser.py`` (no Playwright)."""
 
 from __future__ import annotations

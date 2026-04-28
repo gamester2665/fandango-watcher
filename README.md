@@ -38,6 +38,30 @@ phased checklist.
 
 ---
 
+## Direct Fandango API Notes
+
+The watcher now uses the observed direct JSON API as the first ticket-drop
+detection path for configured `once`/`watch` targets. It scans CityWalk calendar
+dates, filters by movie id/title and preferred formats from `movies:`, persists
+API health/format metadata, and falls back to Playwright when the private API
+errors or drifts.
+
+- Human/tool spec: [`docs/fandango_api_direct_spec.md`](./docs/fandango_api_direct_spec.md)
+- Machine-readable manifest: [`docs/fandango_api_manifest.yaml`](./docs/fandango_api_manifest.yaml)
+- Parser/client module: `src/fandango_watcher/fandango_api.py`
+- Watch adapter: `src/fandango_watcher/direct_api_detect.py`
+- Deterministic fixtures: `tests/fixtures/fandango_api/`
+
+The direct API is private and observed, not official. Browser automation remains
+the fallback and is still required for login and checkout. To manually check for
+live endpoint drift:
+
+```bash
+uv run fandango-watcher api-drift --max-dates 3
+```
+
+---
+
 ## VPS / production (manual)
 
 There is no bundled CI. Deploy by building the Docker image (or installing with `uv` on the host), copying `config.yaml` and a populated `.env`, and running `watch` (or `docker compose` as in the repo). Verify the process with `GET http://127.0.0.1:8787/healthz` (or your bound host/port) and optional `GET /metrics` for heartbeat counters. The read-only dashboard on `/` exposes `/api/status`, `/api/purchases` (tail of `state/purchases.jsonl`), and `/api/revision` for live reload.

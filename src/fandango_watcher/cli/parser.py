@@ -217,6 +217,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # -- api-drift ----------------------------------------------------------
+    p_api = subparsers.add_parser(
+        "api-drift",
+        help="Run an opt-in live drift check against the direct Fandango API.",
+    )
+    p_api.add_argument("--config", default=None)
+    p_api.add_argument(
+        "--max-dates",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Maximum theaterCalendar dates to inspect (default: 3).",
+    )
+    p_api.add_argument(
+        "--output",
+        choices=["json", "text"],
+        default="text",
+        help="Output format (default: text).",
+    )
+
     # -- login --------------------------------------------------------------
     p_login = subparsers.add_parser(
         "login",

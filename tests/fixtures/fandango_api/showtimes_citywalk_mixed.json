@@ -1,0 +1,219 @@
+{
+  "viewModel": {
+    "date": "2026-04-28",
+    "formats": [
+      "IMAX",
+      "3D",
+      "IMAX 70MM",
+      "MYSTERY FORMAT"
+    ],
+    "theater": {
+      "isTicketing": true,
+      "details": {
+        "id": "AAAWX",
+        "formattedID": "aaawx",
+        "chainCode": "AMC",
+        "name": "Universal Cinema AMC at CityWalk Hollywood",
+        "theaterPageUrl": "/universal-cinema-amc-at-citywalk-hollywood-aaawx/theater-page",
+        "hasShowtimes": true,
+        "isTicketing": true
+      }
+    },
+    "movies": [
+      {
+        "id": 244794,
+        "title": "Busboys (2026)",
+        "variants": [
+          {
+            "filmFormatHeader": "Standard",
+            "filmFormatHeaderClassName": "shared-showtimes__title-header--standard",
+            "amenityGroupClassName": "shared-showtimes__amenity-group-card--standard",
+            "amenityGroups": [
+              {
+                "movieVariantId": 244794,
+                "amenityString": "Recliner Seats, Laser at AMC, Reserved seating",
+                "hasReservedSeating": true,
+                "isDolby": false,
+                "showtimes": [
+                  {
+                    "date": "10:00p",
+                    "expired": false,
+                    "showtimeHashCode": "v2-standard",
+                    "screenReaderTime": "10 o'clock PM",
+                    "ticketingDate": "2026-04-28+22:00",
+                    "type": "available",
+                    "filmFormat": [],
+                    "ticketingJumpPageURL": "https://tickets.fandango.com/transaction/ticketing/mobile/jump.aspx?sdate=2026-04-28%2B22%3A00&from=mov_det_showtimes&source=desktop&mid=244794&tid=AAAWX&dfam=webbrowser&showtimehashcode=v2-standard"
+                  },
+                  {
+                    "date": "11:00p",
+                    "expired": true,
+                    "showtimeHashCode": "v2-expired",
+                    "screenReaderTime": "11:00 PM",
+                    "ticketingDate": "2026-04-28+23:00",
+                    "type": "available",
+                    "filmFormat": [],
+                    "ticketingJumpPageURL": "https://tickets.fandango.com/transaction/ticketing/mobile/jump.aspx?sdate=2026-04-28%2B23%3A00&from=mov_det_showtimes&source=desktop&mid=244794&tid=AAAWX&dfam=webbrowser&showtimehashcode=v2-expired"
+                  },
+                  {
+                    "date": "11:30p",
+                    "expired": false,
+                    "showtimeHashCode": "v2-missing-url",
+                    "screenReaderTime": "11:30 PM",
+                    "ticketingDate": "2026-04-28+23:30",
+                    "type": "available",
+                    "filmFormat": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 244541,
+        "title": "Michael (2026)",
+        "variants": [
+          {
+            "filmFormatHeader": "Premium Format",
+            "filmFormatHeaderClassName": "shared-showtimes__title-header--premium-experience",
+            "amenityGroupClassName": "shared-showtimes__amenity-group-card--premium-experience",
+            "amenityGroups": [
+              {
+                "movieVariantId": 244541,
+                "amenityString": "Closed caption, Accessibility devices available, IMAX with Laser, Reserved seating",
+                "hasReservedSeating": true,
+                "isDolby": false,
+                "showtimes": [
+                  {
+                    "date": "6:30p",
+                    "expired": false,
+                    "showtimeHashCode": "v2-imax",
+                    "screenReaderTime": "6:30 PM",
+                    "ticketingDate": "2026-04-28+18:30",
+                    "type": "available",
+                    "filmFormat": [
+                      {
+                        "filterName": "IMAX",
+                        "order": 2
+                      }
+                    ],
+                    "ticketingJumpPageURL": "https://tickets.fandango.com/transaction/ticketing/mobile/jump.aspx?sdate=2026-04-28%2B18%3A30&from=mov_det_showtimes&source=desktop&mid=244541&tid=AAAWX&dfam=webbrowser&showtimehashcode=v2-imax"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 241283,
+        "title": "The Odyssey (2026)",
+        "variants": [
+          {
+            "filmFormatHeader": "Premium Format",
+            "filmFormatHeaderClassName": "shared-showtimes__title-header--premium-experience",
+            "amenityGroupClassName": "shared-showtimes__amenity-group-card--premium-experience",
+            "amenityGroups": [
+              {
+                "movieVariantId": 241283,
+                "amenityString": "IMAX 70MM, Reserved seating",
+                "hasReservedSeating": true,
+                "isDolby": false,
+                "showtimes": [
+                  {
+                    "date": "7:00p",
+                    "expired": false,
+                    "showtimeHashCode": "v2-imax70mm",
+                    "screenReaderTime": "7:00 PM",
+                    "ticketingDate": "2026-04-28+19:00",
+                    "type": "available",
+                    "filmFormat": [
+                      {
+                        "filterName": "IMAX 70MM",
+                        "order": 1
+                      }
+                    ],
+                    "ticketingJumpPageURL": "https://tickets.fandango.com/transaction/ticketing/mobile/jump.aspx?sdate=2026-04-28%2B19%3A00&from=mov_det_showtimes&source=desktop&mid=241283&tid=AAAWX&dfam=webbrowser&showtimehashcode=v2-imax70mm"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 244579,
+        "title": "The Super Mario Galaxy Movie (2026)",
+        "variants": [
+          {
+            "filmFormatHeader": "3D",
+            "filmFormatHeaderClassName": "shared-showtimes__title-header--3d",
+            "amenityGroupClassName": "shared-showtimes__amenity-group-card--3d",
+            "amenityGroups": [
+              {
+                "movieVariantId": 244579,
+                "amenityString": "RealD 3D, Recliner Seats, Laser at AMC, Reserved seating",
+                "hasReservedSeating": true,
+                "isDolby": false,
+                "showtimes": [
+                  {
+                    "date": "5:20p",
+                    "expired": false,
+                    "showtimeHashCode": "v2-3d",
+                    "screenReaderTime": "5:20 PM",
+                    "ticketingDate": "2026-04-28+17:20",
+                    "type": "available",
+                    "filmFormat": [
+                      {
+                        "filterName": "3D",
+                        "order": 7
+                      }
+                    ],
+                    "ticketingJumpPageURL": "https://tickets.fandango.com/transaction/ticketing/mobile/jump.aspx?sdate=2026-04-28%2B17%3A20&from=mov_det_showtimes&source=desktop&mid=244579&tid=AAAWX&dfam=webbrowser&showtimehashcode=v2-3d"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 245999,
+        "title": "Unknown Format Movie (2026)",
+        "variants": [
+          {
+            "filmFormatHeader": "Premium Format",
+            "filmFormatHeaderClassName": "shared-showtimes__title-header--premium-experience",
+            "amenityGroupClassName": "shared-showtimes__amenity-group-card--premium-experience",
+            "amenityGroups": [
+              {
+                "movieVariantId": 245999,
+                "amenityString": "MYSTERY FORMAT, Reserved seating",
+                "hasReservedSeating": true,
+                "isDolby": false,
+                "showtimes": [
+                  {
+                    "date": "9:45p",
+                    "expired": false,
+                    "showtimeHashCode": "v2-unknown-format",
+                    "screenReaderTime": "9:45 PM",
+                    "ticketingDate": "2026-04-28+21:45",
+                    "type": "available",
+                    "filmFormat": [
+                      {
+                        "filterName": "MYSTERY FORMAT",
+                        "order": 99
+                      }
+                    ],
+                    "ticketingJumpPageURL": "https://tickets.fandango.com/transaction/ticketing/mobile/jump.aspx?sdate=2026-04-28%2B21%3A45&from=mov_det_showtimes&source=desktop&mid=245999&tid=AAAWX&dfam=webbrowser&showtimehashcode=v2-unknown-format"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

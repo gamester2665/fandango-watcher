@@ -43,6 +43,8 @@ class WatcherState(StrEnum):
 class Event:
     RELEASE_TRANSITION_BAD_TO_GOOD: ClassVar[str] = "release_transition_bad_to_good"
     WATCHER_STUCK_ON_ERROR_STREAK: ClassVar[str] = "watcher_stuck_on_error_streak"
+    DIRECT_API_UNKNOWN_FORMATS: ClassVar[str] = "direct_api_unknown_formats"
+    DIRECT_API_FAILURE_STREAK: ClassVar[str] = "direct_api_failure_streak"
     PURCHASE_SUCCEEDED: ClassVar[str] = "purchase_succeeded"
     PURCHASE_HALTED_INVARIANT: ClassVar[str] = "purchase_halted_invariant"
     PURCHASE_HALTED_PREFERRED_SOLD_OUT: ClassVar[str] = (
@@ -73,6 +75,15 @@ class TargetState(BaseModel):
     consecutive_successes: int = Field(default=0, ge=0)
     total_ticks: int = Field(default=0, ge=0)
     total_errors: int = Field(default=0, ge=0)
+    direct_api_last_status: str | None = None
+    direct_api_last_used: bool = False
+    direct_api_last_fallback: bool = False
+    direct_api_last_inspected_dates: list[str] = Field(default_factory=list)
+    direct_api_last_formats_seen: list[str] = Field(default_factory=list)
+    direct_api_last_unknown_formats: list[str] = Field(default_factory=list)
+    direct_api_last_matching_hashes: list[str] = Field(default_factory=list)
+    direct_api_fallback_count: int = Field(default=0, ge=0)
+    direct_api_last_drift_warning: str | None = None
 
 
 class TransitionResult(BaseModel):

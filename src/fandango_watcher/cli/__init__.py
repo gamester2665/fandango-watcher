@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from .commands import (
+    _run_api_drift,
     _run_dashboard,
     _run_doctor,
     _run_dump_review,
@@ -58,6 +59,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_watch(args)
     if args.command == "dashboard":
         return _run_dashboard(args)
+    if args.command == "api-drift":
+        return _run_api_drift(args)
     if args.command == "test-notify":
         return _run_test_notify(args)
     if args.command == "login":

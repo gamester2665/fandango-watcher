@@ -1,3 +1,4 @@
+# mypy: disable-error-code="unused-ignore,attr-defined,operator,index"
 """Tests for config.example.yaml.
 
 The example config is the entry point for every user of this project, so it

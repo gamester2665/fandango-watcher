@@ -3,6 +3,7 @@
 See ``tests/fixtures/rescue/README.md`` and ``example_failure_reasons.json``.
 """
 
+# mypy: disable-error-code=arg-type
 from __future__ import annotations
 
 import json

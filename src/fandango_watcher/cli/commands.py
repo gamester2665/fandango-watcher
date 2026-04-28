@@ -141,19 +141,57 @@ def _run_once(args: argparse.Namespace) -> int:
         )
         cfg_for_state = cfg
 
-    logger.info(
-        "crawling target=%s url=%s headless=%s",
-        target.name,
-        target.url,
-        browser_cfg.headless,
+    direct_meta = None
+    has_format_filter_override = (
+        args.format_filter_selector is not None
+        or args.format_filter_label is not None
+        or args.format_filter_timeout_ms is not None
     )
+    if (
+        cfg_for_state is not None
+        and cfg_for_state.direct_api.enabled
+        and not has_format_filter_override
+    ):
+        from ..direct_api_detect import detect_target_direct_api
 
-    result = crawl_target(
-        target,
-        browser_cfg=browser_cfg,
-        citywalk_anchor=citywalk_anchor,
-        screenshot_dir=screenshot_dir,
-    )
+        try:
+            logger.info("direct API detection target=%s url=%s", target.name, target.url)
+            direct_result = detect_target_direct_api(target, cfg_for_state)
+            result = direct_result.parsed
+            direct_meta = direct_result.meta
+        except Exception:
+            if not cfg_for_state.direct_api.fallback_to_browser:
+                raise
+            logger.warning(
+                "direct API detection failed; falling back to browser target=%s",
+                target.name,
+                exc_info=True,
+            )
+            logger.info(
+                "crawling target=%s url=%s headless=%s",
+                target.name,
+                target.url,
+                browser_cfg.headless,
+            )
+            result = crawl_target(
+                target,
+                browser_cfg=browser_cfg,
+                citywalk_anchor=citywalk_anchor,
+                screenshot_dir=screenshot_dir,
+            )
+    else:
+        logger.info(
+            "crawling target=%s url=%s headless=%s",
+            target.name,
+            target.url,
+            browser_cfg.headless,
+        )
+        result = crawl_target(
+            target,
+            browser_cfg=browser_cfg,
+            citywalk_anchor=citywalk_anchor,
+            screenshot_dir=screenshot_dir,
+        )
 
     if args.write_state:
         from ..state import load_target_state, save_target_state, transition
@@ -162,7 +200,22 @@ def _run_once(args: argparse.Namespace) -> int:
         state_dir = Path(cfg_for_state.state.dir)
         prev = load_target_state(state_dir, target.name)
         tr = transition(prev, result)
-        written = save_target_state(state_dir, tr.state)
+        state = tr.state
+        if direct_meta is not None:
+            state = state.model_copy(
+                update={
+                    "direct_api_last_status": direct_meta.status,
+                    "direct_api_last_used": direct_meta.used_direct_api,
+                    "direct_api_last_fallback": direct_meta.used_browser_fallback,
+                    "direct_api_last_inspected_dates": direct_meta.inspected_dates,
+                    "direct_api_last_formats_seen": direct_meta.formats_seen,
+                    "direct_api_last_unknown_formats": direct_meta.unknown_formats,
+                    "direct_api_last_matching_hashes": direct_meta.matching_showtime_hashes,
+                    "direct_api_last_drift_warning": direct_meta.drift_warning,
+                }
+            )
+            tr = tr.model_copy(update={"state": state})
+        written = save_target_state(state_dir, state)
         out: dict[str, Any] = {
             "parsed": result.model_dump(mode="json"),
             "state_write": {
@@ -312,6 +365,41 @@ def _run_dashboard(args: argparse.Namespace) -> int:
     except Exception:  # noqa: BLE001
         logger.exception("error stopping dashboard server")
     return 0
+
+
+def _run_api_drift(args: argparse.Namespace) -> int:
+    from ..fandango_api import FandangoApiClient, drift_check
+
+    config_path = _resolve_config_path(args.config)
+    if not config_path.is_file():
+        print(f"error: config file not found: {config_path}", file=sys.stderr)
+        return 1
+
+    cfg = load_config(config_path)
+    with FandangoApiClient(
+        base_url=cfg.direct_api.base_url,
+        theater_id=cfg.direct_api.theater_id,
+        chain_code=cfg.direct_api.chain_code,
+        timeout=cfg.direct_api.timeout_seconds,
+    ) as client:
+        report = drift_check(client, max_dates=args.max_dates)
+
+    if args.output == "json":
+        json.dump(report, sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+    else:
+        print(f"Direct API drift check: {'ok' if report.get('ok') else 'failed'}")
+        print(f"Calendar dates: {report.get('calendar_date_count', 0)}")
+        print("Inspected dates: " + ", ".join(report.get("inspected_dates") or []))
+        formats = report.get("format_names_seen") or []
+        print("Formats seen: " + (", ".join(str(x) for x in formats) or "none"))
+        print("Showtime counts:")
+        counts = report.get("showtime_count_by_date") or {}
+        buyable_counts = report.get("buyable_count_by_date") or {}
+        for showtime_date, count in counts.items():
+            buyable = buyable_counts.get(showtime_date)
+            print(f"  {showtime_date}: {count} showtimes, {buyable} buyable")
+    return 0 if report.get("ok") else 1
 
 
 def _run_test_notify(args: argparse.Namespace) -> int:

@@ -1,3 +1,4 @@
+# mypy: disable-error-code=arg-type
 """Golden test — the Python ``$0.00`` invariant gates the final click
 even when the agent fallback claims SUCCEEDED.
 

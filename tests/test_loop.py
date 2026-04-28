@@ -1,3 +1,4 @@
+# mypy: disable-error-code="arg-type,unused-ignore,return-value"
 """Tests for src/fandango_watcher/loop.py.
 
 Drives ``run_watch`` with a fake crawl function, a capturing notifier, and
@@ -215,6 +216,42 @@ class TestRunWatchHappyPath:
         assert persisted.last_release_schema == ReleaseSchema.PARTIAL_RELEASE
         assert persisted.consecutive_successes == 2
         assert persisted.total_ticks == 2
+
+    def test_direct_api_failure_falls_back_to_browser_and_persists_meta(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _minimal_cfg(tmp_path)
+        settings = _settings()
+        state_dir = tmp_path / "state"
+
+        def fail_direct(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("api drift")
+
+        def fake_browser(*_args: Any, **_kwargs: Any) -> PartialReleasePageData:
+            return _parsed_partial()
+
+        monkeypatch.setattr("fandango_watcher.loop.detect_target_direct_api", fail_direct)
+        monkeypatch.setattr("fandango_watcher.loop.crawl_target", fake_browser)
+
+        rc = run_watch(
+            cfg,
+            settings,
+            state_dir=state_dir,
+            screenshot_dir=None,
+            notifier=_fanout(_CapturingNotifier()),
+            healthz_port=None,
+            sleep_fn=lambda _s: None,
+            max_ticks=1,
+        )
+
+        assert rc == 0
+        persisted = load_target_state(state_dir, "odyssey")
+        assert persisted.last_release_schema == ReleaseSchema.PARTIAL_RELEASE
+        assert persisted.direct_api_last_fallback is True
+        assert persisted.direct_api_fallback_count == 1
+        assert persisted.direct_api_last_status == "fallback"
 
     def test_events_not_in_on_events_are_dropped(self, tmp_path: Path) -> None:
         cfg = _minimal_cfg(tmp_path)

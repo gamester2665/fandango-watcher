@@ -1,3 +1,4 @@
+# mypy: disable-error-code=unused-ignore
 """Tests for ``src/fandango_watcher/login.py``.
 
 We never launch a real browser. All Playwright surface is replaced by a

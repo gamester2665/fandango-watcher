@@ -22,6 +22,9 @@ targets:
     url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview?format=IMAX%2070MM
     wait_until: domcontentloaded
     timeout_ms: 30000
+    # Optional direct-API overrides; usually movies[].fandango_movie_id/title is enough.
+    # direct_api_movie_id: 241283
+    # direct_api_formats: [IMAX_70MM]
 
   - name: odyssey-overview
     url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview
@@ -48,6 +51,23 @@ formats:
   require: [IMAX, IMAX_70MM]
   # Also auto-purchase if these drop; no separate alert scheduling.
   include: [DOLBY, LASER_RECLINER]
+
+# -----------------------------------------------------------------------------
+# Direct Fandango API detection. Enabled by default: each watch tick first checks
+# Fandango's JSON endpoints for CityWalk showtimes matching the target movie and
+# desired format, then falls back to browser crawling if the private API drifts.
+# Browser automation is still used for checkout/login and as the recovery path.
+# -----------------------------------------------------------------------------
+direct_api:
+  enabled: true
+  fallback_to_browser: true
+  theater_id: AAAWX
+  chain_code: AMC
+  zip_code: "91608"
+  timeout_seconds: 30
+  max_dates_per_tick: 90
+  stop_on_first_match: true
+  alert_unknown_formats: true
 
 # -----------------------------------------------------------------------------
 # Polling cadence. Defaults target ~5 min with small jitter; increase if
@@ -247,7 +267,9 @@ browser:
 # Polls a small set of official movie / studio accounts for early "tickets
 # soon" hints. Matches fire `social_x_match` events (must be listed under
 # notify.on_events to actually send). Fandango remains the single source of
-# truth for `release_transition_bad_to_good`.
+# truth for `release_transition_bad_to_good`. The dashboard also classifies
+# the latest saved tweet text as available / soon / not an announcement so you
+# can quickly see whether the account appears to be announcing tickets.
 #
 # Requires X_BEARER_TOKEN in .env. Disabled by default.
 # -----------------------------------------------------------------------------
@@ -290,6 +312,7 @@ social_x:
 movies:
   - key: odyssey
     title: "The Odyssey (2026)"
+    fandango_movie_id: 241283
     fandango_targets: [odyssey-imax-70mm, odyssey-overview]
     preferred_formats: [IMAX_70MM, IMAX]
     reference_page_key: the_odyssey_imax_70mm
