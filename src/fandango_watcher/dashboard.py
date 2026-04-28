@@ -1860,6 +1860,7 @@ def render_dashboard_not_found_html(*, request_path: str) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>Not found — fandango-watcher</title>
   <style>
 {not_found_css()}
@@ -1890,7 +1891,7 @@ def render_index_html(
     refresh_seconds: int = 10,
     live_revision: str | None = None,
 ) -> str:
-    """Single-page HTML with inline CSS.
+    """Single-page HTML with a stylesheet from :func:`dashboard_css`.
 
     When ``live_revision`` is set and ``refresh_seconds`` > 0, injects a small
     script that polls ``/api/revision`` and reloads when the fingerprint changes
@@ -2396,6 +2397,7 @@ def render_index_html(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
 {meta_refresh}{noscript_meta}  <title>fandango-watcher</title>
   <style>
 {dashboard_css()}

@@ -113,9 +113,13 @@ def _send_bytes(
     handler: BaseHTTPRequestHandler,
     body: bytes,
     content_type: str,
+    *,
+    cache_control: str | None = None,
 ) -> None:
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", content_type)
+    if cache_control:
+        handler.send_header("Cache-Control", cache_control)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -200,7 +204,12 @@ def _make_handler_cls(
                         refresh_seconds=rs,
                         live_revision=rev,
                     )
-                    _send_bytes(self, html.encode("utf-8"), "text/html; charset=utf-8")
+                    _send_bytes(
+                        self,
+                        html.encode("utf-8"),
+                        "text/html; charset=utf-8",
+                        cache_control="no-store",
+                    )
                     return
                 if path_only == "/api/revision":
                     rev = compute_dashboard_revision(dd)
@@ -254,6 +263,7 @@ def _make_handler_cls(
                 ).encode("utf-8")
                 self.send_response(HTTPStatus.NOT_FOUND)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

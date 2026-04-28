@@ -129,6 +129,7 @@ class TestHealthz:
             with pytest.raises(urllib.error.HTTPError) as excinfo:
                 urllib.request.urlopen(url, timeout=5)
             assert excinfo.value.code == 404
+            assert excinfo.value.headers.get("Cache-Control") == "no-store"
             body = excinfo.value.read().decode("utf-8")
         assert "404" in body
         assert "fandango-watcher" in body
@@ -189,8 +190,10 @@ class TestDashboardRoutes:
             with urllib.request.urlopen(f"{base}/", timeout=5) as resp:
                 assert resp.status == 200
                 assert "text/html" in resp.headers["Content-Type"]
+                assert resp.headers.get("Cache-Control") == "no-store"
                 body = resp.read().decode("utf-8")
                 assert "fandango-watcher" in body
+                assert "color-scheme" in body
             with urllib.request.urlopen(f"{base}/api/status", timeout=5) as resp:
                 assert resp.status == 200
                 data = json.loads(resp.read())

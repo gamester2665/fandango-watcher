@@ -189,6 +189,7 @@ def test_render_index_html_triage_and_skip_and_zero_targets() -> None:
         },
     }
     html_out = render_index_html(snap)
+    assert 'name="color-scheme"' in html_out
     assert "At a glance" in html_out
     assert "Target priority" in html_out
     assert "triage-table" in html_out or "No targets configured" in html_out
