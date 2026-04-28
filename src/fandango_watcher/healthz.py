@@ -78,11 +78,16 @@ class HealthzContext:
 
 
 def _send_json(
-    handler: BaseHTTPRequestHandler, payload: dict[str, Any]
+    handler: BaseHTTPRequestHandler,
+    payload: dict[str, Any],
+    *,
+    cache_control: str | None = "no-store",
 ) -> None:
     body = json.dumps(payload, default=str).encode("utf-8")
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
+    if cache_control:
+        handler.send_header("Cache-Control", cache_control)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)

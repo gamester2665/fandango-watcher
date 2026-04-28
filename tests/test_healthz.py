@@ -196,24 +196,29 @@ class TestDashboardRoutes:
                 assert "color-scheme" in body
             with urllib.request.urlopen(f"{base}/api/status", timeout=5) as resp:
                 assert resp.status == 200
+                assert resp.headers.get("Cache-Control") == "no-store"
                 data = json.loads(resp.read())
                 assert "targets" in data
                 assert "healthz" in data
             with urllib.request.urlopen(f"{base}/api/revision", timeout=5) as resp:
                 assert resp.status == 200
+                assert resp.headers.get("Cache-Control") == "no-store"
                 rev = json.loads(resp.read())
                 assert "revision" in rev
                 assert len(rev["revision"]) == 64
             with urllib.request.urlopen(f"{base}/api/purchases", timeout=5) as resp:
                 assert resp.status == 200
+                assert resp.headers.get("Cache-Control") == "no-store"
                 pur = json.loads(resp.read())
                 assert "lines" in pur
                 assert isinstance(pur["lines"], list)
             with urllib.request.urlopen(f"{base}/api/movies", timeout=5) as resp:
                 assert resp.status == 200
+                assert resp.headers.get("Cache-Control") == "no-store"
                 assert "movies" in json.loads(resp.read())
             with urllib.request.urlopen(f"{base}/api/release_intel", timeout=5) as resp:
                 assert resp.status == 200
+                assert resp.headers.get("Cache-Control") == "no-store"
                 ri = json.loads(resp.read())
                 assert ri.get("status") == "unconfigured"
 
