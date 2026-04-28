@@ -10,7 +10,7 @@ import shutil
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from email.utils import formatdate
+from email.utils import formatdate, parsedate_to_datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -162,6 +162,36 @@ def _etag_in_if_none_match(if_none_match: str | None, etag: str) -> bool:
     return False
 
 
+def _if_none_match_header_present(if_none_match: str | None) -> bool:
+    """RFC 7232: ``If-Modified-Since`` is ignored when this field is sent."""
+    return if_none_match is not None and bool(if_none_match.strip())
+
+
+def _artifact_not_modified_since(
+    if_modified_since: str | None,
+    *,
+    st: os.stat_result,
+    if_none_match: str | None,
+) -> bool:
+    """``True`` when the file is not newer than ``If-Modified-Since`` (GET 304).
+
+    Second-resolution compare; invalid dates are ignored (treat as uncacheable).
+    """
+    if _if_none_match_header_present(if_none_match):
+        return False
+    if not if_modified_since or not if_modified_since.strip():
+        return False
+    try:
+        ims_dt = parsedate_to_datetime(if_modified_since.strip())
+    except (TypeError, ValueError):
+        return False
+    if ims_dt.tzinfo is None:
+        ims_dt = ims_dt.replace(tzinfo=UTC)
+    ims_sec = int(ims_dt.timestamp())
+    lm_sec = int(st.st_mtime)
+    return lm_sec <= ims_sec
+
+
 def _send_artifact_validation_headers(
     handler: BaseHTTPRequestHandler,
     *,
@@ -199,7 +229,19 @@ def _serve_artifact_file(
         st = candidate.stat()
         etag = _artifact_weak_etag(st)
         last_modified = formatdate(st.st_mtime, usegmt=True)
-        if _etag_in_if_none_match(handler.headers.get("If-None-Match"), etag):
+        inm = handler.headers.get("If-None-Match")
+        if _etag_in_if_none_match(inm, etag):
+            handler.send_response(HTTPStatus.NOT_MODIFIED)
+            _send_artifact_validation_headers(
+                handler, etag=etag, last_modified=last_modified
+            )
+            handler.end_headers()
+            return True
+        if _artifact_not_modified_since(
+            handler.headers.get("If-Modified-Since"),
+            st=st,
+            if_none_match=inm,
+        ):
             handler.send_response(HTTPStatus.NOT_MODIFIED)
             _send_artifact_validation_headers(
                 handler, etag=etag, last_modified=last_modified
