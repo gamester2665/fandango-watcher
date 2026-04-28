@@ -222,6 +222,26 @@ class TestDashboardRoutes:
                 ri = json.loads(resp.read())
                 assert ri.get("status") == "unconfigured"
 
+    def test_artifact_file_includes_private_cache(
+        self, tmp_path: Path
+    ) -> None:
+        """Named artifact URLs are typically unique per capture; allow short browser cache."""
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "ping.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"png")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                assert resp.status == 200
+                assert resp.headers.get("Cache-Control") == "private, max-age=300"
+
     def test_artifacts_path_traversal_returns_404(
         self, tmp_path: Path
     ) -> None:

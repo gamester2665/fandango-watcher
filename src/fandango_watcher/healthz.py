@@ -154,6 +154,10 @@ def _serve_artifact_file(
     try:
         handler.send_response(HTTPStatus.OK)
         handler.send_header("Content-Type", ctype)
+        handler.send_header(
+            "Cache-Control",
+            "private, max-age=300",
+        )
         handler.send_header("Content-Length", str(candidate.stat().st_size))
         handler.end_headers()
         with candidate.open("rb") as f:
