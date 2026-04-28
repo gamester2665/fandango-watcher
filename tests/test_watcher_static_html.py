@@ -2,6 +2,9 @@
 
 Uses a local ``ThreadingHTTPServer`` (no Fandango network). Exercises the
 bundled page extractor + classifier on DOM shaped like a theater card.
+
+The Playwright-backed test is time-bounded via pytest-timeout (``thread``) so a
+stuck browser session cannot block ``pytest`` without end.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ class _OnePageHandler(BaseHTTPRequestHandler):
 
 
 @pytest.mark.integration
+@pytest.mark.timeout(300, method="thread")
 def test_crawl_target_local_static_theater_card(tmp_path: Path) -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _OnePageHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
