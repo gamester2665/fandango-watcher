@@ -83,6 +83,7 @@ class TestHealthz:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
                 assert resp.headers["Content-Type"] == "application/json"
+                assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 payload = json.loads(resp.read())
 
         assert payload["status"] == "ok"
@@ -130,6 +131,7 @@ class TestHealthz:
                 urllib.request.urlopen(url, timeout=5)
             assert excinfo.value.code == 404
             assert excinfo.value.headers.get("Cache-Control") == "no-store"
+            assert excinfo.value.headers.get("X-Content-Type-Options") == "nosniff"
             body = excinfo.value.read().decode("utf-8")
         assert "404" in body
         assert "fandango-watcher" in body
@@ -151,6 +153,7 @@ class TestHealthz:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
                 assert "text/plain" in resp.headers["Content-Type"]
+                assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 body = resp.read().decode("utf-8")
         assert "fandango_watcher_heartbeat_ticks_total 3" in body
         assert "fandango_watcher_heartbeat_errors_total 1" in body
@@ -191,12 +194,14 @@ class TestDashboardRoutes:
                 assert resp.status == 200
                 assert "text/html" in resp.headers["Content-Type"]
                 assert resp.headers.get("Cache-Control") == "no-store"
+                assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 body = resp.read().decode("utf-8")
                 assert "fandango-watcher" in body
                 assert "color-scheme" in body
             with urllib.request.urlopen(f"{base}/api/status", timeout=5) as resp:
                 assert resp.status == 200
                 assert resp.headers.get("Cache-Control") == "no-store"
+                assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 data = json.loads(resp.read())
                 assert "targets" in data
                 assert "healthz" in data
@@ -241,6 +246,7 @@ class TestDashboardRoutes:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
                 assert resp.headers.get("Cache-Control") == "private, max-age=300"
+                assert resp.headers.get("X-Content-Type-Options") == "nosniff"
 
     def test_artifacts_path_traversal_returns_404(
         self, tmp_path: Path

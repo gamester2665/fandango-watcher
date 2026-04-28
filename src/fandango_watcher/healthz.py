@@ -18,6 +18,11 @@ from urllib.parse import unquote, urlparse
 logger = logging.getLogger(__name__)
 
 
+def _send_no_sniff(handler: BaseHTTPRequestHandler) -> None:
+    """RFC 7034: reduce MIME-sniffing on responses served by this process."""
+    handler.send_header("X-Content-Type-Options", "nosniff")
+
+
 @dataclass
 class Heartbeat:
     """Shared mutable state between the watch loop and the healthz server."""
@@ -88,6 +93,7 @@ def _send_json(
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     if cache_control:
         handler.send_header("Cache-Control", cache_control)
+    _send_no_sniff(handler)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -125,6 +131,7 @@ def _send_bytes(
     handler.send_header("Content-Type", content_type)
     if cache_control:
         handler.send_header("Cache-Control", cache_control)
+    _send_no_sniff(handler)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -158,6 +165,7 @@ def _serve_artifact_file(
             "Cache-Control",
             "private, max-age=300",
         )
+        _send_no_sniff(handler)
         handler.send_header("Content-Length", str(candidate.stat().st_size))
         handler.end_headers()
         with candidate.open("rb") as f:
@@ -192,6 +200,7 @@ def _make_handler_cls(
                 health_body = json.dumps(heartbeat.snapshot()).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json")
+                _send_no_sniff(self)
                 self.send_header("Content-Length", str(len(health_body)))
                 self.end_headers()
                 self.wfile.write(health_body)
@@ -273,6 +282,7 @@ def _make_handler_cls(
                 self.send_response(HTTPStatus.NOT_FOUND)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
+                _send_no_sniff(self)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
