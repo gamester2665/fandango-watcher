@@ -210,8 +210,68 @@ def test_release_intel_empty_dict_operator_copy() -> None:
     assert "empty" in html_out.lower() or "payload" in html_out
 
 
-def test_x_poller_section_opens_by_default_with_tweet_snapshot_table() -> None:
-    """UX: X panel must not stay collapsed; table exposes tweet text preview column."""
+def test_render_index_html_stable_section_fragment_ids_and_jump_nav() -> None:
+    """Anchor targets for in-page navigation and deep links (#triage, #runtime, …)."""
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [{"key": "m1", "title": "M", "fandango_targets": [], "x_handles": []}],
+    }
+    html_out = render_index_html(snap)
+    for fid in ("triage", "runtime", "release-intel", "crawl", "x", "registry"):
+        assert f'id="{fid}"' in html_out
+    assert 'href="#triage"' in html_out
+    assert 'href="#registry"' in html_out
+    # Purchase is opt-in via purchases_history + dashboard.show_purchase_history
+    assert 'href="#purchase"' not in html_out
+
+
+def test_target_card_folded_diagnostics_when_content_present() -> None:
+    """Diagnostics & media folds errors, staleness text, screenshots, video, traces together."""
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha-show",
+                "url": "https://example.com/t",
+                "state": {"current_state": "watching", "total_ticks": 2},
+                "latest_screenshot_url": "/artifacts/screenshots/alpha-1.png",
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert 'data-target="' in html_out
+    assert 'class="card-expand"' in html_out
+    assert "Diagnostics &amp; media" in html_out
+
+
+def test_movies_registry_fold_panel_default_collapsed() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [{"key": "k1", "title": "T", "fandango_targets": [], "x_handles": []}],
+    }
+    html_out = render_index_html(snap)
+    assert 'id="registry"' in html_out
+    assert re.search(
+        r'id="registry"[^>]*>[\s\n]*'
+        r'<details class="panel panel-fold"',
+        html_out,
+    )
+    block = html_out.split('id="registry"', 1)[1].split("id=", 1)[0]
+    assert '<details class="panel panel-fold" open>' not in block
+
+
+def test_x_poller_section_prioritizes_snapshot_table_over_detail_cards() -> None:
+    """UX: X panel stays scannable by showing the table before folded details."""
     snap = {
         "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
         "targets": [],
@@ -243,8 +303,10 @@ def test_x_poller_section_opens_by_default_with_tweet_snapshot_table() -> None:
     assert 'id="x" aria-label="X / Twitter poller">' in html_out
     assert "tweet text (preview)" in html_out
     assert "sx-snapshot" in html_out
+    assert "Per-handle details" in html_out
     assert re.search(
-        r'id="x"[^>]*>\s*<details class="panel-fold" open>',
+        r'id="x"[^>]*>[\s\n]*'
+        r'<details class="panel panel-fold" open>',
         html_out,
     )
 

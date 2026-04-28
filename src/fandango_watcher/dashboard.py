@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -394,6 +395,875 @@ def _html_id_slug(s: str) -> str:
     return t or "x"
 
 
+def dashboard_css() -> str:
+    """Apple-style dashboard stylesheet (single source of truth)."""
+    return """    :root {
+      --bg: #f5f5f7;
+      --bg-elevated: #ffffff;
+      --surface: rgba(255, 255, 255, 0.88);
+      --surface2: #f2f2f7;
+      --border: rgba(60, 60, 67, 0.16);
+      --border-bright: rgba(255, 255, 255, 0.9);
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --accent: #007aff;
+      --accent-dim: rgba(0, 122, 255, 0.1);
+      --accent2: #5856d6;
+      --violet: #5856d6;
+      --ok: #248a3d;
+      --warn: #b26a00;
+      --bad: #d70015;
+      --radius: 18px;
+      --shadow: 0 18px 45px rgba(0, 0, 0, 0.08);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 30px rgba(0, 0, 0, 0.05);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0b0f;
+        --bg-elevated: #161618;
+        --surface: rgba(28, 28, 30, 0.88);
+        --surface2: #242426;
+        --border: rgba(235, 235, 245, 0.12);
+        --border-bright: rgba(235, 235, 245, 0.08);
+        --text: #f5f5f7;
+        --muted: #a1a1aa;
+        --accent: #0a84ff;
+        --accent-dim: rgba(10, 132, 255, 0.14);
+        --accent2: #9897ff;
+        --violet: #9897ff;
+        --ok: #30d158;
+        --warn: #ffd60a;
+        --bad: #ff453a;
+        --shadow: 0 22px 60px rgba(0, 0, 0, 0.32);
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24), 0 16px 34px rgba(0, 0, 0, 0.22);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      max-width: 1120px;
+      margin-left: auto;
+      margin-right: auto;
+      padding: 0 1.35rem 2.75rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: var(--text);
+      letter-spacing: -0.01em;
+      line-height: 1.5;
+      font-size: 0.95rem;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 50% -18rem, rgba(0, 122, 255, 0.08), transparent 34rem),
+        var(--bg);
+    }
+    main.dash { display: flex; flex-direction: column; gap: 1rem; }
+    header.dash-header {
+      padding: 2.15rem 0 1.4rem;
+      border-bottom: 0;
+      position: relative;
+    }
+    header.dash-header::after { display: none; }
+    .dash-kicker {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: var(--muted);
+      margin: 0 0 0.4rem 0;
+    }
+    h1.dash-title {
+      max-width: 12ch;
+      margin: 0 0 0.85rem 0;
+      color: var(--text);
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.06em;
+      line-height: 1.1;
+    }
+    header.dash-header p { margin: 0.28rem 0; font-size: 0.86rem; color: var(--muted); }
+    header .hb-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.65rem;
+      align-items: center;
+    }
+    .hb-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.36rem 0.72rem;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      box-shadow: none;
+    }
+    .hb-pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: none;
+    }
+    .section-head {
+      margin: 0;
+      padding: 0.6rem 0 0;
+    }
+    .section-head .panel-tagline { max-width: 70ch; }
+    .section-label {
+      margin: 0 0 0.35rem;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+    }
+    .panel-tagline {
+      margin: 0 0 0.9rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .triage-panel,
+    .runtime-panel,
+    .intel-panel,
+    .panel-fold,
+    footer.dash-foot,
+    .grid .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: blur(20px) saturate(1.08);
+      -webkit-backdrop-filter: blur(20px) saturate(1.08);
+    }
+    .triage-panel,
+    .runtime-panel,
+    .intel-panel {
+      padding: 1.15rem;
+    }
+    section.panel { margin: 0; }
+    .panel-secondary { margin-top: 0.25rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+      gap: 0.85rem;
+    }
+    .grid .card {
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.72rem;
+      transition: border-color 0.18s ease, background-color 0.18s ease;
+    }
+    .grid .card:hover {
+      transform: none;
+      box-shadow: var(--shadow-sm);
+      border-color: rgba(0, 122, 255, 0.28);
+    }
+    .card { border-radius: var(--radius); }
+    .card h2 {
+      margin: 0;
+      color: var(--text);
+      font-size: 1.08rem;
+      font-weight: 650;
+      letter-spacing: -0.035em;
+    }
+    .card p { margin: 0; }
+    .card-stats { font-size: 0.82rem; color: var(--muted); margin: 0.15rem 0 0 0; }
+    .card-stats .rel { font-size: 0.78rem; opacity: 0.88; font-weight: 450; }
+    .card-topline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      align-items: center;
+    }
+    .card-link a {
+      font-size: 0.86rem;
+      font-weight: 600;
+    }
+    .card-facts {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.45rem;
+      margin: 0;
+    }
+    .card-facts div {
+      min-width: 0;
+      padding: 0.55rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface2);
+    }
+    .card-facts dt {
+      margin: 0 0 0.18rem;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .card-facts dd {
+      margin: 0;
+      min-width: 0;
+      color: var(--text);
+      font-size: 0.8rem;
+      overflow-wrap: anywhere;
+    }
+    .pill {
+      display: inline-block;
+      padding: 0.22rem 0.56rem;
+      border-radius: 999px;
+      background: var(--surface2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      font-size: 0.73rem;
+      font-weight: 650;
+    }
+    .pill-ok { background: rgba(52, 199, 89, 0.14); color: var(--ok); border-color: transparent; }
+    .pill-warn { background: rgba(255, 159, 10, 0.16); color: var(--warn); border-color: transparent; }
+    .pill-muted { background: var(--surface2); color: var(--muted); }
+    .card-kind { margin: 0 0 0.15rem 0; }
+    a {
+      color: var(--accent);
+      text-underline-offset: 3px;
+      text-decoration-color: rgba(0, 122, 255, 0.35);
+      transition: color 0.15s;
+    }
+    a:hover { color: var(--accent); text-decoration-color: var(--accent); }
+    .thumb img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    video { max-width: 100%; border-radius: 10px; background: #000; border: 1px solid var(--border); }
+    details { color: var(--text); }
+    summary {
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+      color: var(--accent);
+      font-size: 0.86rem;
+      font-weight: 650;
+      padding: 0.35rem 0;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before {
+      content: "\\25B8";
+      display: inline-block;
+      margin-right: 0.4rem;
+      transition: transform 0.15s ease;
+      opacity: 0.75;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    details[open] > summary::before { transform: rotate(90deg); }
+    .card-expand, .intel-expand { margin-top: 0.25rem; }
+    .card-expand-body, .intel-expand-body {
+      margin-top: 0.45rem;
+      padding: 0.72rem 0 0 0.78rem;
+      border-left: 2px solid var(--border);
+      font-size: 0.88rem;
+    }
+    .card-err,
+    .card-stale,
+    .purchase-err,
+    .sx-err {
+      color: var(--warn);
+      font-size: 0.8rem;
+    }
+    .card-media-meta { font-size: 0.76rem; color: var(--muted); margin: 0 0 0.35rem 0; }
+    .runtime-panel { order: 10; }
+    .intel-panel { order: 11; }
+    #purchase { order: 12; }
+    #x { order: 13; }
+    #registry { order: 14; }
+    .runtime-panel .panel-tagline { margin-bottom: 0.75rem; }
+    .meta-grid,
+    .triage-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+      gap: 0.62rem;
+    }
+    .meta-grid > div,
+    .triage-grid > div,
+    .intel-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: none;
+      min-width: 0;
+      padding: 0.76rem;
+      transition: border-color 0.2s;
+    }
+    .meta-grid > div:hover,
+    .triage-grid > div:hover { border-color: rgba(0, 122, 255, 0.2); }
+    .triage-grid strong,
+    .meta-grid strong {
+      display: block;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.2rem;
+    }
+    .triage-grid span,
+    .meta-grid span {
+      display: block;
+      font-size: 0.9rem;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .intel-panel .section-label { margin-top: 0; }
+    .intel-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+      gap: 0.75rem;
+      margin-top: 0.65rem;
+    }
+    .intel-card h3 {
+      font-size: 0.95rem;
+      margin: 0 0 0.25rem 0;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .intel-headline {
+      font-weight: 600;
+      margin: 0 0 0.4rem 0;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    p.qualifier { font-size: 0.78rem; opacity: 0.8; margin: 0.5rem 0 0 0; font-style: italic; color: var(--muted); }
+    .pill-warn-inline {
+      border-radius: 8px;
+      display: inline-block;
+      font-size: 0.82rem;
+      padding: 0.35rem 0.55rem;
+      border: 1px solid rgba(255, 159, 10, 0.28);
+      background: rgba(255, 159, 10, 0.1);
+      color: var(--warn);
+    }
+    .panel-fold {
+      overflow: hidden;
+    }
+    .panel-fold > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.82rem 1rem;
+      border-bottom: 1px solid transparent;
+      font-size: 0.92rem;
+      background: transparent;
+    }
+    .panel-fold[open] > summary { border-bottom-color: var(--border); }
+    .fold-title { font-weight: 600; color: var(--text); }
+    .fold-badge {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      background: var(--surface2);
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+    }
+    .fold-body { padding: 0.75rem 1rem 1rem; }
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.82rem;
+    }
+    th, td {
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      padding: 0.58rem 0.62rem;
+      text-align: left;
+    }
+    th {
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    table.data-table { min-width: 520px; }
+    tr:nth-child(even) td { background: transparent; }
+    .purchase-err { font-size: 0.78rem; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+      font-size: 0.74rem;
+      word-break: break-all;
+      color: var(--text);
+      background: rgba(127, 127, 127, 0.12);
+      padding: 0.1rem 0.35rem;
+      border-radius: 7px;
+      border: 1px solid transparent;
+    }
+    p.hint { font-size: 0.88rem; opacity: 0.9; margin: 0.5rem 0 0 0; color: var(--muted); }
+    p.hint.meta { font-size: 0.78rem; opacity: 0.85; margin-bottom: 0.65rem; }
+    footer.dash-foot {
+      margin-top: 2.25rem;
+      padding: 1.15rem 1.15rem 1.25rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      font-size: 0.82rem;
+      color: var(--muted);
+      box-shadow: var(--shadow-sm);
+    }
+    p.refresh-hint { margin: 0 0 0.65rem 0; font-size: 0.78rem; opacity: 0.92; }
+    .skip-link {
+      position: absolute; left: -9999px; z-index: 100;
+      padding: 0.55rem 1rem;
+      background: var(--text);
+      color: var(--bg);
+      font-weight: 700;
+      border-radius: 8px;
+      box-shadow: var(--shadow-sm);
+    }
+    .skip-link:focus { left: 1rem; top: 1rem; outline: 2px solid var(--accent); outline-offset: 3px; }
+    a:focus-visible, summary:focus-visible, .skip-link:focus {
+      outline: 2px solid var(--accent); outline-offset: 3px;
+    }
+    .jump-nav {
+      position: sticky;
+      top: 0.75rem;
+      z-index: 20;
+      padding: 0.45rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--muted);
+      backdrop-filter: blur(14px) saturate(1.3);
+      -webkit-backdrop-filter: blur(14px) saturate(1.3);
+      box-shadow: var(--shadow-sm);
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .jump-nav-list {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      row-gap: 0.4rem;
+      column-gap: 0.2rem;
+    }
+    .jump-nav-list a { white-space: nowrap; opacity: 0.92; }
+    .jump-nav-list a:not(:last-child)::after {
+      content: "\\00B7";
+      display: inline-block;
+      margin-left: 0.4rem;
+      color: var(--muted);
+      opacity: 0.5;
+      font-weight: 400;
+      pointer-events: none;
+      user-select: none;
+    }
+    .jump-nav a:hover { opacity: 1; }
+    .triage-attention {
+      margin-top: 0.75rem;
+      padding: 0.85rem 0.95rem;
+      border-radius: 15px;
+      border: 1px solid rgba(255, 159, 10, 0.28);
+      background: rgba(255, 159, 10, 0.08);
+    }
+    .triage-attention .section-label { margin-top: 0; }
+    ul.attention-list { margin: 0.35rem 0 0 1rem; padding: 0; color: var(--text); font-size: 0.9rem; }
+    ul.attention-list li { margin: 0.25rem 0; }
+    .subhead-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      margin: 0.9rem 0 0.35rem;
+    }
+    .subhead-row .section-label { margin: 0; }
+    .subhead-row a { font-size: 0.8rem; font-weight: 650; }
+    .triage-priority .hint.meta { margin-top: 0.25rem; }
+    .triage-table-wrap { margin-top: 0.35rem; }
+    table.triage-table { min-width: 640px; font-size: 0.8rem; }
+    .triage-table td { vertical-align: top; }
+    .triage-pill {
+      display: inline-block;
+      font-size: 0.64rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.18rem 0.48rem;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    tr.triage-tier-0 td { background: rgba(255, 69, 58, 0.08); }
+    tr.triage-tier-1 td { background: rgba(255, 159, 10, 0.08); }
+    tr.triage-tier-2 td { background: rgba(52, 199, 89, 0.08); }
+    .triage-pill-0 { background: rgba(255, 69, 58, 0.14); color: var(--bad); }
+    .triage-pill-1 { background: rgba(255, 159, 10, 0.16); color: var(--warn); }
+    .triage-pill-2 { background: rgba(52, 199, 89, 0.14); color: var(--ok); }
+    .triage-pill-3 { background: var(--surface2); color: var(--muted); }
+    .movie-group { margin: 0; }
+    .movie-group-title {
+      margin: 0 0 0.65rem;
+      color: var(--text);
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+    }
+    .panel-warn {
+      border-radius: 12px;
+      border-left: 3px solid rgba(255, 159, 10, 0.45);
+      padding: 0.72rem 0.85rem;
+      border: 1px solid rgba(255, 159, 10, 0.28);
+      background: rgba(255, 159, 10, 0.08);
+    }
+    .conn-line { font-size: 0.8rem; margin: 0.5rem 0 0 0; }
+    .conn-label { color: var(--muted); }
+    .conn-ok { color: var(--ok); }
+    .conn-bad { color: var(--bad); }
+    .conn-static { color: var(--muted); }
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .sx-snapshot { margin: 0.35rem 0 0.85rem; }
+    .sx-tweet-preview-cell {
+      max-width: 36ch;
+      font-size: 0.82rem;
+      color: var(--text);
+      line-height: 1.45;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .sx-preview-missing { color: var(--muted); }
+    .sx-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+      margin-top: 0.65rem;
+    }
+    .sx-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.1rem;
+      box-shadow: none;
+    }
+    .sx-handle {
+      margin: 0 0 0.35rem 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+    .sx-meta, .sx-tweet-idline, .sx-tweet-when {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin: 0.2rem 0;
+    }
+    code.tweet-snowflake {
+      font-size: 0.85rem;
+      letter-spacing: 0.02em;
+      word-break: break-all;
+    }
+    .sx-tweet-body {
+      margin: 0.65rem 0 0 0;
+      padding: 0.85rem 1rem;
+      border-left: 3px solid var(--accent);
+      background: rgba(0, 122, 255, 0.08);
+      border-radius: 0 12px 12px 0;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .sx-tweet-body em.sx-no-text { color: var(--muted); font-style: italic; }
+    .sx-err { margin: 0.5rem 0 0 0; }
+    .inline-fold {
+      margin-top: 0.65rem;
+      border-top: 1px solid var(--border);
+      padding-top: 0.55rem;
+    }
+    @media (prefers-color-scheme: dark) {
+      .jump-nav { background: rgba(28, 28, 30, 0.72); }
+    }
+    @media (max-width: 700px) {
+      table.data-table { font-size: 0.78rem; }
+      body { padding-inline: 0.85rem; }
+      header.dash-header { padding-top: 1.45rem; }
+      h1.dash-title { font-size: 2.15rem; }
+      .triage-panel,
+      .runtime-panel,
+      .intel-panel,
+      .grid .card,
+      footer.dash-foot { border-radius: 16px; }
+      .card-facts { grid-template-columns: 1fr; }
+      .jump-nav {
+        border-radius: 16px;
+        font-size: 0.76rem;
+        line-height: 1.5;
+        padding: 0.5rem 0.7rem;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      summary::before { transition: none !important; }
+      .grid .card { transition: none !important; }
+      .grid .card:hover { transform: none !important; }
+    }
+"""
+
+
+def not_found_css() -> str:
+    """404 page tokens (minimal; unrelated to dashboard component classes)."""
+    return """    :root {
+      --bg: #f5f5f7;
+      --surface: rgba(255, 255, 255, 0.88);
+      --surface2: #f2f2f7;
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --border: rgba(60, 60, 67, 0.16);
+      --accent: #007aff;
+      --shadow: 0 18px 45px rgba(0, 0, 0, 0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0b0f;
+        --surface: rgba(28, 28, 30, 0.88);
+        --surface2: #242426;
+        --text: #f5f5f7;
+        --muted: #a1a1aa;
+        --border: rgba(235, 235, 245, 0.12);
+        --accent: #0a84ff;
+        --shadow: 0 22px 60px rgba(0, 0, 0, 0.32);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: var(--text);
+      margin: 0;
+      padding: 2.5rem 1.25rem 3rem;
+      max-width: 560px;
+      margin-left: auto;
+      margin-right: auto;
+      line-height: 1.55;
+      font-size: 0.95rem;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 50% -12rem, rgba(0, 122, 255, 0.08), transparent 28rem),
+        var(--bg);
+    }
+    p.kicker {
+      font-size: 0.68rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--muted);
+      margin: 0 0 0.4rem 0;
+    }
+    h1 {
+      font-size: clamp(1.35rem, 3.5vw, 1.7rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin: 0 0 1rem 0;
+      line-height: 1.2;
+      color: var(--text);
+    }
+    p { color: var(--muted); margin: 0.65rem 0; }
+    a {
+      color: var(--accent);
+      text-underline-offset: 3px;
+      text-decoration-color: rgba(0, 122, 255, 0.35);
+    }
+    a:hover { color: var(--accent); text-decoration-color: var(--accent); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+      font-size: 0.85rem;
+      color: var(--text);
+      background: rgba(127, 127, 127, 0.12);
+      padding: 0.15rem 0.4rem;
+      border-radius: 7px;
+      border: 1px solid transparent;
+    }
+    .card {
+      margin-top: 1.5rem;
+      padding: 1.1rem 1.15rem 1.2rem;
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .card p { color: var(--text); font-size: 0.9rem; margin: 0; }
+    .card .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem 0.55rem;
+      margin-top: 0.5rem;
+    }
+    .card a:not(:last-child)::after {
+      content: "·";
+      margin-left: 0.45rem;
+      color: var(--muted);
+      opacity: 0.5;
+      pointer-events: none;
+    }
+"""
+
+
+def _dash_esc_attr(attrs: dict[str, str]) -> str:
+    parts: list[str] = []
+    for k_raw, v in attrs.items():
+        k = str(k_raw).strip().lower().replace("_", "-")
+        if not k:
+            continue
+        ve = html.escape(v, quote=True)
+        parts.append(f' {html.escape(k)}="{ve}"')
+    return "".join(parts)
+
+
+def render_panel(
+    inner: str,
+    *,
+    css_classes: tuple[str, ...] | None = None,
+    section_id: str | None = None,
+    aria_label: str | None = None,
+) -> str:
+    """Standard section/card shell (escaped attributes; ``inner`` is trusted HTML fragments)."""
+    cls = "panel"
+    extra = css_classes or ()
+    css = " ".join([cls] + list(extra)).strip()
+    attrs: dict[str, str] = {"class": css}
+    if section_id:
+        attrs["id"] = section_id
+    if aria_label is not None:
+        attrs["aria-label"] = aria_label
+    return f"<section{_dash_esc_attr(attrs)}>{inner}</section>"
+
+
+def render_fold_panel(
+    inner: str,
+    *,
+    fold_id: str | None,
+    summary_html: str,
+    open_: bool,
+) -> str:
+    """`<details class="panel panel-fold">` wrapper (summary/content are trusted HTML)."""
+    open_attr = " open" if open_ else ""
+    id_attr = f' id="{html.escape(str(fold_id), quote=True)}"' if fold_id else ""
+    return (
+        f'<details class="panel panel-fold"{id_attr}{open_attr}>'
+        f"<summary>{summary_html}</summary>"
+        f'<div class="fold-body">{inner}</div>'
+        "</details>"
+    )
+
+
+def render_metric_grid(metrics_html: str, *, css_class: str | None = None) -> str:
+    cls = html.escape(css_class.strip(), quote=True) if css_class else "meta-grid"
+    return f'<div class="{cls}">{metrics_html}</div>'
+
+
+def render_status_pill(
+    text_esc: str,
+    *,
+    variants: tuple[str, ...] = (),
+    title_esc: str | None = None,
+) -> str:
+    parts = ["pill"] + list(variants)
+    cls_esc = html.escape(
+        " ".join(p.strip() for p in parts if p.strip()),
+        quote=True,
+    )
+    title_part = ""
+    if title_esc is not None:
+        title_part = f' title="{html.escape(title_esc, quote=True)}"'
+    return f'<span class="{cls_esc}"{title_part}>{text_esc}</span>'
+
+
+def render_data_table(
+    *,
+    thead_row: str | None,
+    tbody_rows_html: str,
+    table_classes: tuple[str, ...],
+    caption: str | None = None,
+    caption_class: str = "visually-hidden",
+    wrapper_class: str = "table-wrap",
+    outer_prefix: str = "",
+    outer_suffix: str = "",
+) -> str:
+    """Escaped ``caption``, trusted ``thead_row`` / ``tbody_rows_html`` fragments."""
+    cblock = ""
+    if caption:
+        ce = html.escape(caption)
+        cc_esc = html.escape(caption_class, quote=True)
+        cblock = f'<caption class="{cc_esc}">{ce}</caption>'
+    thead = ""
+    if thead_row:
+        thead = f"<thead><tr>{thead_row}</tr></thead>"
+    tc = html.escape(" ".join(table_classes).strip(), quote=True)
+    we = html.escape(wrapper_class.strip(), quote=True)
+    return (
+        f"{outer_prefix}"
+        f'<div class="{we}"><table class="{tc}">{cblock}{thead}'
+        f"<tbody>{tbody_rows_html}</tbody></table></div>"
+        f"{outer_suffix}"
+    )
+
+
+def _jump_nav_html(
+    anchors: Iterable[tuple[str, str]],
+    *,
+    aria_label: str = "On this page",
+) -> str:
+    """``anchors``: (href, label_plain) pairs; emits escaped links."""
+    lis: list[str] = []
+    for href_raw, lbl in anchors:
+        href_esc = html.escape(href_raw, quote=True)
+        lbl_esc = html.escape(lbl)
+        lis.append(f'<a href="{href_esc}">{lbl_esc}</a>')
+    ale = html.escape(aria_label, quote=True)
+    return (
+        f'<nav class="jump-nav" aria-label="{ale}">'
+        f'<div class="jump-nav-list">{"".join(lis)}</div></nav>'
+    )
+
+
+def render_inline_disclosure(
+    *,
+    css_class: str,
+    summary_html: str,
+    inner_html: str,
+    open_: bool = False,
+) -> str:
+    open_attr = " open" if open_ else ""
+    ce = html.escape(css_class.strip(), quote=True)
+    return (
+        f'<details class="{ce}"{open_attr}>'
+        f"<summary>{summary_html}</summary>{inner_html}</details>"
+    )
+
+
+def render_fact_grid(entries: list[tuple[str, str]]) -> str:
+    """Facts grid whose ``entries`` contain pre-escaped fragments for dt/dd."""
+    cols = max(1, min(3, len(entries)))
+    inner = [f"<div><dt>{dt_esc}</dt><dd>{dd_esc}</dd></div>" for dt_esc, dd_esc in entries]
+    col_style = html.escape(f"repeat({cols}, minmax(0, 1fr))", quote=True)
+    return (
+        f'<dl class="card-facts" style="grid-template-columns: {col_style}">' + "".join(inner) + "</dl>"
+    )
+
+
 def _render_target_card(
     t: dict[str, Any],
     *,
@@ -428,9 +1298,7 @@ def _render_target_card(
         err_bits.append(html.escape(em))
     err_html = ""
     if err_bits:
-        err_html = (
-            f'<p class="card-err">{" · ".join(err_bits)}</p>'
-        )
+        err_html = f'<p class="card-err">{" · ".join(err_bits)}</p>'
 
     te = st.get("total_errors")
     ce = st.get("consecutive_errors")
@@ -446,26 +1314,33 @@ def _render_target_card(
     stale_thr = _stale_threshold_seconds(fandango_poll)
     su_dt = _parse_iso_dt(str(su_raw) if su_raw is not None else None)
     stale_html = ""
+    stale_chip = ""
     if su_dt is not None:
         age = int((now.astimezone(UTC) - su_dt.astimezone(UTC)).total_seconds())
         if age > stale_thr:
+            stale_chip = render_status_pill(
+                html.escape("stale"),
+                variants=("pill-warn",),
+            )
             stale_html = (
-                f'<p class="card-stale">No successful crawl in ~{_fmt_duration(age)} '
-                f"(expected ≤ ~{_fmt_duration(stale_thr)} under normal poll). "
-                f"Check errors or whether <code>watch</code> is running.</p>"
+                f'<p class="card-stale"><strong>Stale crawl</strong> · no successful crawl '
+                f"in ~{html.escape(_fmt_duration(age))}. Expected under normal polling: "
+                f"≤ ~{html.escape(_fmt_duration(stale_thr))}.</p>"
             )
 
-    pill_class = "pill"
+    pill_variants: tuple[str, ...] = ()
     cur_l = str(st.get("current_state") or "").lower()
     schema_l = str(st.get("last_release_schema") or "").lower()
     if cur_l == "error" or (st.get("consecutive_errors") or 0) > 0:
-        pill_class += " pill-warn"
+        pill_variants = ("pill-warn",)
     elif "alert" in cur_l or "purchas" in cur_l or "released" in cur_l or "live" in cur_l:
-        pill_class += " pill-ok"
+        pill_variants = ("pill-ok",)
     elif "partial" in schema_l or "full" in schema_l:
-        pill_class += " pill-ok"
+        pill_variants = ("pill-ok",)
+    state_pill = render_status_pill(cur, variants=pill_variants)
 
     route_lbl = html.escape(_target_route_label(raw_name))
+    route_pill = render_status_pill(route_lbl, variants=("pill-muted",))
 
     shot_base = _artifact_basename(
         t.get("latest_screenshot") if isinstance(t.get("latest_screenshot"), str) else None
@@ -509,25 +1384,34 @@ def _render_target_card(
         trace_html = f'<p><a href="{html.escape(tz)}">latest trace (.zip)</a></p>'
 
     media_inner = f"{media_meta_p}{img_html}{vid_html}{trace_html}"
-    media_block = ""
-    if media_inner.strip():
-        media_block = (
-            f'<details class="card-expand">'
-            f'<summary>Media &amp; traces</summary>'
-            f'<div class="card-expand-body">{media_inner}</div></details>'
+    details_inner = f"{err_meta}{err_html}{stale_html}{media_inner}"
+    details_block = ""
+    if details_inner.strip():
+        details_block = render_inline_disclosure(
+            css_class="card-expand",
+            summary_html="Diagnostics &amp; media",
+            inner_html=f'<div class="card-expand-body">{details_inner}</div>',
         )
+
+    facts = render_fact_grid(
+        [
+            (html.escape("Schema"), f"<code>{schema}</code>"),
+            (html.escape("Last OK"), f"{su}{rel_html}"),
+            (html.escape("Ticks"), tticks),
+        ]
+    )
 
     return f"""
 <section class="card" data-target="{name_attr}">
-  <p class="card-kind"><span class="pill pill-muted">{route_lbl}</span></p>
+  <div class="card-topline">
+    {route_pill}
+    {state_pill}
+    {stale_chip}
+  </div>
   <h2>{name}</h2>
-  <p><a href="{url_e}" target="_blank" rel="noopener">{name} on Fandango</a></p>
-  <p><span class="{pill_class}">{cur}</span></p>
-  <p class="card-stats"><strong>release_schema</strong> {schema} · <strong>ticks</strong> {tticks} · <strong>last OK</strong> {su}{rel_html}</p>
-  {err_meta}
-  {err_html}
-  {stale_html}
-  {media_block}
+  <p class="card-link"><a href="{url_e}" target="_blank" rel="noopener">Open on Fandango</a></p>
+  {facts}
+  {details_block}
 </section>
 """
 
@@ -563,13 +1447,11 @@ def _render_triage_priority_table(
 ) -> str:
     """Compact table: most urgent targets first (errors → stale → on-sale → routine)."""
     if not targets:
-        return """
-  <div class="triage-priority">
-    <p class="section-label" style="margin:0.75rem 0 0.35rem 0">Target priority</p>
-    <p class="hint meta" style="margin-top:0">No targets configured — add <code>targets:</code> in <code>config.yaml</code>.</p>
-  </div>
+        return """<div class="triage-priority">
+<p class="section-label" style="margin:0.75rem 0 0.35rem 0">Target priority</p>
+<p class="hint meta" style="margin-top:0">No targets configured — add <code>targets:</code> in <code>config.yaml</code>.</p>
+</div>
 """
-
     rows_out: list[tuple[int, str, str]] = []
     for t in targets:
         if not isinstance(t, dict):
@@ -618,26 +1500,33 @@ def _render_triage_priority_table(
     rows_out.sort(key=lambda x: (x[0], x[1].lower()))
     body = "".join(r[2] for r in rows_out)
 
-    return f"""
-  <div class="triage-priority">
-    <p class="section-label" style="margin:0.75rem 0 0.35rem 0">Target priority</p>
-    <p class="hint meta" style="margin-top:0">Rows are sorted: errors, stale last OK, on-sale/alerted signals, then routine. Use <a href="#crawl">Fandango crawl</a> for full cards.</p>
-    <div class="table-wrap triage-table-wrap">
-    <table class="data-table triage-table">
-      <thead><tr>
-        <th scope="col">Priority</th>
-        <th scope="col">Target</th>
-        <th scope="col">State</th>
-        <th scope="col">Schema</th>
-        <th scope="col">Last OK</th>
-        <th scope="col">CE</th>
-        <th scope="col">Fandango</th>
-      </tr></thead>
-      <tbody>{body}</tbody>
-    </table>
-    </div>
-  </div>
-"""
+    thead = "".join(
+        f'<th scope="col">{html.escape(col)}</th>'
+        for col in (
+            "Priority",
+            "Target",
+            "State",
+            "Schema",
+            "Last OK",
+            "CE",
+            "Fandango",
+        )
+    )
+    tbl = render_data_table(
+        thead_row=thead,
+        tbody_rows_html=body,
+        table_classes=("data-table", "triage-table"),
+        caption="Target priority ranking",
+        wrapper_class="triage-table-wrap",
+    )
+
+    extra = ""
+    sub = (
+        '<div class="subhead-row"><p class="section-label">Target priority</p>'
+        '<a href="#crawl">Full cards</a></div>'
+        f"{tbl}"
+    )
+    return f'<div class="triage-priority">{extra}{sub}</div>'
 
 
 def _render_triage_panel(
@@ -713,7 +1602,7 @@ def _render_triage_panel(
         + "".join(f"<li>{a}</li>" for a in attention)
         + "</ul>"
         if attention
-        else "<p class=\"hint meta\">No extra attention flags — see per-target cards below.</p>"
+        else '<p class="hint meta">No extra attention flags. Fandango targets look routine.</p>'
     )
 
     priority_table = _render_triage_priority_table(
@@ -722,24 +1611,40 @@ def _render_triage_panel(
         stale_threshold_sec=thr,
     )
 
-    return f"""
-<section class="panel triage-panel" id="triage" aria-label="At a glance">
-  <h2 class="section-label">At a glance</h2>
-  <p class="panel-tagline">Triage: ticket signals, process health, and config hints.</p>
-  <div class="triage-grid">
-    <div><strong>Targets</strong><span>{n_targets} configured · {n_shots} with screenshot</span></div>
-    <div><strong>States</strong><span>alerted/purchasing-like: {alerted} · watching/idle: {watching} · error streak: {errish}</span></div>
-    <div><strong>Schema signals</strong><span>{good_schema} with partial/full release schema</span></div>
-    <div><strong>Stale crawls</strong><span>{stale_n} past ~{_fmt_duration(thr)} since last OK</span></div>
-    <div><strong>Movies registry</strong><span>{n_movies} rows</span></div>
-  </div>
-  {priority_table}
-  <div class="triage-attention">
-    <p class="section-label" style="margin-top:0.75rem">What needs attention</p>
-    {att_html}
-  </div>
-</section>
+    metrics_html = "".join(
+        (
+            "<div><strong>Targets</strong>"
+            f"<span>{n_targets} configured · {n_shots} with screenshot</span></div>",
+            "<div><strong>Ticket signals</strong>"
+            f"<span>{alerted} alerted · {good_schema} with release schema</span></div>",
+            "<div><strong>Health</strong>"
+            "<span>"
+            f"{html.escape(str(errish))} error streak · {html.escape(str(stale_n))} stale beyond "
+            f"~{html.escape(_fmt_duration(thr))}"
+            "</span></div>",
+            "<div><strong>Registry</strong>"
+            f"<span>{n_movies} movies · {watching} watching/idle</span></div>",
+        )
+    )
+
+    glance = render_metric_grid(metrics_html, css_class="triage-grid")
+
+    inner = f"""
+<h2 class="section-label">At a glance</h2>
+<p class="panel-tagline">The shortest path to what needs action.</p>
+{glance}
+<div class="triage-attention">
+<p class="section-label">Needs attention</p>
+{att_html}
+</div>
+{priority_table}
 """
+    return render_panel(
+        inner,
+        css_classes=("triage-panel",),
+        section_id="triage",
+        aria_label="At a glance",
+    )
 
 
 def _render_release_intel_panel(
@@ -747,26 +1652,32 @@ def _render_release_intel_panel(
 ) -> str:
     """HTML for xAI-backed release summaries (one sub-card per movie)."""
     if not release_intel:
-        return (
-            '<section class="panel intel-panel" id="release-intel">'
-            '<h2 class="section-label">Release intel</h2>'
-            "<p class=\"panel-tagline\">xAI Grok</p>"
+        inner = (
+            "<h2 class=\"section-label\">Release intel</h2>"
+            '<p class="panel-tagline">xAI Grok</p>'
             "<p class=\"hint\">The release-intel payload is empty. If you expected Grok "
             "summaries, check <code>release_intel</code> in <code>config.yaml</code> and "
             "API keys; otherwise this panel may appear while the cache is warming up.</p>"
-            "</section>"
+        )
+        return render_panel(
+            inner,
+            css_classes=("intel-panel",),
+            section_id="release-intel",
         )
     status = release_intel.get("status")
     if status == "disabled":
-        return (
-            '<section class="panel intel-panel" id="release-intel">'
+        inner = (
             "<h2 class=\"section-label\">Release intel</h2>"
             '<p class="panel-tagline">xAI Grok</p>'
-            f'<p class="hint">{html.escape(str(release_intel.get("reason") or "disabled"))}</p></section>'
+            f'<p class="hint">{html.escape(str(release_intel.get("reason") or "disabled"))}</p>'
+        )
+        return render_panel(
+            inner,
+            css_classes=("intel-panel",),
+            section_id="release-intel",
         )
     if status == "unconfigured":
-        return (
-            '<section class="panel intel-panel" id="release-intel">'
+        inner = (
             "<h2 class=\"section-label\">Release intel</h2>"
             '<p class="panel-tagline">xAI Grok · not configured</p>'
             '<p class="hint">Set <code>XAI_API_KEY</code> (or <code>GROK_API_KEY</code>) in '
@@ -774,7 +1685,11 @@ def _render_release_intel_panel(
             'target="_blank" rel="noopener">console.x.ai</a> — OpenAI keys do not work '
             "on api.x.ai. Summaries are advisory; Fandango crawl state below is the "
             "source of truth for on-sale detection.</p>"
-            "</section>"
+        )
+        return render_panel(
+            inner,
+            css_classes=("intel-panel",),
+            section_id="release-intel",
         )
 
     meta_parts: list[str] = []
@@ -822,34 +1737,41 @@ def _render_release_intel_panel(
         if notable_e:
             nd_line = f"<p><strong>Notable dates</strong>: {notable_e}</p>"
 
+        expand_inner = (
+            f"<p>{summary}</p>"
+            f"<p><strong>Ticketing</strong>: {ticketing}</p>"
+            f"{nd_line}"
+            f'<p class="qualifier">{qual}</p>'
+        )
+        disclosure = render_inline_disclosure(
+            css_class="intel-expand",
+            summary_html="Summary, ticketing &amp; notes",
+            inner_html=f'<div class="intel-expand-body">{expand_inner}</div>',
+        )
+
         blocks.append(
             f"""
 <article class="intel-card">
   <h3>{title}</h3>
   <p class="intel-headline">{headline}</p>
-  <details class="intel-expand">
-    <summary>Summary, ticketing &amp; notes</summary>
-    <div class="intel-expand-body">
-      <p>{summary}</p>
-      <p><strong>Ticketing</strong>: {ticketing}</p>
-      {nd_line}
-      <p class="qualifier">{qual}</p>
-    </div>
-  </details>
+  {disclosure}
 </article>
 """
         )
 
     body = "".join(blocks) if blocks else "<p class=\"hint\">No movies in registry.</p>"
-    return f"""
-<section class="panel intel-panel" id="release-intel">
-  <h2 class="section-label">Release intel</h2>
-  <p class="panel-tagline">xAI Grok · advisory context (Fandango crawl is authoritative)</p>
-  <p class="hint meta">{meta_line}</p>
-  {err_html}
-  <div class="intel-grid">{body}</div>
-</section>
+    inner = f"""
+<h2 class="section-label">Release intel</h2>
+<p class="panel-tagline">xAI Grok · advisory context (Fandango crawl is authoritative)</p>
+<p class="hint meta">{meta_line}</p>
+{err_html}
+<div class="intel-grid">{body}</div>
 """
+    return render_panel(
+        inner,
+        css_classes=("intel-panel",),
+        section_id="release-intel",
+    )
 
 
 def _render_purchases_panel(
@@ -862,20 +1784,24 @@ def _render_purchases_panel(
     """Collapsible table of recent purchase attempts from ``purchases.jsonl``."""
     if not rows:
         pe = "enabled" if purchase_enabled else "disabled in config"
-        return (
-            '<section class="panel panel-secondary" id="purchase">'
-            '<details class="panel-fold" open>'
-            '<summary><span class="fold-title">Purchase history</span>'
-            '<span class="fold-badge">0 lines</span></summary>'
-            '<div class="fold-body">'
+        inner = (
             f"<p class=\"hint meta\">Purchase tier: <code>{html.escape(purchase_mode)}</code> "
             f"({html.escape(pe)}). "
             "No purchase attempts are logged to <code>state/purchases.jsonl</code> until "
             "the scripted purchaser runs (or a prior run wrote no rows).</p>"
             "<p class=\"hint\">No rows in <code>"
-            f"{html.escape(file_path)}</code> yet."
-            "</p></div></details></section>"
+            f"{html.escape(file_path)}</code> yet.</p>"
         )
+        fold = render_fold_panel(
+            inner,
+            fold_id=None,
+            summary_html=(
+                '<span class="fold-title">Purchase history</span>'
+                '<span class="fold-badge">0 lines</span>'
+            ),
+            open_=True,
+        )
+        return render_panel(fold, css_classes=("panel-secondary",), section_id="purchase")
     pr_rows: list[str] = []
     for row in reversed(rows):
         at = html.escape(str(row.get("at") or "—"))
@@ -902,24 +1828,28 @@ def _render_purchases_panel(
         f"Tail of <code>{html.escape(file_path)}</code> (newest first). "
         f"Purchase: <code>{html.escape(purchase_mode)}</code> ({pe_label})."
     )
-    return f"""
-<section class="panel panel-secondary" id="purchase">
-  <details class="panel-fold" open>
-    <summary><span class="fold-title">Purchase history</span>
-    <span class="fold-badge">{n} lines</span></summary>
-    <div class="fold-body">
-      <p class="hint meta">{ph_meta}</p>
-      <div class="table-wrap">
-      <table class="data-table">
-        <thead><tr><th scope="col">at (UTC)</th><th scope="col">target</th>
-        <th scope="col">outcome</th><th scope="col">error</th></tr></thead>
-        <tbody>{body}</tbody>
-      </table>
-      </div>
-    </div>
-  </details>
-</section>
-"""
+    thead = "".join(
+        f'<th scope="col">{html.escape(col)}</th>'
+        for col in ("at (UTC)", "target", "outcome", "error")
+    )
+    tbl = render_data_table(
+        thead_row=thead,
+        tbody_rows_html=body,
+        table_classes=("data-table",),
+        caption=None,
+        wrapper_class="table-wrap",
+    )
+    inner = f'<p class="hint meta">{ph_meta}</p>{tbl}'
+    fold = render_fold_panel(
+        inner,
+        fold_id=None,
+        summary_html=(
+            '<span class="fold-title">Purchase history</span>'
+            f'<span class="fold-badge">{n} lines</span>'
+        ),
+        open_=True,
+    )
+    return render_panel(fold, css_classes=("panel-secondary",), section_id="purchase")
 
 
 def render_dashboard_not_found_html(*, request_path: str) -> str:
@@ -931,78 +1861,8 @@ def render_dashboard_not_found_html(*, request_path: str) -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Not found — fandango-watcher</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
-    :root {{
-      --bg: #080a0f;
-      --text: #eef1f7;
-      --muted: #8b95ab;
-      --border: rgba(120, 140, 180, 0.18);
-      --accent: #5eead4;
-      --violet: #818cf8;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      font-family: "Outfit", ui-sans-serif, system-ui, sans-serif;
-      color: var(--text);
-      margin: 0;
-      padding: 2.5rem 1.25rem 3rem;
-      max-width: 560px;
-      margin-left: auto;
-      margin-right: auto;
-      line-height: 1.55;
-      font-size: 0.95rem;
-      min-height: 100vh;
-      background:
-        radial-gradient(ellipse 100% 50% at 50% 0%, rgba(99, 102, 241, 0.18), transparent 52%),
-        var(--bg);
-    }}
-    p.kicker {{
-      font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.2em;
-      color: var(--muted); margin: 0 0 0.4rem 0;
-    }}
-    h1 {{
-      font-size: clamp(1.35rem, 3.5vw, 1.7rem);
-      font-weight: 700; letter-spacing: -0.03em; margin: 0 0 1rem 0; line-height: 1.2;
-      background: linear-gradient(125deg, #f8fafc 12%, var(--accent) 45%, var(--violet) 90%);
-      -webkit-background-clip: text; background-clip: text; color: transparent;
-    }}
-    p {{ color: var(--muted); margin: 0.65rem 0; }}
-    a {{
-      color: #7dd3fc; text-underline-offset: 3px;
-      text-decoration-color: rgba(125, 211, 252, 0.45);
-    }}
-    a:hover {{ color: var(--accent); text-decoration-color: var(--accent); }}
-    code {{
-      font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.85rem;
-      color: #c7d2fe; background: rgba(0, 0, 0, 0.3); padding: 0.15rem 0.4rem;
-      border-radius: 6px; border: 1px solid var(--border);
-    }}
-    .card {{
-      margin-top: 1.5rem; padding: 1.1rem 1.15rem 1.2rem; border-radius: 14px;
-      border: 1px solid var(--border);
-      background: linear-gradient(165deg, rgba(255,255,255,0.04) 0%, #12161f 45%);
-      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
-    }}
-    .card p {{ color: var(--text); font-size: 0.9rem; margin: 0; }}
-    .card .links {{ display: flex; flex-wrap: wrap; gap: 0.3rem 0.55rem; margin-top: 0.5rem; }}
-    .card a:not(:last-child)::after {{
-      content: "·"; margin-left: 0.45rem; color: var(--muted); opacity: 0.5; pointer-events: none;
-    }}
-    @media (prefers-color-scheme: light) {{
-      :root {{
-        --bg: #f0f2f8; --text: #12151c; --muted: #5a6372;
-        --border: rgba(60, 70, 100, 0.14);
-      }}
-      body {{ background: radial-gradient(ellipse 100% 45% at 50% 0%, rgba(99, 102, 241, 0.1), transparent 50%), var(--bg); }}
-      h1 {{
-        background: linear-gradient(125deg, #0f172a 20%, #0d9488 55%, #4f46e5 95%);
-        -webkit-background-clip: text; background-clip: text;
-      }}
-      code {{ background: rgba(0,0,0,0.05); color: #4338ca; border-color: rgba(0,0,0,0.08); }}
-    }}
+{not_found_css()}
   </style>
 </head>
 <body>
@@ -1186,23 +2046,17 @@ def render_index_html(
         )
 
     crawl_body = "\n".join(crawl_blocks)
-    purchase_link = (
-        '<a href="#purchase">Purchase</a>\n  '
-        if show_ph
-        else ""
-    )
-    jump_nav = f"""
-<nav class="jump-nav" aria-label="On this page">
-  <div class="jump-nav-list">
-  <a href="#triage">At a glance</a>
-  <a href="#runtime">Runtime</a>
-  <a href="#release-intel">Release intel</a>
-  {purchase_link}<a href="#crawl">Fandango</a>
-  <a href="#x">X / Twitter</a>
-  <a href="#registry">Movies</a>
-  </div>
-</nav>
-"""
+    anchors: list[tuple[str, str]] = [
+        ("#triage", "At a glance"),
+        ("#runtime", "Runtime"),
+        ("#release-intel", "Release intel"),
+        ("#crawl", "Fandango"),
+        ("#x", "X / Twitter"),
+        ("#registry", "Movies"),
+    ]
+    if show_ph:
+        anchors.insert(3, ("#purchase", "Purchase"))
+    jump_nav = _jump_nav_html(anchors, aria_label="On this page")
 
     sx_handles = social_x.get("handles") or {}
     sx_last_polled = html.escape(str(social_x.get("last_polled_at") or "—"))
@@ -1284,40 +2138,53 @@ def render_index_html(
             f"{err_html}"
             f"</article>"
         )
+    thead = "".join(
+        f'<th scope="col">{html.escape(col)}</th>'
+        for col in (
+            "Handle",
+            "user_id",
+            "last_polled_at",
+            "last_seen_tweet_id",
+            "tweet text (preview)",
+            "errors",
+            "last_error",
+            "open",
+        )
+    )
     sx_table_html = (
-        (
-            '<div class="table-wrap sx-snapshot" role="region" aria-label="X handles, tweet text snapshot">'
-            "<table class=\"data-table\">"
-            "<caption class=\"visually-hidden\">Per-handle poller state and last tweet text preview</caption>"
-            "<thead><tr><th scope=\"col\">Handle</th><th scope=\"col\">user_id</th>"
-            "<th scope=\"col\">last_polled_at</th><th scope=\"col\">last_seen_tweet_id</th>"
-            "<th scope=\"col\">tweet text (preview)</th>"
-            "<th scope=\"col\">errors</th><th scope=\"col\">last_error</th><th scope=\"col\">open</th>"
-            "</tr></thead><tbody>"
-            f'{"".join(sx_table_rows)}</tbody></table></div>'
+        render_data_table(
+            thead_row=thead,
+            tbody_rows_html="".join(sx_table_rows),
+            table_classes=("data-table",),
+            caption="Per-handle poller state and last tweet text preview",
+            caption_class="visually-hidden",
+            wrapper_class="table-wrap sx-snapshot",
+            outer_prefix='<div role="region" aria-label="X handles, tweet text snapshot">',
+            outer_suffix="</div>",
         )
         if sx_table_rows
         else ""
     )
-    sx_cards_html = (
-        f'<div class="sx-cards">{"".join(sx_cards)}</div>'
-        if sx_cards
-        else '<p class="hint">No X handles in state.</p>'
-    )
-    sx_block = f"""
-      <p class="hint meta">
+    sx_cards_html = ""
+    if sx_cards:
+        sx_cards_html = render_inline_disclosure(
+            css_class="inline-fold sx-detail-fold",
+            summary_html="Per-handle details",
+            inner_html=f'<div class="sx-cards">{"".join(sx_cards)}</div>',
+        )
+    else:
+        sx_cards_html = '<p class="hint">No X handles in state.</p>'
+    sx_block = f"""      <p class="hint meta">
         Last global X poll: <code>{sx_last_polled}</code>. Cadence: {social_cadence};
         fetches up to {social_max_results} tweets per handle when needed.
       </p>
       <p class="hint">
-        The watcher stores <code>since_id</code> in <code>{social_state_path}</code> and only requests
-        tweets newer than the cursor. <strong>Tweet text</strong> in the table and cards is the
-        latest body saved from the API (new tweets, or a one-tweet backfill when the timeline is empty).
-        Use <code>x-poll</code> or <code>x-poll --reset</code> to refresh.
+        Compact poller state first. Per-handle tweet bodies remain available below for deeper review.
+        Use <code>x-poll</code> or <code>x-poll --reset</code> to refresh <code>{social_state_path}</code>.
       </p>
       {sx_table_html}
       {sx_cards_html}
-    """
+"""
 
     movie_rows: list[str] = []
     for m in movies:
@@ -1333,24 +2200,47 @@ def render_index_html(
         )
 
     n_registry = len(movie_rows)
-    social_fold = (
-        f'<section class="panel panel-secondary" id="x" aria-label="X / Twitter poller">'
-        f'<details class="panel-fold" open>'
-        f'<summary><span class="fold-title">X / Twitter poller</span>'
-        f'<span class="fold-badge">{n_social} handles</span></summary>'
-        f'<div class="fold-body">{sx_block}</div></details></section>'
+    sx_fold = render_fold_panel(
+        sx_block,
+        fold_id=None,
+        summary_html=(
+            '<span class="fold-title">X / Twitter poller</span>'
+            f'<span class="fold-badge">{n_social} handles</span>'
+        ),
+        open_=True,
     )
-    registry_fold = (
-        f'<section class="panel panel-secondary" id="registry" aria-label="Movies registry">'
-        f'<details class="panel-fold">'
-        f'<summary><span class="fold-title">Movies registry</span>'
-        f'<span class="fold-badge">{n_registry} movies</span></summary>'
-        f'<div class="fold-body"><div class="table-wrap"><table class="data-table">'
-        f"<thead><tr><th scope=\"col\">key</th><th scope=\"col\">title</th>"
-        f"<th scope=\"col\">fandango_targets</th>"
-        f"<th scope=\"col\">x_handles</th></tr></thead><tbody>"
-        f'{"".join(movie_rows)}</tbody></table></div></div></details></section>'
+    social_fold = render_panel(
+        sx_fold,
+        css_classes=("panel-secondary",),
+        section_id="x",
+        aria_label="X / Twitter poller",
     )
+
+    thead_reg = "".join(
+        f'<th scope="col">{html.escape(col)}</th>'
+        for col in ("key", "title", "fandango_targets", "x_handles")
+    )
+    reg_tbl = render_data_table(
+        thead_row=thead_reg,
+        tbody_rows_html="".join(movie_rows),
+        table_classes=("data-table",),
+    )
+    reg_fold = render_fold_panel(
+        reg_tbl,
+        fold_id=None,
+        summary_html=(
+            '<span class="fold-title">Movies registry</span>'
+            f'<span class="fold-badge">{n_registry} movies</span>'
+        ),
+        open_=False,
+    )
+    registry_fold = render_panel(
+        reg_fold,
+        css_classes=("panel-secondary",),
+        section_id="registry",
+        aria_label="Movies registry",
+    )
+
 
     intel_panel = _render_release_intel_panel(movies, release_intel)
     purchases_panel = ""
@@ -1363,20 +2253,31 @@ def render_index_html(
             purchase_mode=purchase_mode_raw,
         )
 
-    runtime_panel = f"""
-<section class="panel runtime-panel" id="runtime">
-  <h2 class="section-label">Runtime &amp; cadence</h2>
-  <p class="panel-tagline">This snapshot is served at <code>{public_base_e}</code> (read-only; bind address comes from the running process).</p>
-  <div class="meta-grid">
-    <div><strong>Fandango poll</strong><span>{fandango_cadence} with backoff up to {fandango_backoff}</span></div>
-    <div><strong>X / Twitter poll</strong><span>{html.escape(social_enabled)} · {social_cadence} · max {social_max_results} tweets/handle</span></div>
-    <div><strong>State lives in</strong><span><code>{runtime_state_dir}</code></span></div>
-    <div><strong>Artifacts live in</strong><span><code>{runtime_artifacts_root}</code></span></div>
-    <div><strong>Browser profile</strong><span><code>{browser_profile}</code></span></div>
-    <div><strong>Purchase / notify</strong><span><code>{purchase_mode}</code> · {notify_line}</span></div>
-  </div>
-</section>
+    metrics_html = (
+        "<div><strong>Fandango poll</strong>"
+        f"<span>{fandango_cadence} with backoff up to {fandango_backoff}</span></div>"
+        "<div><strong>X / Twitter poll</strong>"
+        f"<span>{html.escape(social_enabled)} · {social_cadence} · max {social_max_results} tweets/handle</span></div>"
+        "<div><strong>State lives in</strong>"
+        f"<span><code>{runtime_state_dir}</code></span></div>"
+        "<div><strong>Artifacts live in</strong>"
+        f"<span><code>{runtime_artifacts_root}</code></span></div>"
+        "<div><strong>Browser profile</strong>"
+        f"<span><code>{browser_profile}</code></span></div>"
+        "<div><strong>Purchase / notify</strong>"
+        f"<span><code>{purchase_mode}</code> · {notify_line}</span></div>"
+    )
+    runtime_inner = f"""
+<h2 class="section-label">Runtime &amp; cadence</h2>
+<p class="panel-tagline">This snapshot is served at <code>{public_base_e}</code> (read-only; bind address comes from the running process).</p>
+{render_metric_grid(metrics_html)}
 """
+    runtime_panel = render_panel(
+        runtime_inner,
+        css_classes=("runtime-panel",),
+        section_id="runtime",
+    )
+
 
     rs = max(0, int(refresh_seconds))
     use_live = rs > 0 and live_revision is not None
@@ -1496,483 +2397,8 @@ def render_index_html(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 {meta_refresh}{noscript_meta}  <title>fandango-watcher</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
   <style>
-    :root {{
-      --bg: #080a0f;
-      --bg-elevated: #0c0f16;
-      --surface: #12161f;
-      --surface2: #161c28;
-      --border: rgba(120, 140, 180, 0.18);
-      --border-bright: rgba(180, 200, 255, 0.12);
-      --text: #eef1f7;
-      --muted: #8b95ab;
-      --accent: #5eead4;
-      --accent-dim: rgba(94, 234, 212, 0.12);
-      --accent2: #a5b4fc;
-      --violet: #818cf8;
-      --radius: 14px;
-      --shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border-bright);
-      --shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.35);
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      font-family: "Outfit", ui-sans-serif, system-ui, sans-serif;
-      color: var(--text);
-      margin: 0;
-      padding: 0 1.25rem 2.5rem;
-      max-width: 1200px;
-      margin-left: auto;
-      margin-right: auto;
-      line-height: 1.5;
-      font-size: 0.95rem;
-      min-height: 100vh;
-      background:
-        radial-gradient(ellipse 100% 60% at 50% -15%, rgba(99, 102, 241, 0.22), transparent 55%),
-        radial-gradient(ellipse 60% 40% at 100% 20%, rgba(45, 212, 191, 0.08), transparent 45%),
-        radial-gradient(ellipse 50% 35% at 0% 60%, rgba(129, 140, 248, 0.07), transparent 40%),
-        var(--bg);
-    }}
-    main.dash {{ display: flex; flex-direction: column; gap: 1.35rem; }}
-    header.dash-header {{
-      padding: 1.75rem 0 1.5rem;
-      margin-bottom: 0.15rem;
-      border-bottom: 1px solid var(--border);
-      position: relative;
-    }}
-    header.dash-header::after {{
-      content: "";
-      position: absolute;
-      left: 0;
-      bottom: -1px;
-      width: 100%;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(94, 234, 212, 0.35), rgba(129, 140, 248, 0.25), transparent);
-      opacity: 0.9;
-    }}
-    .dash-kicker {{
-      font-size: 0.68rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.2em;
-      color: var(--muted);
-      margin: 0 0 0.4rem 0;
-    }}
-    h1.dash-title {{
-      font-size: clamp(1.45rem, 4vw, 1.85rem);
-      font-weight: 700;
-      letter-spacing: -0.03em;
-      margin: 0 0 0.6rem 0;
-      line-height: 1.15;
-      background: linear-gradient(125deg, #f8fafc 12%, var(--accent) 42%, var(--violet) 88%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-    }}
-    header.dash-header p {{ margin: 0.28rem 0; font-size: 0.86rem; color: var(--muted); }}
-    header .hb-row {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.45rem 0.75rem;
-      margin-top: 0.65rem;
-      align-items: center;
-    }}
-    .hb-pill {{
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      font-size: 0.78rem;
-      font-weight: 500;
-      padding: 0.28rem 0.65rem;
-      border-radius: 999px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      box-shadow: var(--shadow-sm);
-    }}
-    .hb-pill .dot {{
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 10px var(--accent);
-    }}
-    .section-head {{
-      margin: 0;
-      padding: 0.35rem 0 0.15rem 0;
-    }}
-    .section-label {{
-      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.12em; color: var(--muted); margin: 0 0 0.2rem 0;
-    }}
-    .panel-tagline {{
-      font-size: 0.82rem; color: var(--muted); margin: 0 0 0.5rem 0;
-    }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
-      gap: 1rem;
-    }}
-    .grid .card {{
-      background: linear-gradient(165deg, rgba(255,255,255,0.04) 0%, var(--surface) 40%);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1rem 1.1rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
-      box-shadow: var(--shadow-sm);
-      transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.2s ease;
-    }}
-    .grid .card:hover {{
-      transform: translateY(-3px);
-      box-shadow: var(--shadow);
-      border-color: rgba(94, 234, 212, 0.22);
-    }}
-    .card {{
-      border-radius: var(--radius);
-    }}
-    .card h2 {{ margin: 0; font-size: 1.05rem; font-weight: 600; letter-spacing: -0.02em; }}
-    .card-stats {{ font-size: 0.82rem; color: var(--muted); margin: 0.15rem 0 0 0; }}
-    .pill {{
-      display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px;
-      background: rgba(255,255,255,0.06); font-size: 0.8rem; font-weight: 600;
-      border: 1px solid var(--border);
-    }}
-    .pill-ok {{ background: rgba(16, 185, 129, 0.18); color: #6ee7b7; border-color: rgba(16,185,129,0.35); }}
-    .pill-warn {{ background: rgba(245, 158, 11, 0.15); color: #fcd34d; border-color: rgba(245,158,11,0.3); }}
-    a {{ color: #7dd3fc; text-underline-offset: 3px; text-decoration-color: rgba(125, 211, 252, 0.45); transition: color 0.15s; }}
-    a:hover {{ color: var(--accent); text-decoration-color: var(--accent); }}
-    .thumb img {{ max-width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--border);
-      box-shadow: 0 4px 20px rgba(0,0,0,0.35); }}
-    video {{ max-width: 100%; border-radius: 10px; background: #000; border: 1px solid var(--border); }}
-    details {{ color: var(--text); }}
-    summary {{
-      cursor: pointer; list-style: none; user-select: none;
-      font-size: 0.85rem; font-weight: 500; color: var(--accent2);
-      padding: 0.35rem 0;
-    }}
-    summary::-webkit-details-marker {{ display: none; }}
-    summary::before {{
-      content: "▸"; display: inline-block; margin-right: 0.4rem;
-      transition: transform 0.15s ease; opacity: 0.75; font-size: 0.75rem;
-    }}
-    details[open] > summary::before {{ transform: rotate(90deg); }}
-    .card-expand, .intel-expand {{ margin-top: 0.25rem; }}
-    .card-expand-body, .intel-expand-body {{
-      padding: 0.5rem 0 0 0.85rem; border-left: 2px solid var(--border);
-      margin-top: 0.35rem; font-size: 0.88rem;
-    }}
-    .runtime-panel {{
-      background: linear-gradient(155deg, rgba(129, 140, 248, 0.07) 0%, var(--surface) 55%);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.15rem 1.2rem 1.25rem;
-      box-shadow: var(--shadow-sm);
-    }}
-    .runtime-panel .panel-tagline {{ margin-bottom: 0.75rem; }}
-    .meta-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
-      gap: 0.65rem;
-    }}
-    .meta-grid > div {{
-      background: var(--bg-elevated);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 0.75rem 0.8rem;
-      min-width: 0;
-      transition: border-color 0.2s;
-    }}
-    .meta-grid > div:hover {{ border-color: rgba(94, 234, 212, 0.2); }}
-    .meta-grid strong {{
-      display: block; font-size: 0.74rem; color: var(--muted);
-      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem;
-    }}
-    .meta-grid span {{
-      display: block; font-size: 0.86rem; color: var(--text);
-      overflow-wrap: anywhere;
-    }}
-    .intel-panel {{
-      background: linear-gradient(165deg, rgba(94, 234, 212, 0.06) 0%, var(--surface) 50%);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.15rem 1.2rem 1.25rem;
-      box-shadow: var(--shadow-sm);
-    }}
-    .intel-panel .section-label {{ margin-top: 0; }}
-    .intel-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
-      gap: 0.75rem; margin-top: 0.65rem;
-    }}
-    .intel-card {{
-      background: var(--bg); border: 1px solid var(--border);
-      border-radius: 8px; padding: 0.85rem 1rem;
-    }}
-    .intel-card h3 {{
-      font-size: 0.95rem; margin: 0 0 0.25rem 0; color: #d4daf0;
-      font-weight: 600;
-    }}
-    .intel-headline {{ font-weight: 600; color: var(--accent2); margin: 0 0 0.4rem 0; font-size: 0.9rem; }}
-    p.qualifier {{ font-size: 0.78rem; opacity: 0.8; margin: 0.5rem 0 0 0; font-style: italic; color: var(--muted); }}
-    .pill-warn-inline {{
-      background: #3d2a1e; color: #f0d4a8; padding: 0.35rem 0.55rem;
-      border-radius: 6px; display: inline-block; font-size: 0.82rem;
-    }}
-    section.panel {{ margin: 0; }}
-    .panel-secondary {{ margin-top: 0.25rem; }}
-    .panel-fold {{
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--surface);
-      overflow: hidden;
-      box-shadow: var(--shadow-sm);
-    }}
-    .panel-fold > summary {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-      padding: 0.75rem 1.05rem;
-      background: linear-gradient(90deg, rgba(99, 102, 241, 0.08), var(--surface2));
-      border-bottom: 1px solid transparent;
-      font-size: 0.92rem;
-    }}
-    .panel-fold[open] > summary {{
-      border-bottom-color: var(--border);
-    }}
-    .fold-title {{ font-weight: 600; color: var(--text); }}
-    .fold-badge {{
-      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--muted); background: var(--bg); padding: 0.2rem 0.5rem;
-      border-radius: 999px; border: 1px solid var(--border);
-    }}
-    .fold-body {{ padding: 0.65rem 1rem 0.85rem; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
-    th, td {{ border: 1px solid var(--border); padding: 0.4rem 0.55rem; text-align: left; }}
-    th {{ background: var(--surface2); color: var(--muted); font-weight: 600; font-size: 0.75rem;
-      text-transform: uppercase; letter-spacing: 0.04em; }}
-    tr:nth-child(even) td {{ background: rgba(255,255,255,0.02); }}
-    .purchase-err {{ font-size: 0.78rem; color: #e8c4a8; }}
-    code {{
-      font-family: "IBM Plex Mono", ui-monospace, monospace;
-      font-size: 0.74rem;
-      word-break: break-all;
-      color: #c7d2fe;
-      background: rgba(0, 0, 0, 0.25);
-      padding: 0.1rem 0.35rem;
-      border-radius: 5px;
-      border: 1px solid rgba(255,255,255,0.06);
-    }}
-    p.hint {{ font-size: 0.88rem; opacity: 0.9; margin: 0.5rem 0 0 0; color: var(--muted); }}
-    p.hint.meta {{ font-size: 0.78rem; opacity: 0.85; margin-bottom: 0.65rem; }}
-    footer.dash-foot {{
-      margin-top: 2.25rem;
-      padding: 1.15rem 1.15rem 1.25rem;
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-      background: var(--surface);
-      font-size: 0.82rem;
-      color: var(--muted);
-      box-shadow: var(--shadow-sm);
-    }}
-    p.refresh-hint {{ margin: 0 0 0.65rem 0; font-size: 0.78rem; opacity: 0.92; }}
-    .card-stats .rel {{ font-size: 0.78rem; opacity: 0.88; font-weight: 450; }}
-    .skip-link {{
-      position: absolute; left: -9999px; z-index: 100;
-      padding: 0.55rem 1rem;
-      background: linear-gradient(135deg, var(--accent), #818cf8);
-      color: #0a0c10;
-      font-weight: 700;
-      border-radius: 8px;
-      box-shadow: var(--shadow-sm);
-    }}
-    .skip-link:focus {{ left: 1rem; top: 1rem; outline: 2px solid var(--violet); outline-offset: 2px; }}
-    a:focus-visible, summary:focus-visible, .skip-link:focus {{
-      outline: 2px solid var(--accent); outline-offset: 2px;
-    }}
-    .jump-nav {{
-      position: sticky;
-      top: 0.5rem;
-      z-index: 20;
-      padding: 0.55rem 1rem;
-      background: rgba(8, 10, 15, 0.72);
-      backdrop-filter: blur(14px) saturate(1.3);
-      -webkit-backdrop-filter: blur(14px) saturate(1.3);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      font-size: 0.8rem;
-      font-weight: 500;
-      color: var(--muted);
-      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
-    }}
-    .jump-nav-list {{
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: center;
-      row-gap: 0.4rem;
-      column-gap: 0.2rem;
-    }}
-    .jump-nav-list a {{
-      white-space: nowrap;
-      opacity: 0.92;
-    }}
-    .jump-nav-list a:not(:last-child)::after {{
-      content: "·";
-      display: inline-block;
-      margin-left: 0.4rem;
-      color: var(--muted);
-      opacity: 0.5;
-      font-weight: 400;
-      pointer-events: none;
-      user-select: none;
-    }}
-    .jump-nav a:hover {{ opacity: 1; }}
-    .triage-panel {{
-      background: linear-gradient(160deg, rgba(99, 102, 241, 0.1) 0%, var(--surface) 45%);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.15rem 1.2rem 1.25rem;
-      box-shadow: var(--shadow-sm);
-    }}
-    .triage-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
-      gap: 0.65rem;
-    }}
-    .triage-grid > div {{
-      background: var(--bg); border: 1px solid var(--border);
-      border-radius: 8px; padding: 0.55rem 0.65rem; min-width: 0;
-    }}
-    .triage-grid strong {{
-      display: block; font-size: 0.72rem; color: var(--muted);
-      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.2rem;
-    }}
-    .triage-grid span {{ font-size: 0.84rem; overflow-wrap: anywhere; }}
-    .triage-priority .hint.meta {{ margin-top: 0.25rem; }}
-    .triage-table-wrap {{ margin-top: 0.35rem; }}
-    table.triage-table {{ min-width: 640px; font-size: 0.8rem; }}
-    .triage-table td {{ vertical-align: top; }}
-    .triage-pill {{
-      display: inline-block; font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.05em; padding: 0.12rem 0.4rem; border-radius: 999px; white-space: nowrap;
-    }}
-    tr.triage-tier-0 td {{ background: rgba(200, 80, 80, 0.12); }}
-    tr.triage-tier-1 td {{ background: rgba(200, 160, 80, 0.1); }}
-    tr.triage-tier-2 td {{ background: rgba(80, 160, 120, 0.1); }}
-    .triage-pill-0 {{ background: #4a2a2a; color: #f0a8a8; }}
-    .triage-pill-1 {{ background: #3d3520; color: #e8c4a8; }}
-    .triage-pill-2 {{ background: #1e3d2e; color: #a8f0c0; }}
-    .triage-pill-3 {{ background: #2a3140; color: var(--muted); }}
-    ul.attention-list {{ margin: 0.35rem 0 0 1.1rem; padding: 0; color: var(--text); font-size: 0.86rem; }}
-    ul.attention-list li {{ margin: 0.25rem 0; }}
-    .pill-muted {{ background: #252a36; color: var(--muted); font-size: 0.72rem; }}
-    .card-kind {{ margin: 0 0 0.15rem 0; }}
-    .card-err {{ font-size: 0.78rem; color: #f0d4a8; margin: 0.25rem 0 0 0; }}
-    .card-stale {{ font-size: 0.78rem; color: #e8c4a8; margin: 0.35rem 0 0 0; }}
-    .card-media-meta {{ font-size: 0.76rem; color: var(--muted); margin: 0 0 0.35rem 0; }}
-    .movie-group {{ margin: 0; }}
-    .movie-group-title {{
-      font-size: 0.95rem; font-weight: 600; margin: 0 0 0.5rem 0; color: #d4daf0;
-    }}
-    .panel-warn {{ border-left: 3px solid #c9a227; padding-left: 0.65rem; }}
-    .conn-line {{ font-size: 0.8rem; margin: 0.5rem 0 0 0; }}
-    .conn-label {{ color: var(--muted); }}
-    .conn-ok {{ color: #a8f0c0; }}
-    .conn-bad {{ color: #f0a8a8; }}
-    .conn-static {{ color: var(--muted); }}
-    .table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch; }}
-    .visually-hidden {{
-      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-    }}
-    .sx-snapshot {{ margin: 0.35rem 0 0.85rem; }}
-    .sx-tweet-preview-cell {{
-      max-width: 36ch; font-size: 0.82rem; color: var(--text);
-      line-height: 1.45; vertical-align: top; word-break: break-word;
-    }}
-    .sx-preview-missing {{ color: var(--muted); }}
-    .sx-cards {{ display: flex; flex-direction: column; gap: 1rem; margin-top: 0.5rem; }}
-    .sx-card {{
-      background: linear-gradient(145deg, rgba(29, 155, 240, 0.06), var(--bg-elevated));
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1rem 1.1rem;
-      box-shadow: var(--shadow-sm);
-    }}
-    .sx-handle {{ margin: 0 0 0.35rem 0; font-size: 1.05rem; font-weight: 700; color: #e0e7ff; letter-spacing: -0.02em; }}
-    .sx-meta, .sx-tweet-idline, .sx-tweet-when {{ font-size: 0.78rem; color: var(--muted); margin: 0.2rem 0; }}
-    code.tweet-snowflake {{ font-size: 0.85rem; letter-spacing: 0.02em; word-break: break-all; }}
-    .sx-tweet-body {{
-      margin: 0.65rem 0 0 0;
-      padding: 0.85rem 1rem;
-      border-left: 3px solid #22d3ee;
-      background: linear-gradient(105deg, rgba(34, 211, 238, 0.1), rgba(129, 140, 248, 0.06));
-      border-radius: 0 12px 12px 0;
-      font-size: 0.9rem;
-      line-height: 1.5;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }}
-    .sx-tweet-body em.sx-no-text {{ color: var(--muted); font-style: italic; }}
-    .sx-err {{ font-size: 0.78rem; color: #f0c4a8; margin: 0.5rem 0 0 0; }}
-    table.data-table {{ min-width: 520px; }}
-    @media (max-width: 700px) {{
-      table.data-table {{ font-size: 0.78rem; }}
-      .jump-nav {{
-        font-size: 0.76rem; line-height: 1.5;
-        border-radius: 14px;
-        padding: 0.5rem 0.7rem;
-      }}
-    }}
-    @media (prefers-color-scheme: light) {{
-      :root {{
-        --bg: #f0f2f8;
-        --bg-elevated: #ffffff;
-        --surface: #ffffff;
-        --surface2: #e8ecf4;
-        --border: rgba(60, 70, 100, 0.14);
-        --border-bright: rgba(255, 255, 255, 0.9);
-        --text: #12151c;
-        --muted: #5a6372;
-        --accent: #0d9488;
-        --accent-dim: rgba(13, 148, 136, 0.12);
-        --accent2: #4f46e5;
-        --violet: #6366f1;
-        --shadow: 0 8px 28px rgba(30, 40, 80, 0.1), 0 0 0 1px rgba(0,0,0,0.04);
-        --shadow-sm: 0 2px 10px rgba(30, 40, 80, 0.07);
-      }}
-      body {{
-        background:
-          radial-gradient(ellipse 100% 50% at 50% 0%, rgba(99, 102, 241, 0.12), transparent 50%),
-          var(--bg);
-      }}
-      h1.dash-title {{
-        background: linear-gradient(125deg, #0f172a 20%, #0d9488 55%, #4f46e5 95%);
-        -webkit-background-clip: text;
-        background-clip: text;
-      }}
-      .jump-nav {{
-        background: rgba(255, 255, 255, 0.82);
-        border-color: rgba(0,0,0,0.08);
-      }}
-      .pill {{ background: rgba(0,0,0,0.04); }}
-      .pill-ok {{ background: rgba(16, 185, 129, 0.15); color: #047857; }}
-      .pill-warn {{ background: rgba(245, 158, 11, 0.15); color: #b45309; }}
-      code {{ background: rgba(0,0,0,0.05); color: #4338ca; border-color: rgba(0,0,0,0.06); }}
-      tr:nth-child(even) td {{ background: rgba(0,0,0,0.02); }}
-    }}
-    @media (prefers-reduced-motion: reduce) {{
-      summary::before {{ transition: none !important; }}
-      .grid .card {{
-        transition: none !important;
-      }}
-      .grid .card:hover {{ transform: none !important; }}
-    }}
+{dashboard_css()}
   </style>
 </head>
 <body>
@@ -1993,14 +2419,14 @@ def render_index_html(
   <main class="dash" id="main" tabindex="-1">
   {triage_panel}
   {jump_nav}
+  <section class="section-head" id="crawl" aria-label="Fandango crawl">
+    <h2 class="section-label">Fandango crawl</h2>
+    <p class="panel-tagline">Primary ticket-watch targets. Open diagnostics only when you need errors, screenshots, video, or traces.</p>
+  </section>
+  {crawl_body}
   {runtime_panel}
   {intel_panel}
   {purchases_panel}
-  <section class="section-head" id="crawl" aria-label="Fandango crawl">
-    <h2 class="section-label">Fandango crawl</h2>
-    <p class="panel-tagline">Per-target state · expand <strong>Media &amp; traces</strong> for screenshots / video / Playwright trace. Grouped by <strong>movies</strong> registry when possible.</p>
-  </section>
-  {crawl_body}
   {social_fold}
   {registry_fold}
   </main>
