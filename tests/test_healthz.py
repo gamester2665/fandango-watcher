@@ -82,7 +82,7 @@ class TestHealthz:
             url = f"http://127.0.0.1:{ctx.port}/healthz"
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
-                assert resp.headers["Content-Type"] == "application/json"
+                assert resp.headers["Content-Type"] == "application/json; charset=utf-8"
                 assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 payload = json.loads(resp.read())
 

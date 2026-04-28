@@ -199,7 +199,7 @@ def _make_handler_cls(
             if path_only in ("/healthz", "/health"):
                 health_body = json.dumps(heartbeat.snapshot()).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
                 _send_no_sniff(self)
                 self.send_header("Content-Length", str(len(health_body)))
                 self.end_headers()
