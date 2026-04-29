@@ -1,6 +1,32 @@
 () => {
   const text = (el) => (el && el.textContent ? el.textContent.trim() : "");
   const bodyText = (document.body && document.body.innerText) || "";
+  const metaContent = (selector) => {
+    const el = document.querySelector(selector);
+    const value = el && el.getAttribute ? el.getAttribute("content") : null;
+    return value && value.trim() ? value.trim() : null;
+  };
+  const imageSrc = (img) =>
+    img ? img.currentSrc || img.src || img.getAttribute("src") || null : null;
+  const posterFromImages = () => {
+    const imgs = Array.from(document.querySelectorAll("img"));
+    const candidates = imgs
+      .map(imageSrc)
+      .filter(Boolean)
+      .filter((src) => {
+        const s = String(src).toLowerCase();
+        return (
+          !s.includes("default_poster") &&
+          (
+            /masterrepository\/fandango\/\d+/.test(s) ||
+            s.includes("/fandango/") ||
+            s.includes("movieposter") ||
+            s.includes("poster")
+          )
+        );
+      });
+    return candidates[0] || null;
+  };
 
   // --- Positive/negative text signals -------------------------------------
   const fanalertPresent =
@@ -163,6 +189,10 @@
     page_title: document.title || "",
     movie_title:
       text(document.querySelector('h1[class*="movie" i], h1[data-testid*="movie"], h1')) || null,
+    poster_url:
+      metaContent('meta[property="og:image"]') ||
+      metaContent('meta[name="twitter:image"]') ||
+      posterFromImages(),
     format_filter_labels: Array.from(new Set(formatFilterLabels)),
     theaters,
     fanalert_present: fanalertPresent,

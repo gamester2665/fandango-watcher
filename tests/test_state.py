@@ -55,6 +55,7 @@ def _partial_release() -> PartialReleasePageData:
     return PartialReleasePageData(
         url="https://fandango.com/x",
         page_title="X",
+        poster_url="https://www.fandango.com/poster.jpg",
         theater_count=1,
         showtime_count=2,
         citywalk_present=True,
@@ -87,6 +88,7 @@ class TestTransitionBadToGood:
         assert result.state.consecutive_errors == 0
         assert result.state.last_success_at == NOW
         assert result.state.last_tick_at == NOW
+        assert result.state.last_poster_url == "https://www.fandango.com/poster.jpg"
 
     def test_not_on_sale_to_full_release_fires_event(self) -> None:
         prev = TargetState(

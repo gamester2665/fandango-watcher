@@ -171,6 +171,7 @@ def _parsed_from_matches(
             url=target.url,
             page_title=movie_title or target.name,
             movie_title=movie_title,
+            poster_url=movie.poster_url if movie is not None else None,
             format_filters_present=format_filters,
             schema_evidence=[
                 "direct_api",
@@ -205,6 +206,7 @@ def _parsed_from_matches(
         "url": target.url,
         "page_title": movie_title or target.name,
         "movie_title": movie_title,
+        "poster_url": movie.poster_url if movie is not None else None,
         "format_filters_present": [
             ff.model_dump(mode="json") for ff in format_filters
         ],

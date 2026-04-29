@@ -143,6 +143,13 @@ class TestNotOnSaleClassification:
         assert result.notify_me_present is True
         assert "fanalert_present" in result.schema_evidence
 
+    def test_poster_url_is_passed_through(self) -> None:
+        result = classify(
+            _empty_snapshot(poster_url="https://www.fandango.com/poster.jpg"),
+            citywalk_anchor=CITYWALK_ANCHOR,
+        )
+        assert result.poster_url == "https://www.fandango.com/poster.jpg"
+
     def test_loading_state_shows_up_in_evidence(self) -> None:
         result = classify(
             _empty_snapshot(

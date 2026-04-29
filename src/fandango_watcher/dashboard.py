@@ -231,6 +231,7 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
                 "name": t.name,
                 "url": t.url,
                 "state": st,
+                "poster_url": st.get("last_poster_url"),
                 "direct_api": direct_api_state,
                 "latest_screenshot": str(shot) if shot else None,
                 "latest_screenshot_url": artifact_url(paths.artifacts_root, shot),
@@ -394,6 +395,43 @@ def _target_route_label(name: str) -> str:
     return "Target"
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _target_filter_tier(
+    st: dict[str, Any],
+    *,
+    now: datetime,
+    stale_threshold_sec: int,
+) -> str:
+    """Filter bucket used by the dashboard's client-side target controls."""
+    tier = _triage_tier(st, now=now, stale_threshold_sec=stale_threshold_sec)
+    return ("error", "stale", "signal", "routine")[min(max(tier, 0), 3)]
+
+
+def _target_next_action(
+    st: dict[str, Any],
+    direct_api: dict[str, Any],
+    *,
+    is_stale: bool,
+) -> str | None:
+    """Small deterministic operator hint for target states that need attention."""
+    cur_l = str(st.get("current_state") or "").lower()
+    if cur_l == "error" or _as_int(st.get("consecutive_errors")) > 0:
+        return "Inspect latest error and browser/session health."
+    if is_stale:
+        return "Run a one-off crawl or check whether watch is still ticking."
+    if direct_api.get("last_drift_warning") or st.get("direct_api_last_drift_warning"):
+        return "Compare direct API drift against browser fallback."
+    if "alert" in cur_l or "purchas" in cur_l or "released" in cur_l or "live" in cur_l:
+        return "Review Fandango manually before escalating purchase mode."
+    return None
+
+
 def _artifact_basename(path_str: str | None) -> str | None:
     if not path_str:
         return None
@@ -413,6 +451,377 @@ def _html_id_slug(s: str) -> str:
             out.append("-")
     t = "".join(out).strip("-")
     return t or "x"
+
+
+def _first_nonempty_str(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _fmt_release_date(value: Any) -> str:
+    raw = _first_nonempty_str(value)
+    if raw is None:
+        return "Release date not set"
+    try:
+        dt = datetime.fromisoformat(raw)
+        return f"{dt:%b} {dt.day}, {dt:%Y}"
+    except ValueError:
+        return raw
+
+
+def _poster_url_for_movie(
+    movie: dict[str, Any],
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+) -> str | None:
+    configured = _first_nonempty_str(movie.get("poster_url"))
+    if configured:
+        return configured
+    ft = movie.get("fandango_targets")
+    if isinstance(ft, list):
+        for target_name in ft:
+            target = target_by_name.get(str(target_name))
+            if target:
+                state = target.get("state") if isinstance(target.get("state"), dict) else {}
+                poster = _first_nonempty_str(
+                    target.get("poster_url"),
+                    state.get("last_poster_url") if isinstance(state, dict) else None,
+                )
+                if poster:
+                    return poster
+    return None
+
+
+def _poster_html(poster_url: str | None, title: str, *, css_class: str) -> str:
+    if poster_url:
+        return (
+            f'<img class="{html.escape(css_class, quote=True)}" '
+            f'src="{html.escape(poster_url, quote=True)}" '
+            f'alt="Poster for {html.escape(title, quote=True)}" loading="lazy" />'
+        )
+    initial = (title.strip()[:1] or "?").upper()
+    return (
+        f'<div class="{html.escape(css_class + " poster-fallback", quote=True)}" '
+        f'aria-label="No poster available">{html.escape(initial)}</div>'
+    )
+
+
+def _social_state_for_handle(
+    handles: dict[str, Any],
+    handle: str,
+) -> dict[str, Any] | None:
+    h_norm = handle.lstrip("@").lower()
+    for key, value in handles.items():
+        if str(key).lstrip("@").lower() != h_norm:
+            continue
+        return value if isinstance(value, dict) else None
+    return None
+
+
+def _render_movie_tweet_embeds(
+    movie: dict[str, Any],
+    *,
+    social_handles: dict[str, Any],
+    max_items: int = 3,
+) -> str:
+    """Embed-style last-tweet previews for the movie's configured X handles."""
+    raw_handles = movie.get("x_handles")
+    handles = [str(x).lstrip("@") for x in raw_handles if str(x).strip()] if isinstance(raw_handles, list) else []
+    if not handles:
+        return """
+<div class="movie-twitter-panel">
+  <p class="movie-twitter-label">X / Twitter</p>
+  <p class="tweet-empty">No X handles configured for this movie.</p>
+</div>
+"""
+
+    cards: list[str] = []
+    for handle in handles[:max_items]:
+        hst = _social_state_for_handle(social_handles, handle)
+        handle_e = html.escape(handle)
+        profile_url = f"https://x.com/{handle}"
+        if not hst:
+            cards.append(
+                '<article class="tweet-embed tweet-empty-card">'
+                f'<p class="tweet-handle">@{handle_e}</p>'
+                '<p class="tweet-empty">No poll data yet. Run <code>x-poll</code> or wait for <code>watch</code>.</p>'
+                f'<p class="tweet-actions"><a href="{html.escape(profile_url, quote=True)}" target="_blank" rel="noopener">Open profile</a></p>'
+                "</article>"
+            )
+            continue
+
+        text_raw = hst.get("last_seen_tweet_text")
+        text = html.escape(str(text_raw).strip()) if isinstance(text_raw, str) and text_raw.strip() else ""
+        tid = hst.get("last_seen_tweet_id")
+        tw_at = hst.get("last_seen_tweet_created_at")
+        polled = hst.get("last_polled_at")
+        tweet_url = (
+            f"https://x.com/{handle}/status/{tid}"
+            if tid
+            else profile_url
+        )
+        meta_bits = []
+        if tw_at:
+            meta_bits.append(f"posted {html.escape(str(tw_at))}")
+        if polled:
+            meta_bits.append(f"polled {html.escape(str(polled))}")
+        meta = " · ".join(meta_bits) or "latest saved post"
+        analysis = hst.get("last_seen_ticket_analysis")
+        analysis_html = ""
+        if isinstance(analysis, dict):
+            status = str(analysis.get("status") or "unknown").replace("_", " ")
+            announces = bool(analysis.get("announces_tickets"))
+            variants = ("pill-ok",) if announces else ("pill-muted",)
+            if announces and status == "soon":
+                variants = ("pill-warn",)
+            analysis_html = (
+                '<p class="tweet-analysis">'
+                + render_status_pill(html.escape(status), variants=variants)
+                + "</p>"
+            )
+        body = (
+            f'<blockquote class="tweet-body">{text}</blockquote>'
+            if text
+            else '<p class="tweet-empty">No tweet text saved yet.</p>'
+        )
+        cards.append(
+            '<article class="tweet-embed">'
+            f'<p class="tweet-handle">@{handle_e}</p>'
+            f"{body}"
+            f"{analysis_html}"
+            f'<p class="tweet-meta">{meta}</p>'
+            f'<p class="tweet-actions"><a href="{html.escape(tweet_url, quote=True)}" target="_blank" rel="noopener">Open on X</a></p>'
+            "</article>"
+        )
+
+    more = ""
+    if len(handles) > max_items:
+        more = f'<p class="tweet-more">+{len(handles) - max_items} more handle(s) in Advanced details.</p>'
+    return (
+        '<div class="movie-twitter-panel">'
+        '<p class="movie-twitter-label">X / Twitter latest</p>'
+        f'<div class="tweet-embed-list">{"".join(cards)}</div>'
+        f"{more}"
+        "</div>"
+    )
+
+
+def _render_target_controls(target_count: int) -> str:
+    """Progressive-enhancement controls; all cards remain visible without JS."""
+    if target_count <= 0:
+        return ""
+    buttons = "".join(
+        f'<button type="button" class="target-filter-btn{" is-active" if key == "all" else ""}" '
+        f'data-filter="{html.escape(key, quote=True)}">{html.escape(label)}</button>'
+        for key, label in (
+            ("all", "All"),
+            ("error", "Errors"),
+            ("stale", "Stale"),
+            ("signal", "Signals"),
+            ("routine", "Routine"),
+        )
+    )
+    return f"""
+<div class="target-controls" data-target-controls>
+  <label class="target-search-label">
+    <span class="visually-hidden">Search targets</span>
+    <input type="search" id="target-search" placeholder="Search targets, state, schema..." autocomplete="off" />
+  </label>
+  <div class="target-filter-row" role="group" aria-label="Target filters">
+    {buttons}
+    <button type="button" class="target-filter-btn" id="compact-toggle" aria-pressed="false">Compact</button>
+  </div>
+  <p class="target-filter-count" id="target-filter-count" aria-live="polite">{html.escape(str(target_count))} targets shown</p>
+</div>
+"""
+
+
+def _render_operator_status_strip(
+    *,
+    targets: list[Any],
+    fandango_poll: dict[str, Any],
+    purchase_mode: str,
+    purchase_enabled: bool,
+    last_tick_pt: str,
+    now: datetime,
+    show_purchase: bool,
+) -> str:
+    target_dicts = [x for x in targets if isinstance(x, dict)]
+    threshold = _stale_threshold_seconds(fandango_poll)
+    counts = {"error": 0, "stale": 0, "signal": 0, "routine": 0}
+    for t in target_dicts:
+        st = t.get("state") or {}
+        if not isinstance(st, dict):
+            st = {}
+        counts[_target_filter_tier(st, now=now, stale_threshold_sec=threshold)] += 1
+    attention = counts["error"] + counts["stale"]
+    purchase_label = purchase_mode if purchase_enabled else f"{purchase_mode} (disabled)"
+    purchase_href = "#purchase" if show_purchase else "#runtime"
+    return f"""
+<section class="ops-strip" aria-label="Operator status">
+  <a href="#triage"><strong>Needs attention</strong><span>{html.escape(str(attention))}</span></a>
+  <a href="#crawl"><strong>Fandango</strong><span>{html.escape(str(counts['stale']))} stale · {html.escape(str(counts['error']))} errors</span></a>
+  <a href="#crawl" data-filter-shortcut="signal"><strong>Signals</strong><span>{html.escape(str(counts['signal']))} targets</span></a>
+  <a href="{purchase_href}"><strong>Purchase</strong><span><code>{html.escape(purchase_label)}</code></span></a>
+  <span><strong>Last tick</strong><span>{html.escape(last_tick_pt or "—")}</span></span>
+</section>
+"""
+
+
+def _dashboard_ui_script() -> str:
+    """Client-side sugar only: filters, compact mode, disclosure state, media preview."""
+    return """
+  <script>
+(function () {
+  var STORAGE_KEY = "fandangoWatcher.dashboard.ui";
+  var cards = Array.prototype.slice.call(document.querySelectorAll("[data-target-card]"));
+  var search = document.getElementById("target-search");
+  var buttons = Array.prototype.slice.call(document.querySelectorAll("[data-filter]"));
+  var compact = document.getElementById("compact-toggle");
+  var count = document.getElementById("target-filter-count");
+  var viewer = document.getElementById("artifact-viewer");
+  var details = Array.prototype.slice.call(document.querySelectorAll("details[data-persist-key]"));
+  var state = {};
+  try {
+    state = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") || {};
+  } catch (e) {
+    state = {};
+  }
+  function save() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+  function setButtonState(filter) {
+    buttons.forEach(function (btn) {
+      var active = btn.getAttribute("data-filter") === filter;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+  function apply() {
+    var q = (search && search.value || "").toLowerCase().trim();
+    var filter = state.filter || "all";
+    var shown = 0;
+    cards.forEach(function (card) {
+      var haystack = (card.getAttribute("data-search") || "").toLowerCase();
+      var tier = card.getAttribute("data-tier") || "routine";
+      var matchesText = !q || haystack.indexOf(q) !== -1;
+      var matchesFilter = filter === "all" || tier === filter;
+      var visible = matchesText && matchesFilter;
+      card.classList.toggle("is-hidden", !visible);
+      if (visible) shown += 1;
+    });
+    setButtonState(filter);
+    if (count) {
+      count.textContent = shown + " of " + cards.length + " targets shown";
+    }
+  }
+  if (search) {
+    search.value = state.query || "";
+    search.addEventListener("input", function () {
+      state.query = search.value;
+      save();
+      apply();
+    });
+  }
+  buttons.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      state.filter = btn.getAttribute("data-filter") || "all";
+      save();
+      apply();
+      if (search) search.focus();
+    });
+  });
+  Array.prototype.slice.call(document.querySelectorAll("[data-filter-shortcut]")).forEach(function (link) {
+    link.addEventListener("click", function () {
+      state.filter = link.getAttribute("data-filter-shortcut") || "all";
+      save();
+      apply();
+    });
+  });
+  if (compact) {
+    if (state.compact) {
+      document.documentElement.classList.add("compact");
+      compact.setAttribute("aria-pressed", "true");
+    }
+    compact.addEventListener("click", function () {
+      state.compact = !state.compact;
+      document.documentElement.classList.toggle("compact", !!state.compact);
+      compact.setAttribute("aria-pressed", state.compact ? "true" : "false");
+      save();
+    });
+  }
+  details.forEach(function (el) {
+    var key = el.getAttribute("data-persist-key");
+    if (!key) return;
+    if (state.details && Object.prototype.hasOwnProperty.call(state.details, key)) {
+      el.open = !!state.details[key];
+    }
+    el.addEventListener("toggle", function () {
+      state.details = state.details || {};
+      state.details[key] = el.open;
+      save();
+    });
+  });
+  function closeViewer() {
+    if (!viewer) return;
+    viewer.hidden = true;
+    viewer.innerHTML = "";
+  }
+  Array.prototype.slice.call(document.querySelectorAll("[data-artifact-src]")).forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (!viewer) return;
+      var src = btn.getAttribute("data-artifact-src") || "";
+      var kind = btn.getAttribute("data-artifact-kind") || "screenshot";
+      var title = btn.getAttribute("data-artifact-title") || "Artifact preview";
+      viewer.innerHTML = "";
+      var card = document.createElement("div");
+      card.className = "artifact-viewer-card";
+      var close = document.createElement("button");
+      close.type = "button";
+      close.className = "artifact-close";
+      close.textContent = "Close";
+      var heading = document.createElement("h2");
+      heading.textContent = title;
+      var media = document.createElement(kind === "video" ? "video" : "img");
+      media.setAttribute("src", src);
+      if (kind === "video") {
+        media.setAttribute("controls", "controls");
+        media.setAttribute("autoplay", "autoplay");
+      } else {
+        media.setAttribute("alt", title);
+      }
+      var linkP = document.createElement("p");
+      var link = document.createElement("a");
+      link.href = src;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "Open artifact in new tab";
+      linkP.appendChild(link);
+      card.appendChild(close);
+      card.appendChild(heading);
+      card.appendChild(media);
+      card.appendChild(linkP);
+      viewer.appendChild(card);
+      viewer.hidden = false;
+      if (close) close.focus();
+    });
+  });
+  if (viewer) {
+    viewer.addEventListener("click", function (event) {
+      if (event.target === viewer || (event.target && event.target.classList && event.target.classList.contains("artifact-close"))) {
+        closeViewer();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && !viewer.hidden) closeViewer();
+    });
+  }
+  apply();
+})();
+  </script>
+"""
 
 
 def dashboard_css() -> str:
@@ -526,6 +935,50 @@ def dashboard_css() -> str:
       background: var(--ok);
       box-shadow: none;
     }
+    .ops-strip {
+      position: sticky;
+      top: 0.65rem;
+      z-index: 25;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+      gap: 0.4rem;
+      padding: 0.45rem;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.78);
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: blur(16px) saturate(1.18);
+      -webkit-backdrop-filter: blur(16px) saturate(1.18);
+    }
+    .ops-strip a,
+    .ops-strip > span {
+      min-width: 0;
+      padding: 0.55rem 0.65rem;
+      border-radius: 13px;
+      background: var(--surface2);
+      border: 1px solid transparent;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .ops-strip a:hover { border-color: rgba(0, 122, 255, 0.25); }
+    .ops-strip strong {
+      display: block;
+      color: var(--muted);
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .ops-strip span span,
+    .ops-strip a span {
+      display: block;
+      margin-top: 0.1rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.84rem;
+      font-weight: 650;
+    }
     .section-head {
       margin: 0;
       padding: 0.6rem 0 0;
@@ -602,6 +1055,15 @@ def dashboard_css() -> str:
       font-size: 0.86rem;
       font-weight: 600;
     }
+    .next-action {
+      padding: 0.58rem 0.7rem;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 159, 10, 0.28);
+      background: rgba(255, 159, 10, 0.08);
+      color: var(--text);
+      font-size: 0.82rem;
+    }
+    .next-action strong { color: var(--warn); }
     .card-facts {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -644,6 +1106,73 @@ def dashboard_css() -> str:
     .pill-warn { background: rgba(255, 159, 10, 0.16); color: var(--warn); border-color: transparent; }
     .pill-muted { background: var(--surface2); color: var(--muted); }
     .card-kind { margin: 0 0 0.15rem 0; }
+    .target-controls {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .target-search-label input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.55rem 0.8rem;
+      background: var(--surface2);
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+    .target-search-label input:focus {
+      border-color: rgba(0, 122, 255, 0.45);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    .target-filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 0.35rem;
+    }
+    .target-filter-btn,
+    .artifact-open,
+    .artifact-close {
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface2);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.76rem;
+      font-weight: 650;
+      padding: 0.36rem 0.62rem;
+    }
+    .target-filter-btn:hover,
+    .artifact-open:hover,
+    .artifact-close:hover { border-color: rgba(0, 122, 255, 0.35); }
+    .target-filter-btn.is-active,
+    #compact-toggle[aria-pressed="true"] {
+      color: var(--accent);
+      border-color: rgba(0, 122, 255, 0.35);
+      background: var(--accent-dim);
+    }
+    .target-filter-count {
+      grid-column: 1 / -1;
+      margin: -0.25rem 0 0;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+    .is-hidden { display: none !important; }
+    .artifact-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin: 0 0 0.5rem;
+    }
     a {
       color: var(--accent);
       text-underline-offset: 3px;
@@ -815,6 +1344,47 @@ def dashboard_css() -> str:
     table.data-table { min-width: 520px; }
     tr:nth-child(even) td { background: transparent; }
     .purchase-err { font-size: 0.78rem; }
+    .purchase-timeline {
+      list-style: none;
+      margin: 0.65rem 0 0.8rem 0;
+      padding: 0;
+      display: grid;
+      gap: 0.55rem;
+    }
+    .purchase-event {
+      padding: 0.75rem 0.82rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface2);
+    }
+    .purchase-event-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      margin-bottom: 0.18rem;
+    }
+    .purchase-chip {
+      display: inline-block;
+      padding: 0.18rem 0.52rem;
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      font-size: 0.68rem;
+      font-weight: 750;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .purchase-chip-ok { color: var(--ok); background: rgba(52, 199, 89, 0.14); border-color: transparent; }
+    .purchase-chip-warn { color: var(--warn); background: rgba(255, 159, 10, 0.16); border-color: transparent; }
+    .purchase-chip-bad { color: var(--bad); background: rgba(255, 69, 58, 0.14); border-color: transparent; }
+    .purchase-event-meta,
+    .purchase-event-note {
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin: 0.18rem 0 0;
+    }
     code {
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
       font-size: 0.74rem;
@@ -837,6 +1407,41 @@ def dashboard_css() -> str:
       box-shadow: var(--shadow-sm);
     }
     p.refresh-hint { margin: 0 0 0.65rem 0; font-size: 0.78rem; opacity: 0.92; }
+    .artifact-viewer[hidden] { display: none; }
+    .artifact-viewer {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+      background: rgba(0, 0, 0, 0.56);
+    }
+    .artifact-viewer-card {
+      width: min(980px, 100%);
+      max-height: 92vh;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-elevated);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      padding: 1rem;
+    }
+    .artifact-viewer-card h2 {
+      margin: 0.2rem 0 0.75rem;
+      font-size: 1rem;
+    }
+    .artifact-viewer-card img,
+    .artifact-viewer-card video {
+      display: block;
+      max-width: 100%;
+      max-height: 72vh;
+      margin-inline: auto;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: #000;
+    }
     .skip-link {
       position: absolute; left: -9999px; z-index: 100;
       padding: 0.55rem 1rem;
@@ -885,6 +1490,12 @@ def dashboard_css() -> str:
       user-select: none;
     }
     .jump-nav a:hover { opacity: 1; }
+    .advanced-fold {
+      margin-top: 0.25rem;
+    }
+    .advanced-fold > summary {
+      justify-content: flex-start;
+    }
     .triage-attention {
       margin-top: 0.75rem;
       padding: 0.85rem 0.95rem;
@@ -925,14 +1536,125 @@ def dashboard_css() -> str:
     .triage-pill-1 { background: rgba(255, 159, 10, 0.16); color: var(--warn); }
     .triage-pill-2 { background: rgba(52, 199, 89, 0.14); color: var(--ok); }
     .triage-pill-3 { background: var(--surface2); color: var(--muted); }
-    .movie-group { margin: 0; }
-    .movie-group-title {
-      margin: 0 0 0.65rem;
-      color: var(--text);
-      font-size: 1rem;
-      font-weight: 600;
-      letter-spacing: -0.025em;
+    .movie-carousel {
+      display: flex;
+      gap: 1rem;
+      overflow-x: auto;
+      padding: 0.15rem 0.1rem 0.85rem;
+      scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch;
     }
+    .movie-carousel::-webkit-scrollbar { height: 10px; }
+    .movie-carousel::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 999px;
+    }
+    .movie-group {
+      flex: 0 0 min(92vw, 640px);
+      margin: 0;
+      display: grid;
+      grid-template-columns: minmax(88px, 128px) minmax(0, 1fr);
+      gap: 0.9rem;
+      align-items: start;
+      padding: 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+      scroll-snap-align: start;
+    }
+    .movie-group-poster,
+    .target-poster {
+      display: block;
+      width: 100%;
+      aspect-ratio: 2 / 3;
+      object-fit: cover;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: linear-gradient(145deg, var(--surface2), rgba(0, 122, 255, 0.12));
+      color: var(--muted);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.12);
+    }
+    .poster-fallback {
+      display: grid;
+      place-items: center;
+      font-size: 2rem;
+      font-weight: 750;
+    }
+    .movie-group-body { min-width: 0; }
+    .movie-group-title {
+      margin: 0 0 0.15rem;
+      color: var(--text);
+      font-size: clamp(1.15rem, 2.5vw, 1.65rem);
+      font-weight: 700;
+      letter-spacing: -0.045em;
+    }
+    .movie-release-date {
+      margin: 0.1rem 0 0.2rem;
+      color: var(--accent);
+      font-size: 0.92rem;
+      font-weight: 750;
+      letter-spacing: -0.015em;
+    }
+    .movie-distributor {
+      margin: 0 0 0.22rem;
+      color: var(--text);
+      font-size: 0.84rem;
+      font-weight: 650;
+    }
+    .movie-group-subtitle {
+      margin: 0 0 0.65rem;
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+    .movie-twitter-panel {
+      grid-column: 1 / -1;
+      margin-top: 0.85rem;
+      padding-top: 0.8rem;
+      border-top: 1px solid var(--border);
+    }
+    .movie-twitter-label {
+      margin: 0 0 0.45rem;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .tweet-embed-list {
+      display: grid;
+      gap: 0.55rem;
+    }
+    .tweet-embed {
+      padding: 0.72rem 0.78rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface2);
+    }
+    .tweet-handle {
+      margin: 0 0 0.35rem;
+      color: var(--text);
+      font-size: 0.86rem;
+      font-weight: 750;
+    }
+    .tweet-body {
+      margin: 0;
+      color: var(--text);
+      font-size: 0.86rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .tweet-meta,
+    .tweet-actions,
+    .tweet-empty,
+    .tweet-more {
+      margin: 0.42rem 0 0;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+    .tweet-analysis { margin: 0.45rem 0 0; }
+    .tweet-actions a { font-weight: 700; }
     .panel-warn {
       border-radius: 12px;
       border-left: 3px solid rgba(255, 159, 10, 0.45);
@@ -1015,14 +1737,39 @@ def dashboard_css() -> str:
       border-top: 1px solid var(--border);
       padding-top: 0.55rem;
     }
+    .compact body { font-size: 0.88rem; }
+    .compact main.dash { gap: 0.72rem; }
+    .compact .grid { gap: 0.55rem; }
+    .compact .grid .card { gap: 0.45rem; padding: 0.75rem; }
+    .compact .card-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .compact .panel-tagline,
+    .compact .card-media-meta { display: none; }
     @media (prefers-color-scheme: dark) {
-      .jump-nav { background: rgba(28, 28, 30, 0.72); }
+      .jump-nav,
+      .ops-strip { background: rgba(28, 28, 30, 0.72); }
     }
     @media (max-width: 700px) {
       table.data-table { font-size: 0.78rem; }
       body { padding-inline: 0.85rem; }
       header.dash-header { padding-top: 1.45rem; }
       h1.dash-title { font-size: 2.15rem; }
+      .ops-strip {
+        position: static;
+        grid-template-columns: 1fr 1fr;
+      }
+      .target-controls { grid-template-columns: 1fr; }
+      .target-filter-row { justify-content: flex-start; }
+      .movie-carousel {
+        margin-inline: -0.85rem;
+        padding-inline: 0.85rem;
+        scroll-padding-inline: 0.85rem;
+      }
+      .movie-group {
+        flex-basis: min(88vw, 520px);
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 0.7rem;
+        padding: 0.75rem;
+      }
       .triage-panel,
       .runtime-panel,
       .intel-panel,
@@ -1265,11 +2012,17 @@ def render_inline_disclosure(
     summary_html: str,
     inner_html: str,
     open_: bool = False,
+    persist_key: str | None = None,
 ) -> str:
     open_attr = " open" if open_ else ""
     ce = html.escape(css_class.strip(), quote=True)
+    persist_attr = (
+        f' data-persist-key="{html.escape(persist_key, quote=True)}"'
+        if persist_key
+        else ""
+    )
     return (
-        f'<details class="{ce}"{open_attr}>'
+        f'<details class="{ce}"{persist_attr}{open_attr}>'
         f"<summary>{summary_html}</summary>{inner_html}</details>"
     )
 
@@ -1335,9 +2088,11 @@ def _render_target_card(
     su_dt = _parse_iso_dt(str(su_raw) if su_raw is not None else None)
     stale_html = ""
     stale_chip = ""
+    is_stale = False
     if su_dt is not None:
         age = int((now.astimezone(UTC) - su_dt.astimezone(UTC)).total_seconds())
         if age > stale_thr:
+            is_stale = True
             stale_chip = render_status_pill(
                 html.escape("stale"),
                 variants=("pill-warn",),
@@ -1351,7 +2106,7 @@ def _render_target_card(
     pill_variants: tuple[str, ...] = ()
     cur_l = str(st.get("current_state") or "").lower()
     schema_l = str(st.get("last_release_schema") or "").lower()
-    if cur_l == "error" or (st.get("consecutive_errors") or 0) > 0:
+    if cur_l == "error" or _as_int(st.get("consecutive_errors")) > 0:
         pill_variants = ("pill-warn",)
     elif "alert" in cur_l or "purchas" in cur_l or "released" in cur_l or "live" in cur_l:
         pill_variants = ("pill-ok",)
@@ -1403,7 +2158,6 @@ def _render_target_card(
     if tz:
         trace_html = f'<p><a href="{html.escape(tz)}">latest trace (.zip)</a></p>'
 
-    media_inner = f"{media_meta_p}{img_html}{vid_html}{trace_html}"
     direct_api_raw = t.get("direct_api")
     direct_api: dict[str, Any] = direct_api_raw if isinstance(direct_api_raw, dict) else {}
     api_status = str(direct_api.get("status") or st.get("direct_api_last_status") or "—")
@@ -1433,6 +2187,31 @@ def _render_target_card(
     if api_warning:
         api_bits.append("warning " + html.escape(str(api_warning)))
     api_html = f'<p class="card-api-meta"><strong>Direct API</strong> · {" · ".join(api_bits)}</p>'
+    artifact_actions: list[str] = []
+    if su_url:
+        artifact_actions.append(
+            '<button type="button" class="artifact-open" data-artifact-kind="screenshot" '
+            f'data-artifact-src="{html.escape(str(su_url), quote=True)}" '
+            f'data-artifact-title="Screenshot for {name_attr}">Preview screenshot</button>'
+        )
+    if vu:
+        artifact_actions.append(
+            '<button type="button" class="artifact-open" data-artifact-kind="video" '
+            f'data-artifact-src="{html.escape(str(vu), quote=True)}" '
+            f'data-artifact-title="Video for {name_attr}">Preview video</button>'
+        )
+    artifact_actions_html = (
+        f'<p class="artifact-actions">{"".join(artifact_actions)}</p>'
+        if artifact_actions
+        else ""
+    )
+    media_inner = f"{media_meta_p}{artifact_actions_html}{img_html}{vid_html}{trace_html}"
+    next_action = _target_next_action(st, direct_api, is_stale=is_stale)
+    next_action_html = (
+        f'<p class="next-action"><strong>Next:</strong> {html.escape(next_action)}</p>'
+        if next_action
+        else ""
+    )
     details_inner = f"{err_meta}{err_html}{stale_html}{api_html}{media_inner}"
     details_block = ""
     if details_inner.strip():
@@ -1440,6 +2219,7 @@ def _render_target_card(
             css_class="card-expand",
             summary_html="Diagnostics &amp; media",
             inner_html=f'<div class="card-expand-body">{details_inner}</div>',
+            persist_key=f"target:{_html_id_slug(raw_name)}:diagnostics",
         )
 
     facts = render_fact_grid(
@@ -1450,9 +2230,25 @@ def _render_target_card(
             (html.escape("Direct API"), f"<code>{html.escape(api_status)}</code>"),
         ]
     )
+    tier = _target_filter_tier(st, now=now, stale_threshold_sec=stale_thr)
+    search_blob = " ".join(
+        str(x)
+        for x in (
+            raw_name,
+            url,
+            st.get("current_state") or "",
+            st.get("last_release_schema") or "",
+            api_status,
+            _target_route_label(raw_name),
+        )
+    )
+    data_search = html.escape(search_blob, quote=True)
+    state_attr = html.escape(cur_l or "unknown", quote=True)
+    tier_attr = html.escape(tier, quote=True)
+    has_media_attr = "true" if (su_url or vu) else "false"
 
     return f"""
-<section class="card" data-target="{name_attr}">
+<section class="card" data-target-card data-target="{name_attr}" data-state="{state_attr}" data-tier="{tier_attr}" data-search="{data_search}" data-has-media="{has_media_attr}">
   <div class="card-topline">
     {route_pill}
     {state_pill}
@@ -1460,6 +2256,7 @@ def _render_target_card(
   </div>
   <h2>{name}</h2>
   <p class="card-link"><a href="{url_e}" target="_blank" rel="noopener">Open on Fandango</a></p>
+  {next_action_html}
   {facts}
   {details_block}
 </section>
@@ -1617,7 +2414,7 @@ def _render_triage_panel(
         sch = str(st.get("last_release_schema") or "").lower()
         if "partial" in sch or "full" in sch:
             good_schema += 1
-        if cur_l == "error" or (st.get("consecutive_errors") or 0) > 0:
+        if cur_l == "error" or _as_int(st.get("consecutive_errors")) > 0:
             errish += 1
         su = st.get("last_success_at")
         su_dt = _parse_iso_dt(str(su) if su is not None else None)
@@ -1640,11 +2437,13 @@ def _render_triage_panel(
         )
     if stale_n > 0:
         attention.append(
-            f"<strong>{stale_n}</strong> target(s) have a stale <code>last_success_at</code> vs expected poll cadence — inspect errors or process health."
+            f"<strong>{stale_n}</strong> target(s) have a stale <code>last_success_at</code> vs expected poll cadence. "
+            'Next: run a one-off crawl or check whether <code>watch</code> is still ticking.'
         )
     if errish > 0:
         attention.append(
-            f"<strong>{errish}</strong> target(s) show error state or a consecutive error streak."
+            f"<strong>{errish}</strong> target(s) show error state or a consecutive error streak. "
+            "Next: inspect latest errors, browser login/session health, and direct API fallback state."
         )
 
     att_html = (
@@ -1853,23 +2652,49 @@ def _render_purchases_panel(
         )
         return render_panel(fold, css_classes=("panel-secondary",), section_id="purchase")
     pr_rows: list[str] = []
+    timeline_items: list[str] = []
     for row in reversed(rows):
         at = html.escape(str(row.get("at") or "—"))
         tgt = html.escape(str(row.get("target") or "—"))
         att = row.get("attempt")
-        oc = "—"
+        oc_raw = "—"
         err = ""
         if isinstance(att, dict):
-            oc = html.escape(str(att.get("outcome") or "—"))
+            oc_raw = str(att.get("outcome") or "—")
             e_raw = att.get("error")
             if e_raw:
                 es = str(e_raw).replace("\n", " ").strip()
                 if len(es) > 120:
                     es = es[:117] + "…"
                 err = html.escape(es)
+        oc = html.escape(oc_raw)
+        oc_l = oc_raw.lower()
+        chip_cls = "purchase-chip"
+        if any(x in oc_l for x in ("ok", "success", "complete", "purchased")):
+            chip_cls += " purchase-chip-ok"
+            note = "Successful outcome recorded; verify receipt/details if this was a live run."
+        elif any(x in oc_l for x in ("fail", "error", "halt")) or err:
+            chip_cls += " purchase-chip-bad"
+            note = "Review the error and latest purchase artifacts before retrying."
+        elif "skip" in oc_l:
+            chip_cls += " purchase-chip-warn"
+            note = "Skipped before checkout; no purchase was submitted."
+        else:
+            note = "Attempt recorded; open raw rows for exact fields."
+        outcome_slug = html.escape(_html_id_slug(oc_l), quote=True)
         err_cell = f'<span class="purchase-err">{err}</span>' if err else "—"
         pr_rows.append(
             f"<tr><td>{at}</td><td>{tgt}</td><td>{oc}</td><td>{err_cell}</td></tr>"
+        )
+        timeline_items.append(
+            f'<li class="purchase-event purchase-event-{outcome_slug}">'
+            '<div class="purchase-event-top">'
+            f'<span class="{html.escape(chip_cls, quote=True)}">{oc}</span>'
+            f"<strong>{tgt}</strong>"
+            "</div>"
+            f'<p class="purchase-event-meta">{at}</p>'
+            f'<p class="purchase-event-note">{html.escape(note)}</p>'
+            "</li>"
         )
     body = "".join(pr_rows)
     n = len(rows)
@@ -1889,7 +2714,14 @@ def _render_purchases_panel(
         caption=None,
         wrapper_class="table-wrap",
     )
-    inner = f'<p class="hint meta">{ph_meta}</p>{tbl}'
+    timeline = f'<ol class="purchase-timeline">{"".join(timeline_items)}</ol>'
+    raw_rows = render_inline_disclosure(
+        css_class="inline-fold purchase-raw-fold",
+        summary_html="Raw purchase rows",
+        inner_html=tbl,
+        persist_key="panel:purchase:raw",
+    )
+    inner = f'<p class="hint meta">{ph_meta}</p>{timeline}{raw_rows}'
     fold = render_fold_panel(
         inner,
         fold_id=None,
@@ -2032,6 +2864,20 @@ def render_index_html(
         fandango_poll=fandango_poll,
         now=now,
     )
+    target_count = sum(1 for x in targets if isinstance(x, dict))
+    operator_status = _render_operator_status_strip(
+        targets=targets,
+        fandango_poll=fandango_poll,
+        purchase_mode=purchase_mode_raw,
+        purchase_enabled=purchase_enabled,
+        last_tick_pt=str(healthz.get("last_tick_at_pt") or "—"),
+        now=now,
+        show_purchase=show_ph,
+    )
+    target_controls = _render_target_controls(target_count)
+    sx_handles = social_x.get("handles") or {}
+    if not isinstance(sx_handles, dict):
+        sx_handles = {}
 
     assigned: set[str] = set()
     crawl_blocks: list[str] = []
@@ -2041,9 +2887,15 @@ def render_index_html(
         ft = m.get("fandango_targets")
         if not isinstance(ft, list):
             continue
-        mtitle = html.escape(str(m.get("title") or m.get("key") or "Movie"))
+        mtitle_raw = str(m.get("title") or m.get("key") or "Movie")
+        mtitle = html.escape(mtitle_raw)
         mkey = str(m.get("key") or "movie")
         mkey_slug = _html_id_slug(mkey)
+        poster = _poster_url_for_movie(m, target_by_name=target_by_name)
+        poster_html = _poster_html(poster, mtitle_raw, css_class="movie-group-poster")
+        release_date = html.escape(_fmt_release_date(m.get("release_date")))
+        distributor = html.escape(_first_nonempty_str(m.get("distributor")) or "Distributor not set")
+        tweet_embeds = _render_movie_tweet_embeds(m, social_handles=sx_handles)
         subcards: list[str] = []
         for tn in ft:
             tname = str(tn)
@@ -2059,8 +2911,15 @@ def render_index_html(
         if subcards:
             crawl_blocks.append(
                 f'<section class="movie-group" id="movie-{html.escape(mkey_slug, quote=True)}">'
+                f"{poster_html}"
+                '<div class="movie-group-body">'
                 f'<h3 class="movie-group-title">{mtitle}</h3>'
-                f'<div class="grid">{"".join(subcards)}</div></section>'
+                f'<p class="movie-release-date">{release_date}</p>'
+                f'<p class="movie-distributor">{distributor}</p>'
+                f'<p class="movie-group-subtitle">{len(subcards)} Fandango target(s)</p>'
+                f'<div class="grid">{"".join(subcards)}</div>'
+                f"{tweet_embeds}"
+                "</div></section>"
             )
 
     rest: list[dict[str, Any]] = []
@@ -2074,10 +2933,16 @@ def render_index_html(
         rest_html = "".join(
             _render_target_card(x, fandango_poll=fandango_poll, now=now) for x in rest
         )
+        rest_tweets = _render_movie_tweet_embeds({"x_handles": []}, social_handles=sx_handles)
         crawl_blocks.append(
             f'<section class="movie-group" id="crawl-ungrouped">'
+            f'{_poster_html(None, "Other targets", css_class="movie-group-poster")}'
+            '<div class="movie-group-body">'
             f'<h3 class="movie-group-title">Other targets</h3>'
-            f'<div class="grid">{rest_html}</div></section>'
+            '<p class="movie-release-date">Release date not set</p>'
+            '<p class="movie-distributor">Distributor not set</p>'
+            f'<p class="movie-group-subtitle">{len(rest)} Fandango target(s)</p>'
+            f'<div class="grid">{rest_html}</div>{rest_tweets}</div></section>'
         )
     if not targets:
         crawl_blocks.append(
@@ -2096,7 +2961,12 @@ def render_index_html(
             + "</div>"
         )
 
-    crawl_body = "\n".join(crawl_blocks)
+    crawl_body_inner = "\n".join(crawl_blocks)
+    crawl_body = (
+        f'<div class="movie-carousel" aria-label="Movie watchlist carousel">{crawl_body_inner}</div>'
+        if targets
+        else crawl_body_inner
+    )
     anchors: list[tuple[str, str]] = [
         ("#triage", "At a glance"),
         ("#runtime", "Runtime"),
@@ -2109,7 +2979,6 @@ def render_index_html(
         anchors.insert(3, ("#purchase", "Purchase"))
     jump_nav = _jump_nav_html(anchors, aria_label="On this page")
 
-    sx_handles = social_x.get("handles") or {}
     sx_last_polled = html.escape(str(social_x.get("last_polled_at") or "—"))
     sx_cards: list[str] = []
     sx_table_rows: list[str] = []
@@ -2357,6 +3226,21 @@ def render_index_html(
         css_classes=("runtime-panel",),
         section_id="runtime",
     )
+    advanced_details = render_fold_panel(
+        triage_panel
+        + jump_nav
+        + runtime_panel
+        + intel_panel
+        + purchases_panel
+        + social_fold
+        + registry_fold,
+        fold_id="advanced",
+        summary_html=(
+            '<span class="fold-title">Advanced details</span>'
+            '<span class="fold-badge">health · runtime · X · registry</span>'
+        ),
+        open_=False,
+    )
 
 
     rs = max(0, int(refresh_seconds))
@@ -2470,6 +3354,7 @@ def render_index_html(
 }})();
   </script>
 """
+    ui_script = _dashboard_ui_script()
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -2498,18 +3383,14 @@ def render_index_html(
     {no_hist_block}
   </header>
   <main class="dash" id="main" tabindex="-1">
-  {triage_panel}
-  {jump_nav}
+  {operator_status}
   <section class="section-head" id="crawl" aria-label="Fandango crawl">
-    <h2 class="section-label">Fandango crawl</h2>
-    <p class="panel-tagline">Primary ticket-watch targets. Open diagnostics only when you need errors, screenshots, video, or traces.</p>
+    <h2 class="section-label">Watchlist</h2>
+    <p class="panel-tagline">Poster-first overview. Open each card only when you need diagnostics, screenshots, video, traces, or raw state.</p>
+    {target_controls}
   </section>
   {crawl_body}
-  {runtime_panel}
-  {intel_panel}
-  {purchases_panel}
-  {social_fold}
-  {registry_fold}
+  {advanced_details}
   </main>
   <footer class="dash-foot">
     <p class="refresh-hint">{html.escape(refresh_note)}</p>
@@ -2519,6 +3400,7 @@ def render_index_html(
     <a href="/api/movies">/api/movies</a> ·
     <a href="/healthz">/healthz</a>
   </footer>
-{live_script}</body>
+  <div class="artifact-viewer" id="artifact-viewer" hidden aria-live="polite"></div>
+{ui_script}{live_script}</body>
 </html>
 """

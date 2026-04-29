@@ -101,6 +101,18 @@ class TestLoadConfigHappyPath:
         assert cfg.browser.headless is True
         assert cfg.browser.user_data_dir == "/app/browser-profile"
 
+    def test_movie_release_dates_loaded(self, cfg: WatcherConfig) -> None:
+        by_key = {movie.key: movie for movie in cfg.movies}
+        assert by_key["odyssey"].release_date == "2026-07-17"
+        assert by_key["dune_part_three"].release_date == "2026-12-18"
+
+    def test_movie_distributor_and_poster_loaded(self, cfg: WatcherConfig) -> None:
+        by_key = {movie.key: movie for movie in cfg.movies}
+        assert by_key["odyssey"].distributor == "Universal Pictures"
+        assert by_key["odyssey"].poster_url is not None
+        assert "images.fandango.com" in by_key["odyssey"].poster_url
+        assert by_key["dune_part_three"].distributor == "Warner Bros. Pictures"
+
 
 # -----------------------------------------------------------------------------
 # Relative paths anchored to the config file (not cwd)

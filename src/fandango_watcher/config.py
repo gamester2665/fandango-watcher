@@ -319,6 +319,12 @@ class MovieConfig(ConfigBase):
     key: str = Field(min_length=1)
     title: str = Field(min_length=1)
     fandango_movie_id: int | None = None
+    distributor: str | None = None
+    # ISO date (YYYY-MM-DD) shown on the dashboard movie card.
+    release_date: str | None = None
+    # Optional Fandango-hosted poster URL. Browser crawls also persist
+    # Open Graph poster images when a target page exposes one.
+    poster_url: str | None = None
     fandango_targets: list[str] = Field(default_factory=list)
     preferred_formats: list[FormatTag] = Field(default_factory=list)
     x_handles: list[str] = Field(default_factory=list)
@@ -329,6 +335,13 @@ class MovieConfig(ConfigBase):
     reference_page_key: str | None = None
 
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
+
+    @field_validator("distributor", "poster_url", "release_date", mode="before")
+    @classmethod
+    def _strip_empty_optional_movie_fields(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class ViewportConfig(ConfigBase):

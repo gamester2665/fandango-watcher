@@ -71,6 +71,7 @@ class PageSnapshot(ModelBase):
     url: str
     page_title: str
     movie_title: str | None = None
+    poster_url: str | None = None
     screenshot_path: str | None = None
     format_filter_labels: list[str] = Field(default_factory=list)
     theaters: list[ExtractedTheater] = Field(default_factory=list)
@@ -315,6 +316,7 @@ def classify(
         "url": snapshot.url,
         "page_title": snapshot.page_title,
         "movie_title": snapshot.movie_title,
+        "poster_url": snapshot.poster_url,
         "screenshot_path": snapshot.screenshot_path,
         "loading_calendar_present": snapshot.loading_calendar_present,
         "loading_format_filters_present": snapshot.loading_format_filters_present,

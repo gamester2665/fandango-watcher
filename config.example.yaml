@@ -319,6 +319,11 @@ movies:
   - key: odyssey
     title: "The Odyssey (2026)"
     fandango_movie_id: 241283
+    distributor: "Universal Pictures"
+    release_date: "2026-07-17"
+    # Optional Fandango-hosted poster URL. Browser crawls also capture the
+    # page's own og:image/twitter:image into state when Fandango exposes one.
+    poster_url: https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/default_poster--dark-mode.png/0/images/masterrepository/Fandango/241283/ODY_Helmet1Sheet12_RGB_1.jpg
     fandango_targets: [odyssey-imax-70mm, odyssey-overview]
     preferred_formats: [IMAX_70MM, IMAX]
     reference_page_key: the_odyssey_imax_70mm
@@ -342,6 +347,8 @@ movies:
   # know when to ADD a Fandango target later.
   - key: dune_part_three
     title: "Dune: Part Three"
+    distributor: "Warner Bros. Pictures"
+    release_date: "2026-12-18"
     fandango_targets: []
     preferred_formats: [IMAX_70MM, IMAX]
     reference_page_key: dune_part_three_imax_70mm

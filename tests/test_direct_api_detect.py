@@ -62,6 +62,7 @@ def _cfg() -> WatcherConfig:
             MovieConfig(
                 key="michael",
                 title="Michael (2026)",
+                poster_url="https://www.fandango.com/michael-poster.jpg",
                 fandango_targets=["michael-imax"],
                 preferred_formats=[FormatTag.IMAX],
             )
@@ -81,6 +82,7 @@ def test_direct_api_adapter_returns_parsed_page_data_for_matching_buyable_record
     assert result.parsed.citywalk_present is True
     assert result.parsed.citywalk_showtime_count == 1
     assert result.parsed.ticket_url is not None
+    assert result.parsed.poster_url == "https://www.fandango.com/michael-poster.jpg"
     assert result.meta.inspected_dates == ["2026-04-28"]
     assert result.meta.formats_seen == ["IMAX", "3D", "IMAX 70MM", "MYSTERY FORMAT"]
     assert result.meta.unknown_formats == ["MYSTERY FORMAT"]

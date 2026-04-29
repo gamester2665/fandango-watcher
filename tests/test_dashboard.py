@@ -138,7 +138,7 @@ def test_render_index_html_escapes_movie_title() -> None:
         "movies": [{"key": "m1", "title": "<script>evil</script>", "fandango_targets": [], "x_handles": []}],
     }
     html_out = render_index_html(snap)
-    assert "<script>" not in html_out
+    assert "<script>evil</script>" not in html_out
     assert "&lt;script&gt;" in html_out or "evil" in html_out
 
 
@@ -259,6 +259,136 @@ def test_target_card_folded_diagnostics_when_content_present() -> None:
     assert "Diagnostics &amp; media" in html_out
 
 
+def test_render_index_html_operator_controls_and_persistence_script() -> None:
+    snap = {
+        "healthz": {
+            "started_at": "x",
+            "last_tick_at": "2026-01-01T00:00:00Z",
+            "last_tick_at_pt": "2025-12-31 16:00:00 PST",
+            "total_ticks": 4,
+            "total_errors": 1,
+        },
+        "targets": [
+            {
+                "name": 'alpha "<bad>"',
+                "url": "https://example.com/t",
+                "state": {
+                    "current_state": "error",
+                    "last_release_schema": 'bad "<schema>"',
+                    "total_ticks": 2,
+                    "consecutive_errors": 1,
+                    "last_error_message": "session expired",
+                },
+                "latest_screenshot_url": "/artifacts/screenshots/alpha-1.png",
+                "latest_video_url": "/artifacts/videos/alpha-1.webm",
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "runtime": {
+            "purchase_mode": "notify_only",
+            "purchase_enabled": True,
+            "fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800},
+        },
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert 'class="ops-strip"' in html_out
+    assert 'class="target-controls"' in html_out
+    assert 'id="target-search"' in html_out
+    assert 'data-filter="error"' in html_out
+    assert "fandangoWatcher.dashboard.ui" in html_out
+    assert 'data-target-card' in html_out
+    assert 'data-tier="error"' in html_out
+    assert "Inspect latest error and browser/session health." in html_out
+    assert 'data-artifact-kind="screenshot"' in html_out
+    assert 'data-artifact-kind="video"' in html_out
+    assert 'id="artifact-viewer"' in html_out
+    assert "<bad>" not in html_out
+    assert "&lt;bad&gt;" in html_out
+
+
+def test_render_index_html_simple_watchlist_uses_movie_poster_and_hides_advanced() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha",
+                "url": "https://example.com/t",
+                "state": {"current_state": "watching", "total_ticks": 2},
+            }
+        ],
+        "social_x": {
+            "handles": {
+                "AlphaFilm": {
+                    "handle": "AlphaFilm",
+                    "user_id": "42",
+                    "last_seen_tweet_id": "123",
+                    "last_seen_tweet_text": "Alpha tickets are coming soon.",
+                    "last_seen_tweet_created_at": "2026-01-01T00:00:00Z",
+                    "last_polled_at": "2026-01-01T00:05:00Z",
+                    "last_seen_ticket_analysis": {
+                        "announces_tickets": True,
+                        "status": "soon",
+                        "confidence": "high",
+                    },
+                }
+            }
+        },
+        "release_intel": {"status": "disabled", "reason": "test"},
+        "movies": [
+            {
+                "key": "alpha-movie",
+                "title": "Alpha Movie",
+                "distributor": "Alpha Distribution",
+                "release_date": "2026-07-17",
+                "poster_url": "https://www.fandango.com/alpha-poster.jpg",
+                "fandango_targets": ["alpha"],
+                "x_handles": ["AlphaFilm"],
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert "Watchlist" in html_out
+    assert "movie-carousel" in html_out
+    assert "movie-group-poster" in html_out
+    assert "Jul 17, 2026" in html_out
+    assert "Alpha Distribution" in html_out
+    assert "https://www.fandango.com/alpha-poster.jpg" in html_out
+    assert "movie-twitter-panel" in html_out
+    assert "Alpha tickets are coming soon." in html_out
+    assert "https://x.com/AlphaFilm/status/123" in html_out
+    assert 'id="advanced"' in html_out
+    assert "Advanced details" in html_out
+    assert re.search(r'id="advanced"[^>]*>', html_out)
+    assert re.search(r'id="advanced"[^>]*open', html_out) is None
+
+
+def test_target_card_stale_next_action_and_filter_bucket() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "stale-target",
+                "url": "https://example.com/t",
+                "state": {
+                    "current_state": "watching",
+                    "last_success_at": "2000-01-01T00:00:00Z",
+                    "total_ticks": 2,
+                },
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "disabled", "reason": "test"},
+        "movies": [],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert 'data-tier="stale"' in html_out
+    assert "Run a one-off crawl or check whether watch is still ticking." in html_out
+
+
 def test_movies_registry_fold_panel_default_collapsed() -> None:
     snap = {
         "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
@@ -374,6 +504,9 @@ def test_render_index_html_purchase_panel(tmp_path: Path) -> None:
     html_out = render_index_html(snap)
     assert "Purchase history" in html_out
     assert "skipped" in html_out
+    assert "purchase-timeline" in html_out
+    assert "Raw purchase rows" in html_out
+    assert "Skipped before checkout; no purchase was submitted." in html_out
 
 
 def test_compute_dashboard_revision_changes_with_purchases_jsonl(tmp_path: Path) -> None:
