@@ -87,6 +87,7 @@ class TestHealthz:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
                 assert resp.headers["Content-Type"] == "application/json; charset=utf-8"
+                assert resp.headers.get("Cache-Control") == "no-store"
                 assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 payload = json.loads(resp.read())
 
@@ -96,6 +97,27 @@ class TestHealthz:
         assert payload["last_tick_at"] is None
         # started_at is ISO-8601; parse round-trips.
         datetime.fromisoformat(payload["started_at"])
+
+    def test_healthz_head_returns_headers_without_body(self) -> None:
+        hb = Heartbeat()
+        with _running_server(hb) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/healthz"
+            with urllib.request.urlopen(url, timeout=5) as get_resp:
+                get_body = get_resp.read()
+                get_len = get_resp.headers["Content-Length"]
+
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as head_resp:
+                assert head_resp.status == 200
+                assert (
+                    head_resp.headers["Content-Type"]
+                    == "application/json; charset=utf-8"
+                )
+                assert head_resp.headers.get("Cache-Control") == "no-store"
+                assert head_resp.headers.get("X-Content-Type-Options") == "nosniff"
+                assert head_resp.headers["Content-Length"] == get_len
+                assert len(get_body) == int(get_len)
+                assert head_resp.read() == b""
 
     def test_healthz_reflects_heartbeat_updates(self) -> None:
         hb = Heartbeat()
@@ -151,6 +173,7 @@ class TestHealthz:
             url = f"http://127.0.0.1:{ctx.port}/health"
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
+                assert resp.headers.get("Cache-Control") == "no-store"
 
     def test_metrics_returns_prometheus_text(self) -> None:
         hb = Heartbeat()
@@ -161,11 +184,32 @@ class TestHealthz:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert resp.status == 200
                 assert "text/plain" in resp.headers["Content-Type"]
+                assert resp.headers.get("Cache-Control") == "no-store"
                 assert resp.headers.get("X-Content-Type-Options") == "nosniff"
                 body = resp.read().decode("utf-8")
         assert "fandango_watcher_heartbeat_ticks_total 3" in body
         assert "fandango_watcher_heartbeat_errors_total 1" in body
         assert "# HELP fandango_watcher_heartbeat_ticks_total" in body
+
+    def test_metrics_head_returns_headers_without_body(self) -> None:
+        hb = Heartbeat()
+        hb.total_ticks = 3
+        hb.total_errors = 1
+        with _running_server(hb) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/metrics"
+            with urllib.request.urlopen(url, timeout=5) as get_resp:
+                get_body = get_resp.read()
+                get_len = get_resp.headers["Content-Length"]
+
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as head_resp:
+                assert head_resp.status == 200
+                assert "text/plain" in head_resp.headers["Content-Type"]
+                assert head_resp.headers.get("Cache-Control") == "no-store"
+                assert head_resp.headers.get("X-Content-Type-Options") == "nosniff"
+                assert head_resp.headers["Content-Length"] == get_len
+                assert len(get_body) == int(get_len)
+                assert head_resp.read() == b""
 
     def test_stop_is_idempotent(self) -> None:
         hb = Heartbeat()
@@ -315,7 +359,7 @@ class TestDashboardRoutes:
                 assert rhead.headers.get("Accept-Ranges") == "none"
                 assert rhead.read() == b""
 
-    def test_head_non_artifact_with_dashboard_returns_501(
+    def test_dashboard_head_root_matches_get_headers_without_body(
         self, tmp_path: Path
     ) -> None:
         cfg = _dash_cfg(tmp_path)
@@ -323,13 +367,96 @@ class TestDashboardRoutes:
         dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
         hb = Heartbeat()
         with _running_server(hb, dashboard_data=dd) as ctx:
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{ctx.port}/",
-                method="HEAD",
-            )
+            url = f"http://127.0.0.1:{ctx.port}/"
+            with urllib.request.urlopen(url, timeout=5) as get_resp:
+                get_len = get_resp.headers["Content-Length"]
+                get_resp.read()
+
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as head_resp:
+                assert head_resp.status == 200
+                assert "text/html" in head_resp.headers["Content-Type"]
+                assert head_resp.headers.get("Cache-Control") == "no-store"
+                assert head_resp.headers.get("X-Content-Type-Options") == "nosniff"
+                assert (
+                    head_resp.headers.get("Referrer-Policy")
+                    == "strict-origin-when-cross-origin"
+                )
+                assert head_resp.headers["Content-Length"] == get_len
+                assert head_resp.read() == b""
+
+    def test_dashboard_head_api_status_matches_get_headers_without_body(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/api/status"
+            with urllib.request.urlopen(url, timeout=5) as get_resp:
+                get_len = get_resp.headers["Content-Length"]
+                get_resp.read()
+
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=5) as head_resp:
+                assert head_resp.status == 200
+                assert (
+                    head_resp.headers["Content-Type"]
+                    == "application/json; charset=utf-8"
+                )
+                assert head_resp.headers.get("Cache-Control") == "no-store"
+                assert head_resp.headers.get("X-Content-Type-Options") == "nosniff"
+                assert head_resp.headers["Content-Length"] == get_len
+                assert head_resp.read() == b""
+
+    def test_dashboard_head_missing_path_matches_404_headers_without_body(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/missing"
+            req = urllib.request.Request(url, method="HEAD")
             with pytest.raises(urllib.error.HTTPError) as excinfo:
                 urllib.request.urlopen(req, timeout=5)
-            assert excinfo.value.code == 501
+            err = excinfo.value
+            assert err.code == 404
+            assert err.headers.get("Cache-Control") == "no-store"
+            assert err.headers.get("X-Content-Type-Options") == "nosniff"
+            assert (
+                err.headers.get("Referrer-Policy")
+                == "strict-origin-when-cross-origin"
+            )
+            assert err.read() == b""
+
+    def test_bare_artifacts_path_get_and_head_return_dashboard_404(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/artifacts"
+            with pytest.raises(urllib.error.HTTPError) as get_excinfo:
+                urllib.request.urlopen(url, timeout=5)
+            get_err = get_excinfo.value
+            assert get_err.code == 404
+            assert get_err.headers.get("Cache-Control") == "no-store"
+            assert get_err.headers.get("X-Content-Type-Options") == "nosniff"
+            assert get_err.read()
+
+            req = urllib.request.Request(url, method="HEAD")
+            with pytest.raises(urllib.error.HTTPError) as head_excinfo:
+                urllib.request.urlopen(req, timeout=5)
+            head_err = head_excinfo.value
+            assert head_err.code == 404
+            assert head_err.headers.get("Cache-Control") == "no-store"
+            assert head_err.headers.get("X-Content-Type-Options") == "nosniff"
+            assert head_err.read() == b""
 
     def test_artifact_if_none_match_returns_304(self, tmp_path: Path) -> None:
         cfg = _dash_cfg(tmp_path)
@@ -362,6 +489,130 @@ class TestDashboardRoutes:
             assert err304.headers.get("Last-Modified")
             assert err304.headers.get("X-Content-Type-Options") == "nosniff"
             assert err304.headers.get("Accept-Ranges") == "none"
+
+    def test_artifact_if_none_match_uses_weak_comparison(
+        self, tmp_path: Path
+    ) -> None:
+        """RFC 7232 weak comparison: ``W/"x"`` matches ``"x"``."""
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "weak-compare.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"etag")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                strong_etag = resp.headers["ETag"].removeprefix("W/")
+                resp.read()
+
+            req304 = urllib.request.Request(url)
+            req304.add_header("If-None-Match", f'W/"not-this", {strong_etag}')
+            with pytest.raises(urllib.error.HTTPError) as excinfo304:
+                urllib.request.urlopen(req304, timeout=5)
+            assert excinfo304.value.code == 304
+
+    def test_artifact_head_if_none_match_returns_304(self, tmp_path: Path) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "head-304.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"head-etag")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                etag = resp.headers["ETag"]
+                resp.read()
+
+            req304 = urllib.request.Request(url, method="HEAD")
+            req304.add_header("If-None-Match", etag)
+            with pytest.raises(urllib.error.HTTPError) as excinfo304:
+                urllib.request.urlopen(req304, timeout=5)
+            err304 = excinfo304.value
+            assert err304.code == 304
+            assert err304.read() == b""
+            assert err304.headers.get("ETag") == etag
+
+    def test_artifact_range_request_returns_416(self, tmp_path: Path) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "range.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"range-body")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            req = urllib.request.Request(url)
+            req.add_header("Range", "bytes=0-4")
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(req, timeout=5)
+            err = excinfo.value
+            assert err.code == 416
+            assert err.headers.get("Accept-Ranges") == "none"
+            assert err.headers.get("Content-Range") == "bytes */10"
+            assert err.read() == b""
+
+    def test_artifact_head_range_request_returns_416(self, tmp_path: Path) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "head-range.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"head-range")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            req = urllib.request.Request(url, method="HEAD")
+            req.add_header("Range", "bytes=0-3")
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(req, timeout=5)
+            err = excinfo.value
+            assert err.code == 416
+            assert err.headers.get("Accept-Ranges") == "none"
+            assert err.headers.get("Content-Range") == "bytes */10"
+            assert err.read() == b""
+
+    def test_artifact_matching_if_none_match_takes_precedence_over_range(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "range-304.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"cached")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                etag = resp.headers["ETag"]
+                resp.read()
+
+            req = urllib.request.Request(url)
+            req.add_header("If-None-Match", etag)
+            req.add_header("Range", "bytes=0-1")
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(req, timeout=5)
+            assert excinfo.value.code == 304
 
     def test_artifact_if_modified_since_returns_304(self, tmp_path: Path) -> None:
         cfg = _dash_cfg(tmp_path)
@@ -411,6 +662,27 @@ class TestDashboardRoutes:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 assert resp.status == 200
                 assert resp.read() == b"x"
+
+    def test_artifact_malformed_if_modified_since_returns_200(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        shot = paths.screenshot_dir / "bad-ims.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"bad-date")
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                f"screenshots/{shot.name}"
+            )
+            req = urllib.request.Request(url)
+            req.add_header("If-Modified-Since", "definitely not an http date")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                assert resp.status == 200
+                assert resp.read() == b"bad-date"
 
     def test_artifact_if_modified_since_ignored_with_if_none_match_header(
         self, tmp_path: Path
@@ -471,7 +743,69 @@ class TestDashboardRoutes:
             url = f"http://127.0.0.1:{ctx.port}/artifacts/../../etc/passwd"
             with pytest.raises(urllib.error.HTTPError) as excinfo:
                 urllib.request.urlopen(url, timeout=5)
-            assert excinfo.value.code == 404
+            err = excinfo.value
+            assert err.code == 404
+            assert err.headers.get("Cache-Control") == "no-store"
+            assert err.headers.get("X-Content-Type-Options") == "nosniff"
+            assert err.read() == b"Not Found\n"
+
+    def test_artifacts_percent_encoded_traversal_returns_404(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                f"http://127.0.0.1:{ctx.port}/artifacts/"
+                "%2e%2e/%2e%2e/etc/passwd"
+            )
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(url, timeout=5)
+            err = excinfo.value
+            assert err.code == 404
+            assert err.headers.get("Cache-Control") == "no-store"
+            assert err.headers.get("X-Content-Type-Options") == "nosniff"
+            assert err.read() == b"Not Found\n"
+
+    def test_artifact_missing_returns_404_with_security_headers(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/artifacts/screenshots/missing.png"
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(url, timeout=5)
+            err = excinfo.value
+            assert err.code == 404
+            assert err.headers["Content-Type"] == "text/plain; charset=utf-8"
+            assert err.headers.get("Cache-Control") == "no-store"
+            assert err.headers.get("X-Content-Type-Options") == "nosniff"
+            assert err.read() == b"Not Found\n"
+
+    def test_artifact_head_missing_returns_404_without_body(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = f"http://127.0.0.1:{ctx.port}/artifacts/screenshots/missing.png"
+            req = urllib.request.Request(url, method="HEAD")
+            with pytest.raises(urllib.error.HTTPError) as excinfo:
+                urllib.request.urlopen(req, timeout=5)
+            err = excinfo.value
+            assert err.code == 404
+            assert err.headers["Content-Type"] == "text/plain; charset=utf-8"
+            assert err.headers.get("Cache-Control") == "no-store"
+            assert err.headers.get("X-Content-Type-Options") == "nosniff"
+            assert err.headers.get("Content-Length") == str(len(b"Not Found\n"))
+            assert err.read() == b""
 
     def test_root_404_without_dashboard_data(self) -> None:
         hb = Heartbeat()

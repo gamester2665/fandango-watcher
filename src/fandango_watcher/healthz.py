@@ -89,6 +89,7 @@ def _send_json(
     payload: dict[str, Any],
     *,
     cache_control: str | None = "no-store",
+    send_body: bool = True,
 ) -> None:
     body = json.dumps(payload, default=str).encode("utf-8")
     handler.send_response(HTTPStatus.OK)
@@ -98,7 +99,8 @@ def _send_json(
     _send_no_sniff(handler)
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
-    handler.wfile.write(body)
+    if send_body:
+        handler.wfile.write(body)
 
 
 def _prometheus_metrics_text(heartbeat: Heartbeat) -> bytes:
@@ -128,6 +130,7 @@ def _send_bytes(
     content_type: str,
     *,
     cache_control: str | None = None,
+    send_body: bool = True,
 ) -> None:
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", content_type)
@@ -141,7 +144,8 @@ def _send_bytes(
         )
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
-    handler.wfile.write(body)
+    if send_body:
+        handler.wfile.write(body)
 
 
 def _artifact_weak_etag(st: os.stat_result) -> str:
@@ -156,10 +160,19 @@ def _etag_in_if_none_match(if_none_match: str | None, etag: str) -> bool:
     s = if_none_match.strip()
     if s == "*":
         return True
+    expected = _weak_etag_opaque_value(etag)
     for part in s.split(","):
-        if part.strip() == etag:
+        if _weak_etag_opaque_value(part.strip()) == expected:
             return True
     return False
+
+
+def _weak_etag_opaque_value(value: str) -> str:
+    """Opaque tag value for RFC 7232 weak comparison."""
+    value = value.strip()
+    if value[:2].lower() == "w/":
+        value = value[2:].strip()
+    return value
 
 
 def _if_none_match_header_present(if_none_match: str | None) -> bool:
@@ -187,7 +200,10 @@ def _artifact_not_modified_since(
         return False
     if ims_dt.tzinfo is None:
         ims_dt = ims_dt.replace(tzinfo=UTC)
-    ims_sec = int(ims_dt.timestamp())
+    try:
+        ims_sec = int(ims_dt.timestamp())
+    except (OSError, OverflowError, ValueError):
+        return False
     lm_sec = int(st.st_mtime)
     return lm_sec <= ims_sec
 
@@ -205,6 +221,37 @@ def _send_artifact_validation_headers(
     _send_no_sniff(handler)
 
 
+def _send_artifact_range_not_satisfiable(
+    handler: BaseHTTPRequestHandler,
+    *,
+    etag: str,
+    last_modified: str,
+    size: int,
+) -> None:
+    handler.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+    _send_artifact_validation_headers(
+        handler, etag=etag, last_modified=last_modified
+    )
+    handler.send_header("Content-Range", f"bytes */{size}")
+    handler.end_headers()
+
+
+def _send_artifact_not_found(
+    handler: BaseHTTPRequestHandler,
+    *,
+    send_body: bool,
+) -> None:
+    body = b"Not Found\n"
+    handler.send_response(HTTPStatus.NOT_FOUND)
+    handler.send_header("Content-Type", "text/plain; charset=utf-8")
+    handler.send_header("Cache-Control", "no-store")
+    _send_no_sniff(handler)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    if send_body:
+        handler.wfile.write(body)
+
+
 def _serve_artifact_file(
     handler: BaseHTTPRequestHandler,
     *,
@@ -219,15 +266,15 @@ def _serve_artifact_file(
     """
     rel = relative_url_path.lstrip("/")
     if ".." in rel.split("/"):
-        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+        _send_artifact_not_found(handler, send_body=send_body)
         return True
     root = artifacts_root.resolve()
     candidate = (root / rel).resolve()
     if not candidate.is_relative_to(root):
-        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+        _send_artifact_not_found(handler, send_body=send_body)
         return True
     if not candidate.is_file():
-        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+        _send_artifact_not_found(handler, send_body=send_body)
         return True
     mime, _enc = mimetypes.guess_type(str(candidate))
     ctype = mime or "application/octet-stream"
@@ -254,6 +301,14 @@ def _serve_artifact_file(
             )
             handler.end_headers()
             return True
+        if handler.headers.get("Range"):
+            _send_artifact_range_not_satisfiable(
+                handler,
+                etag=etag,
+                last_modified=last_modified,
+                size=st.st_size,
+            )
+            return True
         handler.send_response(HTTPStatus.OK)
         handler.send_header("Content-Type", ctype)
         _send_artifact_validation_headers(
@@ -265,7 +320,7 @@ def _serve_artifact_file(
             with candidate.open("rb") as f:
                 shutil.copyfileobj(f, handler.wfile)
     except OSError:
-        handler.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+        _send_artifact_not_found(handler, send_body=send_body)
     return True
 
 
@@ -280,7 +335,7 @@ def _make_handler_cls(
                 "healthz %s - %s", self.address_string(), format % args
             )
 
-        def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+        def _handle_readonly_request(self, *, send_body: bool) -> None:
             from .dashboard import (
                 collect_dashboard_state,
                 compute_dashboard_revision,
@@ -291,18 +346,18 @@ def _make_handler_cls(
             path_only = unquote(parsed.path) or "/"
 
             if path_only in ("/healthz", "/health"):
-                health_body = json.dumps(heartbeat.snapshot()).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                _send_no_sniff(self)
-                self.send_header("Content-Length", str(len(health_body)))
-                self.end_headers()
-                self.wfile.write(health_body)
+                _send_json(self, heartbeat.snapshot(), send_body=send_body)
                 return
 
             if path_only == "/metrics":
                 body = _prometheus_metrics_text(heartbeat)
-                _send_bytes(self, body, "text/plain; version=0.0.4; charset=utf-8")
+                _send_bytes(
+                    self,
+                    body,
+                    "text/plain; version=0.0.4; charset=utf-8",
+                    cache_control="no-store",
+                    send_body=send_body,
+                )
                 return
 
             if dashboard_data is not None:
@@ -321,15 +376,16 @@ def _make_handler_cls(
                         html.encode("utf-8"),
                         "text/html; charset=utf-8",
                         cache_control="no-store",
+                        send_body=send_body,
                     )
                     return
                 if path_only == "/api/revision":
                     rev = compute_dashboard_revision(dd)
-                    _send_json(self, {"revision": rev})
+                    _send_json(self, {"revision": rev}, send_body=send_body)
                     return
                 if path_only == "/api/status":
                     snap = collect_dashboard_state(dd)
-                    _send_json(self, snap)
+                    _send_json(self, snap, send_body=send_body)
                     return
                 if path_only == "/api/purchases":
                     snap = collect_dashboard_state(dd)
@@ -340,13 +396,14 @@ def _make_handler_cls(
                             "path": snap.get("paths", {}).get("purchases_jsonl"),
                             "dashboard": snap.get("dashboard") or {},
                         },
+                        send_body=send_body,
                     )
                     return
                 if path_only == "/api/movies":
                     movies = [
                         m.model_dump(mode="json") for m in dd.cfg.movies
                     ]
-                    _send_json(self, {"movies": movies})
+                    _send_json(self, {"movies": movies}, send_body=send_body)
                     return
                 if path_only == "/api/release_intel":
                     from .release_intel import get_release_intel_for_dashboard
@@ -356,7 +413,7 @@ def _make_handler_cls(
                         state_dir=dd.paths.state_dir,
                         settings=dd.settings,
                     )
-                    _send_json(self, payload)
+                    _send_json(self, payload, send_body=send_body)
                     return
                 if path_only.startswith("/artifacts/"):
                     rel = path_only[len("/artifacts/") :]
@@ -364,10 +421,10 @@ def _make_handler_cls(
                         self,
                         artifacts_root=dd.paths.artifacts_root,
                         relative_url_path=rel,
+                        send_body=send_body,
                     )
                     return
 
-            if dashboard_data is not None:
                 from .dashboard import render_dashboard_not_found_html
 
                 body = render_dashboard_not_found_html(
@@ -383,29 +440,18 @@ def _make_handler_cls(
                 )
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                if send_body:
+                    self.wfile.write(body)
                 return
 
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
+        def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+            self._handle_readonly_request(send_body=True)
+
         def do_HEAD(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
-            """RFC 7231: same headers as GET for artifacts; no payload."""
-            parsed = urlparse(self.path)
-            path_only = unquote(parsed.path) or "/"
-            dd = dashboard_data
-            if dd is None or not path_only.startswith("/artifacts/"):
-                self.send_error(
-                    HTTPStatus.NOT_IMPLEMENTED,
-                    "Unsupported method for this path",
-                )
-                return
-            rel = path_only[len("/artifacts/") :]
-            _serve_artifact_file(
-                self,
-                artifacts_root=dd.paths.artifacts_root,
-                relative_url_path=rel,
-                send_body=False,
-            )
+            """RFC 7231: same headers as GET for read-only routes; no payload."""
+            self._handle_readonly_request(send_body=False)
 
     return Handler
 
