@@ -197,6 +197,9 @@ notify:
                 "--dry-run",
                 "--headed",
                 "--write-state",
+                "--direct-api-mode",
+                "browser",
+                "--no-browser-fallback",
                 "--format-filter-selector",
                 "#lazyload-format-filters li",
                 "--format-filter-label",
@@ -213,9 +216,27 @@ notify:
         assert ns.dry_run is True
         assert ns.headed is True
         assert ns.write_state is True
+        assert ns.direct_api_mode == "browser"
+        assert ns.no_browser_fallback is True
         assert ns.format_filter_selector == "#lazyload-format-filters li"
         assert ns.format_filter_label == "IMAX 3D"
         assert ns.format_filter_timeout_ms == 9000
+
+    def test_watch_accepts_direct_api_switching_flags(self) -> None:
+        parser = cli.build_parser()
+        ns = parser.parse_args(
+            [
+                "watch",
+                "--config",
+                "foo.yaml",
+                "--direct-api-mode",
+                "api",
+                "--no-browser-fallback",
+            ]
+        )
+        assert ns.command == "watch"
+        assert ns.direct_api_mode == "api"
+        assert ns.no_browser_fallback is True
 
     def test_log_level_choices_enforced(self) -> None:
         parser = cli.build_parser()
@@ -339,6 +360,65 @@ class TestWatchNoOpen:
         )
         assert ns.format_filter_label == "IMAX 3D"
         assert ns.format_filter_timeout_ms == 15000
+
+    def test_watch_browser_mode_disables_direct_api(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg_path = tmp_path / "cfg.yaml"
+        cfg_path.write_text(
+            """
+targets:
+  - name: t1
+    url: https://example.com/m
+theater:
+  display_name: CW
+  fandango_theater_anchor: AMC Universal CityWalk
+formats:
+  require: []
+  include: []
+direct_api:
+  enabled: true
+  fallback_to_browser: true
+poll:
+  min_seconds: 30
+  max_seconds: 30
+purchase:
+  enabled: false
+  mode: notify_only
+notify:
+  channels: []
+  on_events: []
+""",
+            encoding="utf-8",
+        )
+        captured: dict[str, Any] = {}
+
+        def fake_run_watch(cfg, *_args: Any, **_kwargs: Any) -> int:  # type: ignore[no-untyped-def]
+            captured["direct_api_enabled"] = cfg.direct_api.enabled
+            captured["fallback_to_browser"] = cfg.direct_api.fallback_to_browser
+            return 0
+
+        monkeypatch.setattr("fandango_watcher.loop.run_watch", fake_run_watch)
+
+        rc = cli.main(
+            [
+                "watch",
+                "--config",
+                str(cfg_path),
+                "--no-healthz",
+                "--direct-api-mode",
+                "browser",
+                "--no-browser-fallback",
+            ]
+        )
+
+        assert rc == 0
+        assert captured == {
+            "direct_api_enabled": False,
+            "fallback_to_browser": False,
+        }
 
 
 class TestTestPurchaseParser:

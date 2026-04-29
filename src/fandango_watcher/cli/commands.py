@@ -67,6 +67,36 @@ def _apply_format_filter_cli_overrides(
     return target.model_copy(update=updates)
 
 
+def _has_format_filter_cli_overrides(args: argparse.Namespace) -> bool:
+    return (
+        args.format_filter_selector is not None
+        or args.format_filter_label is not None
+        or args.format_filter_timeout_ms is not None
+    )
+
+
+def _apply_direct_api_cli_overrides(
+    cfg: Any,
+    args: argparse.Namespace,
+    *,
+    force_browser_for_format_filter: bool = False,
+) -> Any:
+    """Merge CLI detection-path overrides into ``cfg.direct_api``."""
+    mode = getattr(args, "direct_api_mode", "auto")
+    updates: dict[str, Any] = {}
+    if mode == "api":
+        updates["enabled"] = True
+    elif mode == "browser" or force_browser_for_format_filter:
+        updates["enabled"] = False
+    if getattr(args, "no_browser_fallback", False):
+        updates["fallback_to_browser"] = False
+    if not updates:
+        return cfg
+    return cfg.model_copy(
+        update={"direct_api": cfg.direct_api.model_copy(update=updates)}
+    )
+
+
 def _run_once(args: argparse.Namespace) -> int:
     # Imported lazily so `argparse --help` and stub subcommands don't pay the
     # cost of starting up Playwright.
@@ -76,6 +106,21 @@ def _run_once(args: argparse.Namespace) -> int:
         print(
             "error: --write-state requires a config file (--config); "
             "it cannot be used with --url ad-hoc mode.",
+            file=sys.stderr,
+        )
+        return 1
+    has_format_filter_override = _has_format_filter_cli_overrides(args)
+    if args.url and args.direct_api_mode == "api":
+        print(
+            "error: --direct-api-mode api requires --config/--target; "
+            "ad-hoc --url mode can only use the browser crawler.",
+            file=sys.stderr,
+        )
+        return 1
+    if has_format_filter_override and args.direct_api_mode == "api":
+        print(
+            "error: --format-filter-* clicks are browser-only; use "
+            "--direct-api-mode browser or configure direct_api_formats instead.",
             file=sys.stderr,
         )
         return 1
@@ -108,6 +153,11 @@ def _run_once(args: argparse.Namespace) -> int:
             )
             return 1
         cfg = load_config(config_path)
+        cfg = _apply_direct_api_cli_overrides(
+            cfg,
+            args,
+            force_browser_for_format_filter=has_format_filter_override,
+        )
 
         if args.target:
             matches = [t for t in cfg.targets if t.name == args.target]
@@ -142,11 +192,6 @@ def _run_once(args: argparse.Namespace) -> int:
         cfg_for_state = cfg
 
     direct_meta = None
-    has_format_filter_override = (
-        args.format_filter_selector is not None
-        or args.format_filter_label is not None
-        or args.format_filter_timeout_ms is not None
-    )
     if (
         cfg_for_state is not None
         and cfg_for_state.direct_api.enabled
@@ -244,11 +289,20 @@ def _run_watch(args: argparse.Namespace) -> int:
         return 1
 
     cfg = load_config(config_path)
-    if (
-        args.format_filter_selector is not None
-        or args.format_filter_label is not None
-        or args.format_filter_timeout_ms is not None
-    ):
+    has_format_filter_override = _has_format_filter_cli_overrides(args)
+    if has_format_filter_override and args.direct_api_mode == "api":
+        print(
+            "error: --format-filter-* clicks are browser-only; use "
+            "--direct-api-mode browser or configure direct_api_formats instead.",
+            file=sys.stderr,
+        )
+        return 1
+    cfg = _apply_direct_api_cli_overrides(
+        cfg,
+        args,
+        force_browser_for_format_filter=has_format_filter_override,
+    )
+    if has_format_filter_override:
         cfg = cfg.model_copy(
             update={
                 "targets": [

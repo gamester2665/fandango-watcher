@@ -60,6 +60,19 @@ live endpoint drift:
 uv run fandango-watcher api-drift --max-dates 3
 ```
 
+Operational switching:
+
+```bash
+# Use config default: direct API first, browser fallback on drift.
+fandango-watcher watch --config config.yaml
+
+# Force direct API and fail instead of falling back to Playwright.
+fandango-watcher watch --config config.yaml --direct-api-mode api --no-browser-fallback
+
+# Force Playwright/browser detection for comparison or format-chip testing.
+fandango-watcher once --config config.yaml --target odyssey-overview --direct-api-mode browser
+```
+
 ---
 
 ## VPS / production (manual)

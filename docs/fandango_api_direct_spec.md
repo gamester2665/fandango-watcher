@@ -156,6 +156,14 @@ Mental model for tools:
 8. Use `fandango-watcher api-drift --max-dates 3` for an opt-in live drift
    report. Default tests stay deterministic and mocked.
 
+Operator overrides:
+
+- `--direct-api-mode auto`: use `config.yaml` as-is.
+- `--direct-api-mode api`: force direct API detection.
+- `--direct-api-mode browser`: force Playwright/browser detection.
+- `--no-browser-fallback`: when direct API is enabled, fail direct API errors
+  instead of falling back to Playwright.
+
 ```text
 theater calendar -> dates
 date -> all movies at theater

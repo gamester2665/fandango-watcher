@@ -78,3 +78,8 @@ fandango_direct_api:
       - direct_api_fallback_count
       - direct_api_last_drift_warning
     drift_command: "fandango-watcher api-drift --max-dates 3"
+    cli_overrides:
+      direct_api_mode_auto: "use config.yaml"
+      direct_api_mode_api: "force direct API detection"
+      direct_api_mode_browser: "force Playwright/browser detection"
+      no_browser_fallback: "fail direct API errors instead of falling back"

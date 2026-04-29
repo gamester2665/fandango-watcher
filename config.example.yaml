@@ -57,6 +57,12 @@ formats:
 # Fandango's JSON endpoints for CityWalk showtimes matching the target movie and
 # desired format, then falls back to browser crawling if the private API drifts.
 # Browser automation is still used for checkout/login and as the recovery path.
+#
+# CLI overrides:
+#   --direct-api-mode auto     # use this YAML block
+#   --direct-api-mode api      # force direct API
+#   --direct-api-mode browser  # force Playwright/browser crawl
+#   --no-browser-fallback      # fail direct API errors instead of falling back
 # -----------------------------------------------------------------------------
 direct_api:
   enabled: true

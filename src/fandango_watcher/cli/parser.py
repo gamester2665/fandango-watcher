@@ -34,6 +34,27 @@ def _register_format_filter_cli_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _register_direct_api_cli_args(p: argparse.ArgumentParser) -> None:
+    """Shared direct API routing controls for commands that detect targets."""
+    p.add_argument(
+        "--direct-api-mode",
+        choices=["auto", "api", "browser"],
+        default="auto",
+        help=(
+            "Detection path override: auto uses config, api forces direct "
+            "Fandango JSON API, browser forces Playwright/browser crawl."
+        ),
+    )
+    p.add_argument(
+        "--no-browser-fallback",
+        action="store_true",
+        help=(
+            "When direct API is enabled, fail on direct API errors instead of "
+            "falling back to Playwright."
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fandango-watcher",
@@ -111,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
             '{"parsed": ... , "state_write": ...}.'
         ),
     )
+    _register_direct_api_cli_args(p_once)
     _register_format_filter_cli_args(p_once)
 
     # -- watch --------------------------------------------------------------
@@ -178,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Use 0 to disable. Default 10."
         ),
     )
+    _register_direct_api_cli_args(p_watch)
     _register_format_filter_cli_args(p_watch)
 
     # -- dashboard ----------------------------------------------------------
