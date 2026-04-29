@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import urllib.parse
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -46,6 +47,53 @@ logger = logging.getLogger(__name__)
 
 X_API_BASE = "https://api.x.com/2"
 DEFAULT_TIMEOUT_SECONDS = 15.0
+_TICKET_TERMS = (
+    "ticket",
+    "tickets",
+    "tix",
+)
+_TICKET_AVAILABLE_PHRASES = (
+    "tickets on sale",
+    "ticket on sale",
+    "on sale now",
+    "now on sale",
+    "go on sale",
+    "goes on sale",
+    "went on sale",
+    "presale",
+    "pre-sale",
+    "pre sale",
+    "get tickets",
+    "buy tickets",
+    "tickets available",
+    "available now",
+    "now available",
+    "secure your seats",
+    "reserve your seats",
+    "book your tickets",
+)
+_TICKET_SOON_PHRASES = (
+    "tickets soon",
+    "coming soon",
+    "soon",
+    "tomorrow",
+    "this week",
+    "next week",
+    "friday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "saturday",
+    "sunday",
+)
+_TICKET_NEGATIVE_PHRASES = (
+    "not on sale",
+    "no tickets",
+    "tickets are not",
+    "tickets aren't",
+    "tickets not",
+)
 
 
 # -----------------------------------------------------------------------------
@@ -66,6 +114,7 @@ class HandleState(BaseModel):
     # Newest-seen tweet in the last successful poll batch (for dashboard copy).
     last_seen_tweet_text: str | None = None
     last_seen_tweet_created_at: str | None = None
+    last_seen_ticket_analysis: dict[str, Any] | None = None
     last_polled_at: datetime | None = None
     last_error_at: datetime | None = None
     last_error_message: str | None = None
@@ -344,6 +393,89 @@ def match_tweet(text: str, keywords: Iterable[str]) -> list[str]:
     return hits
 
 
+def analyze_ticket_announcement(text: str) -> dict[str, Any]:
+    """Classify whether a tweet body appears to announce ticket availability.
+
+    This intentionally stays deterministic and local: it is a small heuristic
+    for dashboard triage, not a buy signal. Fandango remains authoritative.
+    """
+    flat = " ".join(text.split())
+    if not flat:
+        return {
+            "announces_tickets": False,
+            "status": "unknown",
+            "confidence": "low",
+            "matched_phrases": [],
+            "reason": "empty tweet text",
+        }
+
+    lower = flat.lower()
+    negatives = _matched_phrases(lower, _TICKET_NEGATIVE_PHRASES)
+    ticket_terms = _matched_ticket_terms(lower)
+    has_ticket_term = bool(ticket_terms)
+    available = _matched_phrases(lower, _TICKET_AVAILABLE_PHRASES)
+    soon = _matched_phrases(lower, _TICKET_SOON_PHRASES)
+
+    if negatives:
+        return {
+            "announces_tickets": False,
+            "status": "not_available",
+            "confidence": "medium",
+            "matched_phrases": negatives,
+            "reason": "negative ticket-availability language",
+        }
+    if available:
+        return {
+            "announces_tickets": True,
+            "status": "available",
+            "confidence": "high",
+            "matched_phrases": available,
+            "reason": "ticket availability language found",
+        }
+    if has_ticket_term and soon:
+        return {
+            "announces_tickets": True,
+            "status": "soon",
+            "confidence": "medium",
+            "matched_phrases": list(dict.fromkeys([*soon, *ticket_terms])),
+            "reason": "ticket term with timing language",
+        }
+    if has_ticket_term:
+        return {
+            "announces_tickets": False,
+            "status": "mentions_tickets",
+            "confidence": "low",
+            "matched_phrases": ticket_terms,
+            "reason": "mentions tickets without availability language",
+        }
+    return {
+        "announces_tickets": False,
+        "status": "not_announcement",
+        "confidence": "low",
+        "matched_phrases": [],
+        "reason": "no ticket availability language found",
+    }
+
+
+def _matched_phrases(text_lower: str, phrases: Iterable[str]) -> list[str]:
+    hits: list[str] = []
+    seen: set[str] = set()
+    for phrase in phrases:
+        norm = phrase.strip().lower()
+        if norm and norm not in seen and norm in text_lower:
+            hits.append(phrase)
+            seen.add(norm)
+    return hits
+
+
+def _matched_ticket_terms(text_lower: str) -> list[str]:
+    return [
+        term
+        for term in _TICKET_TERMS
+        if re.search(rf"\b{re.escape(term)}\b", text_lower)
+    ]
+
+
 def _effective_keywords(
     handle_cfg: SocialXHandleConfig, defaults: list[str]
 ) -> list[str]:
@@ -469,6 +601,9 @@ def check_x_signals(
                     if str(tw.get("id") or "") == new_max_id:
                         txt = str(tw.get("text") or "").strip()
                         handle_state.last_seen_tweet_text = txt or None
+                        handle_state.last_seen_ticket_analysis = (
+                            analyze_ticket_announcement(txt) if txt else None
+                        )
                         ca = tw.get("created_at")
                         handle_state.last_seen_tweet_created_at = (
                             str(ca) if ca is not None else None
@@ -494,10 +629,20 @@ def check_x_signals(
                     if one:
                         txt = str(one.get("text") or "").strip()
                         handle_state.last_seen_tweet_text = txt or None
+                        handle_state.last_seen_ticket_analysis = (
+                            analyze_ticket_announcement(txt) if txt else None
+                        )
                         ca = one.get("created_at")
                         handle_state.last_seen_tweet_created_at = (
                             str(ca) if ca is not None else None
                         )
+            elif (
+                str(handle_state.last_seen_tweet_text or "").strip()
+                and handle_state.last_seen_ticket_analysis is None
+            ):
+                handle_state.last_seen_ticket_analysis = analyze_ticket_announcement(
+                    str(handle_state.last_seen_tweet_text or "")
+                )
         except XApiError as e:
             result.handles_failed += 1
             if e.status_code == 429 and e.headers is not None:
@@ -588,6 +733,7 @@ __all__ = [
     "XApiError",
     "XClient",
     "XSignalMatch",
+    "analyze_ticket_announcement",
     "check_x_signals",
     "generate_app_only_bearer_token",
     "load_social_x_state",
