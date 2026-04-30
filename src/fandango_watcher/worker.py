@@ -35,6 +35,12 @@ async def on_scheduled(event, env, ctx):
     """Entry point for Cron Triggers."""
     await run_tick(env)
 
+# Cloudflare Python Workers expect 'fetch' and 'scheduled' to be exported at the top level
+# if using the 'on_fetch'/'on_scheduled' naming convention in some environments,
+# but the standard export names are 'fetch' and 'scheduled'.
+fetch = on_fetch
+scheduled = on_scheduled
+
 async def run_tick(env: Any):
     """Run one iteration of the watch loop."""
     # 1. Load config and settings from environment
