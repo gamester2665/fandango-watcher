@@ -164,6 +164,8 @@ def _build_snapshot(
         url=url,
         page_title=raw.get("page_title") or "",
         movie_title=raw.get("movie_title"),
+        release_date_text=raw.get("release_date_text"),
+        poster_url=raw.get("poster_url"),
         screenshot_path=str(screenshot_path) if screenshot_path else None,
         format_filter_labels=raw.get("format_filter_labels") or [],
         theaters=theaters,

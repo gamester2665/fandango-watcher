@@ -1,0 +1,22 @@
+#:schema https://raw.githubusercontent.com/cloudflare/wrangler/main/packages/wrangler/config-schema.json
+name = "fandango-watcher"
+main = "src/fandango_watcher/worker.py"
+compatibility_date = "2024-04-30"
+compatibility_flags = ["python_workers"]
+
+# Cloudflare Workers Python dependencies are managed via requirements.txt
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fandango_watcher_db"
+database_id = "a194825e-917f-45fb-bc9b-53e610aa5335"
+
+[browser]
+binding = "BROWSER"
+
+[vars]
+FANDANGO_WATCHER_ENV = "production"
+WATCHER_CONFIG = "config.yaml"

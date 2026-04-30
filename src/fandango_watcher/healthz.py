@@ -15,9 +15,115 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 logger = logging.getLogger(__name__)
+
+CITYWALK_THEATER_SLUG = "universal-cinema-amc-at-citywalk-hollywood-aaawx"
+
+
+def _format_label(tag: Any) -> str:
+    from .models import FormatTag
+
+    labels = {
+        FormatTag.IMAX_70MM: "IMAX 70MM",
+        FormatTag.IMAX: "IMAX",
+        FormatTag.THREE_D: "3D",
+        FormatTag.SEVENTY_MM: "70MM",
+        FormatTag.DOLBY: "Dolby",
+        FormatTag.LASER_RECLINER: "Laser Recliner",
+        FormatTag.STANDARD: "Standard",
+    }
+    return labels.get(tag, str(getattr(tag, "value", tag)).replace("_", " "))
+
+
+def _format_from_slug(format_slug: str) -> tuple[str, Any, str] | None:
+    """Resolve URL format slugs to canonical slug, FormatTag, display label."""
+
+    from .detect import normalize_format_label
+    from .models import FormatTag
+
+    aliases: dict[str, FormatTag] = {
+        "imax": FormatTag.IMAX,
+        "imax-70mm": FormatTag.IMAX_70MM,
+        "imax70mm": FormatTag.IMAX_70MM,
+        "imax_70mm": FormatTag.IMAX_70MM,
+        "70mm": FormatTag.SEVENTY_MM,
+        "70-mm": FormatTag.SEVENTY_MM,
+        "3d": FormatTag.THREE_D,
+        "dolby": FormatTag.DOLBY,
+        "laser-recliner": FormatTag.LASER_RECLINER,
+        "standard": FormatTag.STANDARD,
+        "digital": FormatTag.STANDARD,
+    }
+    raw_slug = format_slug.strip("/").lower()
+    tag = aliases.get(raw_slug)
+    if tag is None:
+        tag = normalize_format_label(raw_slug.replace("-", " "))
+        if tag is FormatTag.OTHER:
+            return None
+    canonical = (
+        "imax-70mm"
+        if tag is FormatTag.IMAX_70MM
+        else tag.value.lower().replace("_", "-")
+    )
+    return canonical, tag, _format_label(tag)
+
+
+def _citywalk_format_route(path_only: str) -> tuple[bool, str, str, str, Any, str] | None:
+    """Resolve legacy CityWalk and generic theater format routes."""
+
+    from .fandango_api import theater_id_from_slug
+    from .models import FormatTag
+
+    if path_only == "/citywalk-imax-70mm":
+        return (
+            False,
+            CITYWALK_THEATER_SLUG,
+            "AAAWX",
+            "imax-70mm",
+            FormatTag.IMAX_70MM,
+            "IMAX 70MM",
+        )
+    if path_only == "/api/citywalk/imax70mm":
+        return (
+            True,
+            CITYWALK_THEATER_SLUG,
+            "AAAWX",
+            "imax-70mm",
+            FormatTag.IMAX_70MM,
+            "IMAX 70MM",
+        )
+    for prefix, is_api in (
+        (f"/api/{CITYWALK_THEATER_SLUG}/", True),
+        ("/api/citywalk/", True),
+        (f"/{CITYWALK_THEATER_SLUG}/", False),
+        ("/citywalk/", False),
+    ):
+        if path_only.startswith(prefix):
+            slug = path_only[len(prefix) :].strip("/").lower()
+            resolved = _format_from_slug(slug)
+            if resolved is None:
+                return None
+            canonical_slug, tag, label = resolved
+            return (is_api, CITYWALK_THEATER_SLUG, "AAAWX", canonical_slug, tag, label)
+
+    segments = [x for x in path_only.strip("/").split("/") if x]
+    is_api = False
+    if segments and segments[0] == "api":
+        is_api = True
+        segments = segments[1:]
+    if len(segments) != 2:
+        return None
+    theater_slug, raw_format_slug = segments
+    theater_id = theater_id_from_slug(theater_slug)
+    if theater_id is None:
+        return None
+    resolved = _format_from_slug(raw_format_slug)
+    if resolved is None:
+        return None
+    canonical_slug, tag, label = resolved
+    return (is_api, theater_slug, theater_id, canonical_slug, tag, label)
 
 
 def _send_no_sniff(handler: BaseHTTPRequestHandler) -> None:
@@ -88,11 +194,12 @@ def _send_json(
     handler: BaseHTTPRequestHandler,
     payload: dict[str, Any],
     *,
+    status: HTTPStatus = HTTPStatus.OK,
     cache_control: str | None = "no-store",
     send_body: bool = True,
 ) -> None:
     body = json.dumps(payload, default=str).encode("utf-8")
-    handler.send_response(HTTPStatus.OK)
+    handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     if cache_control:
         handler.send_header("Cache-Control", cache_control)
@@ -129,10 +236,11 @@ def _send_bytes(
     body: bytes,
     content_type: str,
     *,
+    status: HTTPStatus = HTTPStatus.OK,
     cache_control: str | None = None,
     send_body: bool = True,
 ) -> None:
-    handler.send_response(HTTPStatus.OK)
+    handler.send_response(status)
     handler.send_header("Content-Type", content_type)
     if cache_control:
         handler.send_header("Cache-Control", cache_control)
@@ -405,6 +513,135 @@ def _make_handler_cls(
                     ]
                     _send_json(self, {"movies": movies}, send_body=send_body)
                     return
+                if path_only == "/api/fandango/search":
+                    query = (parse_qs(parsed.query).get("q") or [""])[0].strip()
+                    if not query:
+                        _send_json(
+                            self,
+                            {"ok": False, "error": "missing q query parameter"},
+                            status=HTTPStatus.BAD_REQUEST,
+                            send_body=send_body,
+                        )
+                        return
+                    from .fandango_api import FandangoApiClient
+
+                    try:
+                        with FandangoApiClient(
+                            base_url=dd.cfg.direct_api.base_url,
+                            theater_id=dd.cfg.direct_api.theater_id,
+                            chain_code=dd.cfg.direct_api.chain_code,
+                        ) as client:
+                            results = [
+                                item.model_dump(mode="json")
+                                for item in client.search_movies(query)
+                            ]
+                    except Exception as exc:  # noqa: BLE001 - dashboard endpoint should return JSON
+                        logger.warning("Fandango search failed query=%r", query, exc_info=True)
+                        _send_json(
+                            self,
+                            {"ok": False, "error": f"Fandango search failed: {type(exc).__name__}"},
+                            status=HTTPStatus.BAD_GATEWAY,
+                            send_body=send_body,
+                        )
+                        return
+                    _send_json(
+                        self,
+                        {"ok": True, "query": query, "results": results},
+                        send_body=send_body,
+                    )
+                    return
+                citywalk_format = _citywalk_format_route(path_only)
+                if citywalk_format is not None:
+                    from .fandango_api import FandangoApiClient
+
+                    (
+                        is_api,
+                        theater_slug,
+                        theater_id,
+                        format_slug,
+                        format_tag,
+                        format_label,
+                    ) = citywalk_format
+
+                    try:
+                        with FandangoApiClient(
+                            base_url=dd.cfg.direct_api.base_url,
+                            theater_id=dd.cfg.direct_api.theater_id,
+                            chain_code=dd.cfg.direct_api.chain_code,
+                        ) as client:
+                            theater_info = client.theater_info(theater_slug)
+                            by_date = client.future_format_records(
+                                {format_tag},
+                                theater_id=theater_info.theater_id,
+                                chain_code=theater_info.chain_code,
+                            )
+                        dates = [
+                            {
+                                "date": showtime_date,
+                                "showtimes": [
+                                    record.model_dump(mode="json")
+                                    for record in records
+                                ],
+                            }
+                            for showtime_date, records in by_date.items()
+                        ]
+                        payload = {
+                            "ok": True,
+                            "source": "fandango_theater_calendar",
+                            "watchlist_filtered": False,
+                            "theater_slug": theater_info.slug,
+                            "theater_id": theater_info.theater_id,
+                            "theater_name": theater_info.name,
+                            "chain_code": theater_info.chain_code,
+                            "format": format_tag.value,
+                            "format_slug": format_slug,
+                            "format_label": format_label,
+                            "generated_at": datetime.now(UTC).isoformat(),
+                            "date_count": len(dates),
+                            "showtime_count": sum(len(day["showtimes"]) for day in dates),
+                            "dates": dates,
+                        }
+                    except Exception as exc:  # noqa: BLE001 - route should remain JSON/HTML-shaped
+                        logger.warning(
+                            "Fandango %s/%s lookup failed",
+                            theater_slug,
+                            format_slug,
+                            exc_info=True,
+                        )
+                        payload = {
+                            "ok": False,
+                            "error": f"Fandango lookup failed: {type(exc).__name__}",
+                            "source": "fandango_theater_calendar",
+                            "watchlist_filtered": False,
+                            "theater_slug": theater_slug,
+                            "theater_id": theater_id,
+                            "theater_name": None,
+                            "chain_code": dd.cfg.direct_api.chain_code,
+                            "format": format_tag.value,
+                            "format_slug": format_slug,
+                            "format_label": format_label,
+                            "generated_at": datetime.now(UTC).isoformat(),
+                            "date_count": 0,
+                            "showtime_count": 0,
+                            "dates": [],
+                        }
+                    if is_api:
+                        status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.BAD_GATEWAY
+                        _send_json(self, payload, status=status, send_body=send_body)
+                        return
+                    from .dashboard import render_citywalk_format_html
+
+                    html = render_citywalk_format_html(payload)
+                    status = HTTPStatus.OK if payload.get("ok") else HTTPStatus.BAD_GATEWAY
+                    _send_bytes(
+                        self,
+                        html.encode("utf-8"),
+                        "text/html; charset=utf-8",
+                        cache_control="no-store",
+                        send_body=send_body,
+                        status=status,
+                    )
+                    return
                 if path_only == "/api/release_intel":
                     from .release_intel import get_release_intel_for_dashboard
 
@@ -452,6 +689,60 @@ def _make_handler_cls(
         def do_HEAD(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
             """RFC 7231: same headers as GET for read-only routes; no payload."""
             self._handle_readonly_request(send_body=False)
+
+        def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+            parsed = urlparse(self.path)
+            path_only = unquote(parsed.path)
+            if dashboard_data is None or path_only != "/api/movies/add":
+                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or "0")
+            except ValueError:
+                n = 0
+            if n <= 0 or n > 100_000:
+                _send_json(
+                    self,
+                    {"ok": False, "error": "invalid JSON body length"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            try:
+                payload = json.loads(self.rfile.read(n).decode("utf-8"))
+            except Exception:
+                _send_json(
+                    self,
+                    {"ok": False, "error": "invalid JSON body"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            if not isinstance(payload, dict):
+                _send_json(
+                    self,
+                    {"ok": False, "error": "JSON body must be an object"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            from .dashboard import add_movie_from_fandango_search_result
+
+            try:
+                result = add_movie_from_fandango_search_result(dashboard_data, payload)
+            except ValueError as exc:
+                _send_json(
+                    self,
+                    {"ok": False, "error": str(exc)},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 - keep dashboard POST JSON-shaped
+                logger.warning("failed to add movie from dashboard", exc_info=True)
+                _send_json(
+                    self,
+                    {"ok": False, "error": f"failed to update config: {type(exc).__name__}"},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            _send_json(self, {"ok": True, **result})
 
     return Handler
 

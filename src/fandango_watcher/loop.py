@@ -654,6 +654,7 @@ def run_watch(
     social_x_poll_fn: Callable[..., object] | None = None,
     open_browser: bool = True,
     dashboard_refresh_seconds: int = 10,
+    config_path: Path | None = None,
 ) -> int:
     """Run the watch loop until ``stop_event`` is set or ``max_ticks`` is hit.
 
@@ -696,6 +697,7 @@ def run_watch(
             dashboard_data = DashboardData(
                 cfg=cfg,
                 paths=dash_paths,
+                config_path=config_path,
                 heartbeat=hb,
                 settings=settings,
                 refresh_seconds=max(0, int(dashboard_refresh_seconds)),

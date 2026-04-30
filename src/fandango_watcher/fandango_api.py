@@ -8,10 +8,13 @@ the watcher and tests can reason about.
 
 from __future__ import annotations
 
+import html as html_lib
+import re
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import date
+from html.parser import HTMLParser
 from typing import Any, Literal
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -76,6 +79,119 @@ class FandangoShowtimeRecord(BaseModel):
         return _dedupe_preserve_order(values)
 
 
+class FandangoMovieSearchResult(BaseModel):
+    """Normalized movie result from Fandango's public search page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    movie_id: int | None = None
+    title: str
+    url: str
+    poster_url: str | None = None
+    release_date_text: str | None = None
+    rating: str | None = None
+    genres: str | None = None
+
+
+class FandangoTheaterInfo(BaseModel):
+    """Minimal theater metadata scraped from a Fandango theater page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str
+    theater_id: str
+    chain_code: str
+    name: str | None = None
+
+
+class _FandangoSearchParser(HTMLParser):
+    def __init__(self, *, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.results: list[dict[str, Any]] = []
+        self._in_panel = False
+        self._panel_depth = 0
+        self._current: dict[str, Any] = {}
+        self._capture: str | None = None
+        self._capture_chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs_raw: list[tuple[str, str | None]]) -> None:
+        attrs = {k: v or "" for k, v in attrs_raw}
+        classes = set((attrs.get("class") or "").split())
+        if tag == "li" and "search__panel" in classes:
+            self._in_panel = True
+            self._panel_depth = 1
+            self._current = {"info": []}
+            return
+        if not self._in_panel:
+            return
+        self._panel_depth += 1
+        if tag == "a" and "search__movie-title" in classes:
+            href = attrs.get("href")
+            if href:
+                self._current["url"] = urljoin(self.base_url, href)
+            self._start_capture("title")
+            return
+        if tag == "img" and "search__movie-img" in classes:
+            src = attrs.get("src")
+            alt = attrs.get("alt")
+            if src:
+                self._current["poster_url"] = urljoin(self.base_url, src)
+            if alt and not self._current.get("title"):
+                self._current["title"] = alt.strip()
+            return
+        if tag == "p" and "search__movie-info" in classes:
+            self._start_capture("info")
+
+    def handle_data(self, data: str) -> None:
+        if self._capture is not None:
+            self._capture_chunks.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._in_panel:
+            return
+        if self._capture is not None and tag in {"a", "p"}:
+            value = " ".join("".join(self._capture_chunks).split())
+            if value:
+                if self._capture == "info":
+                    self._current.setdefault("info", []).append(value)
+                else:
+                    self._current[self._capture] = value
+            self._capture = None
+            self._capture_chunks = []
+        self._panel_depth -= 1
+        if tag == "li" and self._panel_depth <= 0:
+            self._finish_panel()
+
+    def _start_capture(self, key: str) -> None:
+        self._capture = key
+        self._capture_chunks = []
+
+    def _finish_panel(self) -> None:
+        info = [str(x) for x in self._current.pop("info", []) if str(x).strip()]
+        url = str(self._current.get("url") or "")
+        title = str(self._current.get("title") or "").strip()
+        if url and title and "/movie-overview" in url:
+            movie_id = None
+            match = re.search(r"-(\d+)/movie-overview(?:$|[/?#])", url)
+            if match:
+                movie_id = int(match.group(1))
+            self.results.append(
+                {
+                    "movie_id": movie_id,
+                    "title": html_lib.unescape(title),
+                    "url": url,
+                    "poster_url": self._current.get("poster_url"),
+                    "release_date_text": info[0] if info else None,
+                    "rating": info[1] if len(info) > 1 else None,
+                    "genres": info[2] if len(info) > 2 else None,
+                }
+            )
+        self._in_panel = False
+        self._panel_depth = 0
+        self._current = {}
+
+
 def _dedupe_preserve_order(values: Iterable[Any]) -> list[Any]:
     seen: set[Any] = set()
     out: list[Any] = []
@@ -135,6 +251,77 @@ def build_nearby_theaters_url(
 
     query = urlencode({"limit": limit, "zipCode": zip_code})
     return f"{_base_url(base_url)}/napi/nearbyTheaters?{query}"
+
+
+def build_search_url(
+    query: str,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+) -> str:
+    """Build Fandango's public search URL."""
+
+    return f"{_base_url(base_url)}/search?{urlencode({'q': query})}"
+
+
+def build_theater_page_url(
+    theater_slug: str,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+) -> str:
+    """Build a Fandango theater-page URL from its public slug."""
+
+    return f"{_base_url(base_url)}/{theater_slug.strip('/')}/theater-page"
+
+
+def parse_search_results(
+    html: str,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+) -> list[FandangoMovieSearchResult]:
+    """Parse movie results from Fandango's search response."""
+
+    parser = _FandangoSearchParser(base_url=_base_url(base_url) + "/")
+    parser.feed(html)
+    return [FandangoMovieSearchResult.model_validate(item) for item in parser.results]
+
+
+def theater_id_from_slug(theater_slug: str) -> str | None:
+    """Return the Fandango theater id suffix from a public theater slug."""
+
+    slug = theater_slug.strip("/").split("/", 1)[0]
+    match = re.search(r"-([a-z0-9]+)$", slug, re.I)
+    return match.group(1).upper() if match else None
+
+
+def parse_theater_info(
+    html: str,
+    *,
+    theater_slug: str,
+    default_chain_code: str = DEFAULT_CHAIN_CODE,
+) -> FandangoTheaterInfo:
+    """Extract theater id/name/chain metadata embedded in a theater page."""
+
+    theater_id = theater_id_from_slug(theater_slug)
+    if theater_id is None:
+        raise FandangoApiError(f"could not infer theater id from slug: {theater_slug!r}")
+    chain_code = default_chain_code
+    name: str | None = None
+    chain_match = re.search(r'"chainCode"\s*:\s*"([^"]+)"', html)
+    if chain_match:
+        chain_code = chain_match.group(1)
+    details_match = re.search(
+        r'"details"\s*:\s*\{[^{}]*"id"\s*:\s*"(?P<id>[^"]+)"[^{}]*"name"\s*:\s*"(?P<name>[^"]+)"',
+        html,
+    )
+    if details_match:
+        theater_id = details_match.group("id").upper()
+        name = html_lib.unescape(details_match.group("name"))
+    return FandangoTheaterInfo(
+        slug=theater_slug.strip("/"),
+        theater_id=theater_id,
+        chain_code=chain_code,
+        name=name,
+    )
 
 
 def _require_object(value: Any, path: str) -> JsonObject:
@@ -328,6 +515,20 @@ def matching_records(
     ]
 
 
+def format_records_by_date(
+    records_by_date: Mapping[str, Iterable[FandangoShowtimeRecord]],
+    wanted_formats: set[FormatTag | str],
+) -> dict[str, list[FandangoShowtimeRecord]]:
+    """Return only dates with records matching the requested formats."""
+
+    out: dict[str, list[FandangoShowtimeRecord]] = {}
+    for showtime_date, records in records_by_date.items():
+        matches = matching_records(records, wanted_formats)
+        if matches:
+            out[showtime_date] = matches
+    return out
+
+
 class FandangoApiClient:
     """Small synchronous client for the observed private Fandango JSON endpoints."""
 
@@ -367,13 +568,19 @@ class FandangoApiClient:
             raise FandangoApiError(f"non-JSON Fandango response from {url}") from exc
         return _require_object(data, "$")
 
-    def calendar_url(self) -> str:
-        return build_calendar_url(self.theater_id, base_url=self.base_url)
+    def calendar_url(self, theater_id: str | None = None) -> str:
+        return build_calendar_url(theater_id or self.theater_id, base_url=self.base_url)
 
-    def showtimes_url(self, start_date: str | date) -> str:
+    def showtimes_url(
+        self,
+        start_date: str | date,
+        *,
+        theater_id: str | None = None,
+        chain_code: str | None = None,
+    ) -> str:
         return build_showtimes_url(
-            self.theater_id,
-            chain_code=self.chain_code,
+            theater_id or self.theater_id,
+            chain_code=chain_code or self.chain_code,
             start_date=start_date,
             base_url=self.base_url,
         )
@@ -381,17 +588,69 @@ class FandangoApiClient:
     def nearby_theaters_url(self, zip_code: str = DEFAULT_ZIP_CODE, *, limit: int = 7) -> str:
         return build_nearby_theaters_url(zip_code, limit=limit, base_url=self.base_url)
 
-    def calendar_dates(self) -> list[str]:
-        return parse_calendar_dates(self.get_json(self.calendar_url()))
+    def search_url(self, query: str) -> str:
+        return build_search_url(query, base_url=self.base_url)
 
-    def showtime_records(self, start_date: str | date) -> list[FandangoShowtimeRecord]:
-        payload = self.get_json(self.showtimes_url(start_date))
+    def theater_page_url(self, theater_slug: str) -> str:
+        return build_theater_page_url(theater_slug, base_url=self.base_url)
+
+    def calendar_dates(self, theater_id: str | None = None) -> list[str]:
+        return parse_calendar_dates(self.get_json(self.calendar_url(theater_id)))
+
+    def showtime_records(
+        self,
+        start_date: str | date,
+        *,
+        theater_id: str | None = None,
+        chain_code: str | None = None,
+    ) -> list[FandangoShowtimeRecord]:
+        effective_theater_id = theater_id or self.theater_id
+        effective_chain_code = chain_code or self.chain_code
+        payload = self.get_json(
+            self.showtimes_url(
+                start_date,
+                theater_id=effective_theater_id,
+                chain_code=effective_chain_code,
+            )
+        )
         return parse_showtime_records(
             payload,
-            theater_id=self.theater_id,
-            chain_code=self.chain_code,
+            theater_id=effective_theater_id,
+            chain_code=effective_chain_code,
             requested_date=start_date,
         )
+
+    def search_movies(self, query: str) -> list[FandangoMovieSearchResult]:
+        response = self._client.get(self.search_url(query), headers=self.headers)
+        response.raise_for_status()
+        return parse_search_results(response.text, base_url=self.base_url)
+
+    def theater_info(self, theater_slug: str) -> FandangoTheaterInfo:
+        response = self._client.get(self.theater_page_url(theater_slug), headers=self.headers)
+        response.raise_for_status()
+        return parse_theater_info(
+            response.text,
+            theater_slug=theater_slug,
+            default_chain_code=self.chain_code,
+        )
+
+    def future_format_records(
+        self,
+        wanted_formats: set[FormatTag | str],
+        *,
+        theater_id: str | None = None,
+        chain_code: str | None = None,
+    ) -> dict[str, list[FandangoShowtimeRecord]]:
+        """Fetch all theater-calendar dates and keep only matching format records."""
+
+        records_by_date: dict[str, list[FandangoShowtimeRecord]] = {}
+        for showtime_date in self.calendar_dates(theater_id):
+            records_by_date[showtime_date] = self.showtime_records(
+                showtime_date,
+                theater_id=theater_id,
+                chain_code=chain_code,
+            )
+        return format_records_by_date(records_by_date, wanted_formats)
 
 
 def drift_check(

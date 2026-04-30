@@ -353,6 +353,7 @@ def _run_watch(args: argparse.Namespace) -> int:
         max_ticks=args.max_ticks,
         open_browser=not args.no_open,
         dashboard_refresh_seconds=args.dashboard_refresh_seconds,
+        config_path=config_path,
     )
 
 
@@ -376,6 +377,7 @@ def _run_dashboard(args: argparse.Namespace) -> int:
     dd = DashboardData(
         cfg=cfg,
         paths=paths,
+        config_path=config_path,
         heartbeat=hb,
         settings=settings,
         refresh_seconds=max(0, int(args.refresh_seconds)),

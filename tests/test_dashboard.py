@@ -24,9 +24,11 @@ from fandango_watcher.dashboard import (
     DashboardPaths,
     _latest_artifact_for_target,
     _relative_ago,
+    add_movie_from_fandango_search_result,
     artifact_url,
     collect_dashboard_state,
     compute_dashboard_revision,
+    render_citywalk_format_html,
     render_dashboard_not_found_html,
     render_index_html,
 )
@@ -127,6 +129,75 @@ def test_collect_dashboard_state_roundtrip(tmp_path: Path) -> None:
     assert snap["runtime"]["host"] == "127.0.0.1"
     assert snap["runtime"]["dashboard_port"] == 9999
     assert snap["runtime"]["purchase_enabled"] is True
+
+
+def test_add_movie_from_fandango_search_result_updates_config_preserving_sections(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+targets:
+  - name: alpha
+    url: https://example.com/a
+
+theater:
+  display_name: CW
+  fandango_theater_anchor: AMC Universal CityWalk
+formats:
+  require: []
+  include: []
+poll:
+  min_seconds: 30
+  max_seconds: 35
+notify:
+  channels: []
+  on_events: []
+screenshots:
+  dir: artifacts/screenshots
+state:
+  dir: state
+purchase:
+  enabled: true
+  mode: notify_only
+movies: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    from fandango_watcher.config import load_config
+
+    cfg = load_config(config_path)
+    dd = DashboardData(
+        cfg=cfg,
+        paths=DashboardPaths.from_config(cfg),
+        config_path=config_path,
+    )
+
+    result = add_movie_from_fandango_search_result(
+        dd,
+        {
+            "movie_id": 244800,
+            "title": "Dune: Part Three (2026)",
+            "url": "https://www.fandango.com/dune-part-three-2026-244800/movie-overview",
+            "poster_url": "https://images.fandango.com/poster.jpg",
+            "release_date_text": "Friday, Dec 18, 2026",
+            "include_imax_70mm": True,
+        },
+    )
+
+    assert result["movie"]["key"] == "dune_part_three"
+    assert result["movie"]["fandango_targets"] == [
+        "dune-part-three-overview",
+        "dune-part-three-imax-70mm",
+    ]
+    assert [t.name for t in dd.cfg.targets] == [
+        "alpha",
+        "dune-part-three-overview",
+        "dune-part-three-imax-70mm",
+    ]
+    added = dd.cfg.movies[-1]
+    assert added.title == "Dune: Part Three (2026)"
+    assert added.fandango_movie_id == 244800
+    assert added.release_date == "Friday, Dec 18, 2026"
+    assert "targets:" in config_path.read_text(encoding="utf-8")
 
 
 def test_render_index_html_escapes_movie_title() -> None:
@@ -308,6 +379,88 @@ def test_render_index_html_operator_controls_and_persistence_script() -> None:
     assert "&lt;bad&gt;" in html_out
 
 
+def test_render_citywalk_format_html_uses_dynamic_format_label_and_links() -> None:
+    html_out = render_citywalk_format_html(
+        {
+            "ok": True,
+            "watchlist_filtered": False,
+            "theater_slug": "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "theater_id": "AAAWX",
+            "theater_name": "Universal Cinema AMC at CityWalk Hollywood",
+            "format": "IMAX",
+            "format_slug": "imax",
+            "format_label": "IMAX",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "dates": [
+                {
+                    "date": "2026-07-17",
+                    "showtimes": [
+                        {
+                            "movie_title": "Alpha Movie",
+                            "screen_reader_time": "7:00 PM",
+                            "format_names": ["IMAX"],
+                            "ticket_url": "https://tickets.fandango.com/x",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert "<title>Universal Cinema AMC at CityWalk Hollywood IMAX</title>" in html_out
+    assert "Universal Cinema AMC at CityWalk Hollywood IMAX" in html_out
+    assert "/api/universal-cinema-amc-at-citywalk-hollywood-aaawx/imax" in html_out
+    assert "/universal-cinema-amc-at-citywalk-hollywood-aaawx/imax-70mm" in html_out
+    assert "not filtered by your watchlist" in html_out
+    assert "Alpha Movie" in html_out
+
+
+def test_render_index_html_color_codes_release_schemas_with_operator_hints() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "not-ready",
+                "url": "https://example.com/a",
+                "state": {"current_state": "watching", "last_release_schema": "not_on_sale"},
+            },
+            {
+                "name": "partial",
+                "url": "https://example.com/b",
+                "state": {"current_state": "watching", "last_release_schema": "partial_release"},
+            },
+            {
+                "name": "full",
+                "url": "https://example.com/c",
+                "state": {"current_state": "watching", "last_release_schema": "full_release"},
+            },
+            {
+                "name": "unknown",
+                "url": "https://example.com/d",
+                "state": {"current_state": "watching"},
+            },
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "disabled", "reason": "test"},
+        "movies": [],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+
+    html_out = render_index_html(snap, refresh_seconds=0)
+
+    assert "schema-not-on-sale" in html_out
+    assert "Schema A - not on sale" in html_out
+    assert "Baseline watch state" in html_out
+    assert "schema-partial-release" in html_out
+    assert "Schema B - partial release" in html_out
+    assert "Early ticket signal" in html_out
+    assert "schema-full-release" in html_out
+    assert "Schema C - full release" in html_out
+    assert "Broad ticket signal" in html_out
+    assert "schema-unknown" in html_out
+    assert "No successful crawl schema yet" in html_out
+
+
 def test_render_index_html_simple_watchlist_uses_movie_poster_and_hides_advanced() -> None:
     snap = {
         "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
@@ -363,6 +516,40 @@ def test_render_index_html_simple_watchlist_uses_movie_poster_and_hides_advanced
     assert "Advanced details" in html_out
     assert re.search(r'id="advanced"[^>]*>', html_out)
     assert re.search(r'id="advanced"[^>]*open', html_out) is None
+
+
+def test_render_index_html_uses_fandango_release_date_when_movie_date_missing() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha",
+                "url": "https://example.com/t",
+                "release_date_text": "Opening Jul 17",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_date_text": "Opening Jul 17",
+                    "total_ticks": 2,
+                },
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "disabled", "reason": "test"},
+        "movies": [
+            {
+                "key": "alpha-movie",
+                "title": "Alpha Movie",
+                "fandango_targets": ["alpha"],
+                "x_handles": [],
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+
+    html_out = render_index_html(snap, refresh_seconds=0)
+
+    assert "Opening Jul 17" in html_out
+    assert "Release date not set" not in html_out
 
 
 def test_target_card_stale_next_action_and_filter_bucket() -> None:

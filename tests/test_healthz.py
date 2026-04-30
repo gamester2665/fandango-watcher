@@ -36,8 +36,10 @@ from fandango_watcher.dashboard import (
 from fandango_watcher.healthz import (
     HealthzContext,
     Heartbeat,
+    _citywalk_format_route,
     start_healthz_server,
 )
+from fandango_watcher.models import FormatTag
 
 
 @contextlib.contextmanager
@@ -235,6 +237,79 @@ class TestHealthz:
 
 
 class TestDashboardRoutes:
+    def test_citywalk_format_route_resolves_dynamic_format_slugs(self) -> None:
+        assert _citywalk_format_route("/citywalk/imax") == (
+            False,
+            "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "AAAWX",
+            "imax",
+            FormatTag.IMAX,
+            "IMAX",
+        )
+        assert _citywalk_format_route(
+            "/universal-cinema-amc-at-citywalk-hollywood-aaawx/imax"
+        ) == (
+            False,
+            "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "AAAWX",
+            "imax",
+            FormatTag.IMAX,
+            "IMAX",
+        )
+        assert _citywalk_format_route("/citywalk/imax-70mm") == (
+            False,
+            "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "AAAWX",
+            "imax-70mm",
+            FormatTag.IMAX_70MM,
+            "IMAX 70MM",
+        )
+        assert _citywalk_format_route(
+            "/universal-cinema-amc-at-citywalk-hollywood-aaawx/imax-70mm"
+        ) == (
+            False,
+            "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "AAAWX",
+            "imax-70mm",
+            FormatTag.IMAX_70MM,
+            "IMAX 70MM",
+        )
+        assert _citywalk_format_route("/api/citywalk/imax-70mm") == (
+            True,
+            "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "AAAWX",
+            "imax-70mm",
+            FormatTag.IMAX_70MM,
+            "IMAX 70MM",
+        )
+        assert _citywalk_format_route(
+            "/api/universal-cinema-amc-at-citywalk-hollywood-aaawx/imax-70mm"
+        ) == (
+            True,
+            "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "AAAWX",
+            "imax-70mm",
+            FormatTag.IMAX_70MM,
+            "IMAX 70MM",
+        )
+        assert _citywalk_format_route("/amc-burbank-16-aaqzz/dolby") == (
+            False,
+            "amc-burbank-16-aaqzz",
+            "AAQZZ",
+            "dolby",
+            FormatTag.DOLBY,
+            "Dolby",
+        )
+        assert _citywalk_format_route("/citywalk/dolby") == (
+            False,
+            "universal-cinema-amc-at-citywalk-hollywood-aaawx",
+            "AAAWX",
+            "dolby",
+            FormatTag.DOLBY,
+            "Dolby",
+        )
+        assert _citywalk_format_route("/citywalk/unknown-format") is None
+
     def test_root_and_api_status_with_dashboard_data(self, tmp_path: Path) -> None:
         cfg = _dash_cfg(tmp_path)
         paths = DashboardPaths.from_config(cfg)

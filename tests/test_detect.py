@@ -150,6 +150,13 @@ class TestNotOnSaleClassification:
         )
         assert result.poster_url == "https://www.fandango.com/poster.jpg"
 
+    def test_release_date_text_is_passed_through(self) -> None:
+        result = classify(
+            _empty_snapshot(release_date_text="Opening Jul 17"),
+            citywalk_anchor=CITYWALK_ANCHOR,
+        )
+        assert result.release_date_text == "Opening Jul 17"
+
     def test_loading_state_shows_up_in_evidence(self) -> None:
         result = classify(
             _empty_snapshot(

@@ -5,18 +5,22 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from .config import Settings, WatcherConfig
+from .config import Settings, WatcherConfig, load_config
 from .release_intel import get_release_intel_for_dashboard
 from .social_x import load_social_x_state
 
 _PT = ZoneInfo("America/Los_Angeles")
+_CITYWALK_THEATER_SLUG = "universal-cinema-amc-at-citywalk-hollywood-aaawx"
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,8 @@ class DashboardData:
 
     cfg: WatcherConfig
     paths: DashboardPaths
+    config_path: Path | None = None
+    config_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # :class:`~fandango_watcher.healthz.Heartbeat` (avoid circular import).
     heartbeat: Any | None = None
     # Env for optional xAI (Grok) release-intel summaries on the dashboard.
@@ -232,6 +238,7 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
                 "url": t.url,
                 "state": st,
                 "poster_url": st.get("last_poster_url"),
+                "release_date_text": st.get("last_release_date_text"),
                 "direct_api": direct_api_state,
                 "latest_screenshot": str(shot) if shot else None,
                 "latest_screenshot_url": artifact_url(paths.artifacts_root, shot),
@@ -276,6 +283,7 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
         "dashboard": {
             "show_purchase_history": dash.show_purchase_history,
             "purchase_history_max_lines": dash.purchase_history_max_lines,
+            "config_path": str(data.config_path) if data.config_path else None,
         },
         "runtime": {
             "host": bind_host,
@@ -471,6 +479,191 @@ def _fmt_release_date(value: Any) -> str:
         return raw
 
 
+def _movie_key_from_title(title: str) -> str:
+    base = re.sub(r"\s*\(\d{4}\)\s*$", "", title).strip() or title
+    return _html_id_slug(base).lower().replace("-", "_")
+
+
+def _unique_name(base: str, existing: set[str], *, separator: str = "-") -> str:
+    candidate = base
+    n = 2
+    while candidate in existing:
+        candidate = f"{base}{separator}{n}"
+        n += 1
+    existing.add(candidate)
+    return candidate
+
+
+def _yaml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _insert_yaml_list_item(raw: str, section: str, item_lines: list[str]) -> str:
+    lines = raw.splitlines()
+    section_idx: int | None = None
+    for i, line in enumerate(lines):
+        if line.strip() == f"{section}:" and not line.startswith((" ", "\t")):
+            section_idx = i
+            break
+    block = item_lines
+    if section_idx is None:
+        prefix = [""] if lines and lines[-1].strip() else []
+        return "\n".join([*lines, *prefix, f"{section}:", *block]) + "\n"
+
+    insert_at = len(lines)
+    for i in range(section_idx + 1, len(lines)):
+        line = lines[i]
+        if line and not line.startswith((" ", "\t")) and re.match(r"^[A-Za-z_][\w-]*:", line):
+            insert_at = i
+            break
+    before = lines[:insert_at]
+    after = lines[insert_at:]
+    if before and before[-1].strip():
+        before.append("")
+    return "\n".join([*before, *block, *after]) + "\n"
+
+
+def _movie_id_from_url(url: str) -> int | None:
+    match = re.search(r"-(\d+)/movie-overview(?:$|[/?#])", url)
+    return int(match.group(1)) if match else None
+
+
+def add_movie_from_fandango_search_result(
+    data: DashboardData,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Append selected Fandango search result to config and refresh dashboard config."""
+
+    config_path = data.config_path
+    if config_path is None:
+        raise ValueError("dashboard was not started with a writable config path")
+    title = _first_nonempty_str(payload.get("title"))
+    url = _first_nonempty_str(payload.get("url"))
+    if not title or not url:
+        raise ValueError("title and url are required")
+    if not url.startswith("https://www.fandango.com/") or "/movie-overview" not in url:
+        raise ValueError("url must be a Fandango movie-overview URL")
+
+    overview_url = url.split("?", 1)[0]
+    movie_id = payload.get("movie_id")
+    if not isinstance(movie_id, int):
+        movie_id = _movie_id_from_url(overview_url)
+    include_imax_70mm = bool(payload.get("include_imax_70mm", True))
+
+    with data.config_lock:
+        raw = config_path.read_text(encoding="utf-8")
+        target_names = {t.name for t in data.cfg.targets}
+        movie_keys = {m.key for m in data.cfg.movies}
+        key = _unique_name(_movie_key_from_title(title), movie_keys, separator="_")
+        prefix = key.replace("_", "-")
+
+        new_targets: list[tuple[str, str]] = []
+        overview_name = _unique_name(f"{prefix}-overview", target_names)
+        new_targets.append((overview_name, overview_url))
+        if include_imax_70mm:
+            imax_name = _unique_name(f"{prefix}-imax-70mm", target_names)
+            new_targets.append((imax_name, f"{overview_url}?format={quote('IMAX 70MM')}"))
+
+        target_lines: list[str] = []
+        for name, target_url in new_targets:
+            target_lines.extend(
+                [
+                    f"  - name: {_yaml_string(name)}",
+                    f"    url: {_yaml_string(target_url)}",
+                ]
+            )
+
+        movie_lines = [
+            f"  - key: {_yaml_string(key)}",
+            f"    title: {_yaml_string(title)}",
+        ]
+        if movie_id is not None:
+            movie_lines.append(f"    fandango_movie_id: {movie_id}")
+        release_date_text = _first_nonempty_str(payload.get("release_date_text"))
+        if release_date_text:
+            movie_lines.append(f"    release_date: {_yaml_string(release_date_text)}")
+        poster_url = _first_nonempty_str(payload.get("poster_url"))
+        if poster_url:
+            movie_lines.append(f"    poster_url: {_yaml_string(poster_url)}")
+        movie_lines.append(
+            "    fandango_targets: ["
+            + ", ".join(_yaml_string(name) for name, _ in new_targets)
+            + "]"
+        )
+        if include_imax_70mm:
+            movie_lines.append("    preferred_formats: [IMAX_70MM, IMAX]")
+        else:
+            movie_lines.append("    preferred_formats: [IMAX]")
+        movie_lines.append("    x_handles: []")
+
+        updated = _insert_yaml_list_item(raw, "targets", target_lines)
+        updated = _insert_yaml_list_item(updated, "movies", movie_lines)
+        config_path.write_text(updated, encoding="utf-8")
+        try:
+            data.cfg = load_config(config_path)
+            data.paths = DashboardPaths.from_config(data.cfg)
+        except Exception:
+            config_path.write_text(raw, encoding="utf-8")
+            data.cfg = load_config(config_path)
+            data.paths = DashboardPaths.from_config(data.cfg)
+            raise
+
+    return {
+        "movie": {
+            "key": key,
+            "title": title,
+            "fandango_movie_id": movie_id,
+            "fandango_targets": [name for name, _ in new_targets],
+        },
+        "targets": [{"name": name, "url": target_url} for name, target_url in new_targets],
+        "config_path": str(config_path),
+        "restart_watch_required": True,
+    }
+
+
+def _schema_badge_parts(value: Any) -> tuple[str, str, str]:
+    schema = str(value or "").strip().lower()
+    if schema == "not_on_sale":
+        return (
+            "not-on-sale",
+            "Schema A - not on sale",
+            "Baseline watch state: Fandango has not exposed usable showtimes yet.",
+        )
+    if schema == "partial_release":
+        return (
+            "partial-release",
+            "Schema B - partial release",
+            "Early ticket signal: some showtimes are visible, so watch target formats and theaters closely.",
+        )
+    if schema == "full_release":
+        return (
+            "full-release",
+            "Schema C - full release",
+            "Broad ticket signal: verify the target format/theater before escalating purchase mode.",
+        )
+    return (
+        "unknown",
+        "Schema unknown",
+        "No successful crawl schema yet; check freshness, errors, and latest artifacts.",
+    )
+
+
+def _schema_badge_html(value: Any, *, with_hint: bool = False) -> str:
+    key, label, hint = _schema_badge_parts(value)
+    raw = str(value or "unknown").strip() or "unknown"
+    cls = html.escape(f"schema-badge schema-{key}", quote=True)
+    label_esc = html.escape(label)
+    hint_esc = html.escape(hint)
+    raw_esc = html.escape(raw)
+    hint_html = f'<span class="schema-hint">{hint_esc}</span>' if with_hint else ""
+    return (
+        f'<span class="{cls}" title="{hint_esc}" aria-label="{label_esc}: {hint_esc}">'
+        f'<span class="schema-label">{label_esc}</span>'
+        f'<code>{raw_esc}</code>'
+        f"</span>{hint_html}"
+    )
+
+
 def _poster_url_for_movie(
     movie: dict[str, Any],
     *,
@@ -491,6 +684,29 @@ def _poster_url_for_movie(
                 )
                 if poster:
                     return poster
+    return None
+
+
+def _release_date_for_movie(
+    movie: dict[str, Any],
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+) -> str | None:
+    configured = _first_nonempty_str(movie.get("release_date"))
+    if configured:
+        return configured
+    ft = movie.get("fandango_targets")
+    if isinstance(ft, list):
+        for target_name in ft:
+            target = target_by_name.get(str(target_name))
+            if target:
+                state = target.get("state") if isinstance(target.get("state"), dict) else {}
+                release_date = _first_nonempty_str(
+                    target.get("release_date_text"),
+                    state.get("last_release_date_text") if isinstance(state, dict) else None,
+                )
+                if release_date:
+                    return release_date
     return None
 
 
@@ -636,6 +852,178 @@ def _render_target_controls(target_count: int) -> str:
   <p class="target-filter-count" id="target-filter-count" aria-live="polite">{html.escape(str(target_count))} targets shown</p>
 </div>
 """
+
+
+def _render_movie_add_panel(config_path: str | None) -> str:
+    disabled = "" if config_path else " disabled"
+    disabled_hint = (
+        ""
+        if config_path
+        else '<p class="movie-add-status">Movie add is unavailable because the dashboard has no writable config path.</p>'
+    )
+    return f"""
+<section class="movie-add-panel" aria-label="Add movie from Fandango">
+  <div>
+    <h3 class="section-label" style="margin:0">Add movie</h3>
+    <p class="panel-tagline">Search Fandango, then add the selected movie and overview/IMAX targets to config. <a href="/{_CITYWALK_THEATER_SLUG}/imax-70mm">View future CityWalk IMAX 70MM</a> or <a href="/{_CITYWALK_THEATER_SLUG}/imax">IMAX</a>.</p>
+  </div>
+  <form class="movie-add-form" id="movie-add-form">
+    <input type="search" id="movie-add-query" placeholder="Search Fandango movies..." autocomplete="off"{disabled} />
+    <label><input type="checkbox" id="movie-add-imax" checked{disabled} /> add IMAX 70MM target</label>
+    <button type="submit" class="target-filter-btn"{disabled}>Search</button>
+  </form>
+  <div class="movie-add-results" id="movie-add-results"></div>
+  <p class="movie-add-status" id="movie-add-status">{html.escape('Config: ' + config_path) if config_path else ''}</p>
+  {disabled_hint}
+</section>
+"""
+
+
+def render_citywalk_format_html(payload: dict[str, Any]) -> str:
+    css = dashboard_css()
+    ok = bool(payload.get("ok", True))
+    error = _first_nonempty_str(payload.get("error"))
+    generated = html.escape(str(payload.get("generated_at") or "—"))
+    theater = html.escape(str(payload.get("theater_id") or "AAAWX"))
+    theater_name_raw = _first_nonempty_str(payload.get("theater_name")) or "Fandango Theater"
+    theater_name = html.escape(theater_name_raw)
+    theater_slug = html.escape(str(payload.get("theater_slug") or _CITYWALK_THEATER_SLUG), quote=True)
+    format_label_raw = _first_nonempty_str(payload.get("format_label"), payload.get("format")) or "Format"
+    format_label = html.escape(format_label_raw)
+    format_slug = html.escape(str(payload.get("format_slug") or "format"), quote=True)
+    source_note = (
+        "All movies returned by Fandango's theater calendar; not filtered by your watchlist."
+        if payload.get("watchlist_filtered") is False
+        else "Fandango theater calendar results."
+    )
+    dates = payload.get("dates") if isinstance(payload.get("dates"), list) else []
+    if error:
+        body = f'<p class="hint panel-warn">{html.escape(error)}</p>'
+    elif not dates:
+        body = f'<p class="hint">No future CityWalk {format_label} showtimes are visible in Fandango calendar data right now.</p>'
+    else:
+        sections: list[str] = []
+        for day in dates:
+            if not isinstance(day, dict):
+                continue
+            date_text = str(day.get("date") or "Date")
+            rows: list[str] = []
+            for rec in day.get("showtimes") or []:
+                if not isinstance(rec, dict):
+                    continue
+                movie = html.escape(str(rec.get("movie_title") or "Unknown movie"))
+                fmt = html.escape(", ".join(str(x) for x in rec.get("format_names") or []))
+                time = html.escape(str(rec.get("screen_reader_time") or rec.get("display_time") or "—"))
+                ticket_url = _first_nonempty_str(rec.get("ticket_url"))
+                buy = (
+                    f'<a href="{html.escape(ticket_url, quote=True)}" target="_blank" rel="noopener">Buy/Open</a>'
+                    if ticket_url
+                    else "—"
+                )
+                rows.append(
+                    '<tr data-imax-row data-search="'
+                    + html.escape(
+                        " ".join(
+                            str(x)
+                            for x in (
+                                date_text,
+                                rec.get("movie_title") or "",
+                                rec.get("screen_reader_time") or rec.get("display_time") or "",
+                                " ".join(str(x) for x in rec.get("format_names") or []),
+                            )
+                        ),
+                        quote=True,
+                    )
+                    + '">'
+                    f"<td><strong>{movie}</strong></td>"
+                    f"<td>{time}</td>"
+                    f"<td><code>{fmt}</code></td>"
+                    f"<td>{buy}</td>"
+                    "</tr>"
+                )
+            table = render_data_table(
+                thead_row="<th>Movie</th><th>Time</th><th>Format</th><th>Fandango</th>",
+                tbody_rows_html="".join(rows),
+                table_classes=("data-table",),
+                caption=f"CityWalk {format_label_raw} showtimes for {day.get('date')}",
+            )
+            sections.append(
+                f'<section class="panel" data-imax-day data-date="{html.escape(date_text, quote=True)}">'
+                f'<h2 class="section-label">{html.escape(date_text)}</h2>'
+                f"{table}</section>"
+            )
+        body = "".join(sections)
+    status = "Live Fandango query" if ok else "Fandango query failed"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{theater_name} {format_label}</title>
+  <style>{css}</style>
+</head>
+<body>
+  <header class="dash-header">
+    <p class="eyebrow">Fandango watcher</p>
+    <h1 class="dash-title">{theater_name} {format_label}</h1>
+    <p class="dash-subtitle">{html.escape(status)} · theater <code>{theater}</code> · generated {generated}</p>
+    <p class="dash-subtitle">{html.escape(source_note)}</p>
+    <p class="refresh-hint"><a href="/">Back to dashboard</a> · <a href="/api/{theater_slug}/{format_slug}">JSON</a> · <a href="/{theater_slug}/imax-70mm">IMAX 70MM</a> · <a href="/{theater_slug}/imax">IMAX</a></p>
+  </header>
+  <main class="dash" id="main">
+    <section class="movie-add-panel" aria-label="Filter CityWalk {format_label} results">
+      <div>
+        <h2 class="section-label" style="margin:0">Filter results</h2>
+        <p class="panel-tagline">Type a movie, date, or showtime. All future Fandango results remain loaded.</p>
+      </div>
+      <form class="movie-add-form" id="imax-filter-form">
+        <input type="search" id="imax-filter-query" placeholder="Filter by movie, date, or time..." autocomplete="off" />
+        <button type="button" class="target-filter-btn" id="imax-filter-clear">Clear</button>
+      </form>
+      <p class="movie-add-status" id="imax-filter-count" aria-live="polite"></p>
+    </section>
+    {body}
+  </main>
+  <script>
+(function () {{
+  var input = document.getElementById("imax-filter-query");
+  var clear = document.getElementById("imax-filter-clear");
+  var count = document.getElementById("imax-filter-count");
+  var rows = Array.prototype.slice.call(document.querySelectorAll("[data-imax-row]"));
+  var days = Array.prototype.slice.call(document.querySelectorAll("[data-imax-day]"));
+  function apply() {{
+    var q = (input && input.value || "").toLowerCase().trim();
+    var shown = 0;
+    rows.forEach(function (row) {{
+      var text = (row.getAttribute("data-search") || "").toLowerCase();
+      var visible = !q || text.indexOf(q) !== -1;
+      row.classList.toggle("is-hidden", !visible);
+      if (visible) shown += 1;
+    }});
+    days.forEach(function (day) {{
+      var visibleRows = day.querySelectorAll("[data-imax-row]:not(.is-hidden)").length;
+      day.classList.toggle("is-hidden", visibleRows === 0);
+    }});
+    if (count) count.textContent = shown + " of " + rows.length + " showtimes shown";
+  }}
+  if (input) input.addEventListener("input", apply);
+  if (clear) clear.addEventListener("click", function () {{
+    if (input) input.value = "";
+    apply();
+    if (input) input.focus();
+  }});
+  apply();
+}})();
+  </script>
+</body>
+</html>
+"""
+
+
+def render_citywalk_imax70mm_html(payload: dict[str, Any]) -> str:
+    """Backward-compatible wrapper for the original fixed-format route."""
+
+    return render_citywalk_format_html(payload)
 
 
 def _render_operator_status_strip(
@@ -816,6 +1204,93 @@ def _dashboard_ui_script() -> str:
     });
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape" && !viewer.hidden) closeViewer();
+    });
+  }
+  var addForm = document.getElementById("movie-add-form");
+  var addQuery = document.getElementById("movie-add-query");
+  var addImax = document.getElementById("movie-add-imax");
+  var addResults = document.getElementById("movie-add-results");
+  var addStatus = document.getElementById("movie-add-status");
+  function setAddStatus(text) {
+    if (addStatus) addStatus.textContent = text || "";
+  }
+  function renderAddResults(results) {
+    if (!addResults) return;
+    addResults.innerHTML = "";
+    if (!results.length) {
+      setAddStatus("No Fandango movie results found.");
+      return;
+    }
+    results.slice(0, 8).forEach(function (movie) {
+      var row = document.createElement("article");
+      row.className = "movie-add-result";
+      var img = document.createElement("img");
+      img.alt = movie.title || "Fandango movie poster";
+      if (movie.poster_url) img.src = movie.poster_url;
+      var body = document.createElement("div");
+      var title = document.createElement("p");
+      title.className = "movie-add-title";
+      title.textContent = movie.title || "Untitled movie";
+      var meta = document.createElement("p");
+      meta.className = "movie-add-meta";
+      meta.textContent = [movie.release_date_text, movie.rating, movie.genres].filter(Boolean).join(" · ");
+      var action = document.createElement("button");
+      action.type = "button";
+      action.className = "target-filter-btn";
+      action.textContent = "Add";
+      action.addEventListener("click", function () {
+        action.disabled = true;
+        setAddStatus("Adding " + (movie.title || "movie") + "...");
+        fetch("/api/movies/add", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(Object.assign({}, movie, {
+            include_imax_70mm: !!(addImax && addImax.checked)
+          }))
+        }).then(function (resp) {
+          return resp.json().then(function (data) {
+            if (!resp.ok || data.ok === false) throw new Error(data.error || "Add failed");
+            return data;
+          });
+        }).then(function (data) {
+          var names = (data.targets || []).map(function (t) { return t.name; }).join(", ");
+          setAddStatus("Added " + data.movie.title + " (" + names + "). Restart watch/dashboard for the poll loop to use new targets.");
+          setTimeout(function () { window.location.reload(); }, 1200);
+        }).catch(function (err) {
+          action.disabled = false;
+          setAddStatus(err && err.message ? err.message : "Add failed");
+        });
+      });
+      body.appendChild(title);
+      body.appendChild(meta);
+      row.appendChild(img);
+      row.appendChild(body);
+      row.appendChild(action);
+      addResults.appendChild(row);
+    });
+    setAddStatus(results.length + " result(s). Choose the movie to add.");
+  }
+  if (addForm && addQuery) {
+    addForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var q = (addQuery.value || "").trim();
+      if (!q) {
+        setAddStatus("Enter a movie title first.");
+        return;
+      }
+      setAddStatus("Searching Fandango...");
+      if (addResults) addResults.innerHTML = "";
+      fetch("/api/fandango/search?q=" + encodeURIComponent(q))
+        .then(function (resp) {
+          return resp.json().then(function (data) {
+            if (!resp.ok || data.ok === false) throw new Error(data.error || "Search failed");
+            return data;
+          });
+        })
+        .then(function (data) { renderAddResults(data.results || []); })
+        .catch(function (err) {
+          setAddStatus(err && err.message ? err.message : "Search failed");
+        });
     });
   }
   apply();
@@ -1105,6 +1580,60 @@ def dashboard_css() -> str:
     .pill-ok { background: rgba(52, 199, 89, 0.14); color: var(--ok); border-color: transparent; }
     .pill-warn { background: rgba(255, 159, 10, 0.16); color: var(--warn); border-color: transparent; }
     .pill-muted { background: var(--surface2); color: var(--muted); }
+    .schema-badge {
+      display: inline-flex;
+      max-width: 100%;
+      align-items: center;
+      gap: 0.38rem;
+      padding: 0.25rem 0.55rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface2);
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 750;
+      line-height: 1.2;
+      vertical-align: middle;
+    }
+    .schema-badge code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 0.68rem;
+      font-weight: 700;
+    }
+    .schema-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .schema-hint {
+      display: block;
+      margin-top: 0.32rem;
+      color: var(--muted);
+      font-size: 0.76rem;
+      line-height: 1.35;
+    }
+    .schema-not-on-sale {
+      background: rgba(142, 142, 147, 0.14);
+      color: var(--muted);
+      border-color: rgba(142, 142, 147, 0.2);
+    }
+    .schema-partial-release {
+      background: rgba(255, 159, 10, 0.18);
+      color: var(--warn);
+      border-color: rgba(255, 159, 10, 0.32);
+    }
+    .schema-full-release {
+      background: rgba(52, 199, 89, 0.16);
+      color: var(--ok);
+      border-color: rgba(52, 199, 89, 0.28);
+    }
+    .schema-unknown {
+      background: rgba(255, 69, 58, 0.12);
+      color: var(--bad);
+      border-color: rgba(255, 69, 58, 0.22);
+    }
     .card-kind { margin: 0 0 0.15rem 0; }
     .target-controls {
       display: grid;
@@ -1165,6 +1694,77 @@ def dashboard_css() -> str:
       margin: -0.25rem 0 0;
       color: var(--muted);
       font-size: 0.76rem;
+    }
+    .movie-add-panel {
+      display: grid;
+      gap: 0.65rem;
+      padding: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .movie-add-form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .movie-add-form input[type="search"] {
+      flex: 1 1 240px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.56rem 0.82rem;
+      background: var(--surface2);
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+    .movie-add-form input[type="search"]:focus {
+      border-color: rgba(0, 122, 255, 0.45);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    .movie-add-form label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 650;
+    }
+    .movie-add-results {
+      display: grid;
+      gap: 0.5rem;
+    }
+    .movie-add-result {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr) auto;
+      gap: 0.65rem;
+      align-items: center;
+      padding: 0.55rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface2);
+    }
+    .movie-add-result img {
+      width: 52px;
+      aspect-ratio: 2 / 3;
+      object-fit: cover;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .movie-add-title {
+      margin: 0;
+      color: var(--text);
+      font-weight: 750;
+    }
+    .movie-add-meta {
+      margin: 0.15rem 0 0;
+      color: var(--muted);
+      font-size: 0.77rem;
+    }
+    .movie-add-status {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
     }
     .is-hidden { display: none !important; }
     .artifact-actions {
@@ -2051,7 +2651,9 @@ def _render_target_card(
     st = t.get("state") or {}
     if not isinstance(st, dict):
         st = {}
-    schema = html.escape(str(st.get("last_release_schema") or "—"))
+    schema_raw = st.get("last_release_schema")
+    schema_badge = _schema_badge_html(schema_raw)
+    schema_fact = _schema_badge_html(schema_raw, with_hint=True)
     cur = html.escape(str(st.get("current_state") or "—"))
     tticks = html.escape(str(st.get("total_ticks", "—")))
     su_raw = st.get("last_success_at")
@@ -2224,7 +2826,7 @@ def _render_target_card(
 
     facts = render_fact_grid(
         [
-            (html.escape("Schema"), f"<code>{schema}</code>"),
+            (html.escape("Schema"), schema_fact),
             (html.escape("Last OK"), f"{su}{rel_html}"),
             (html.escape("Ticks"), tticks),
             (html.escape("Direct API"), f"<code>{html.escape(api_status)}</code>"),
@@ -2252,6 +2854,7 @@ def _render_target_card(
   <div class="card-topline">
     {route_pill}
     {state_pill}
+    {schema_badge}
     {stale_chip}
   </div>
   <h2>{name}</h2>
@@ -2311,7 +2914,7 @@ def _render_triage_priority_table(
         url = str(t.get("url") or "")
         url_e = html.escape(url, quote=True) if url else ""
         cur = html.escape(str(st.get("current_state") or "—"))
-        sch = html.escape(str(st.get("last_release_schema") or "—"))
+        schema_badge = _schema_badge_html(st.get("last_release_schema"))
         su_raw = st.get("last_success_at")
         su_rel = _relative_ago(
             str(su_raw) if su_raw is not None else None,
@@ -2336,7 +2939,7 @@ def _render_triage_priority_table(
             f"{html.escape(tier_label)}</span></td>"
             f"<td><strong>{name}</strong></td>"
             f"<td>{cur}</td>"
-            f"<td><code>{sch}</code></td>"
+            f"<td>{schema_badge}</td>"
             f"<td>{last_ok}</td>"
             f"<td>{ce}</td>"
             f"<td>{link_cell}</td>"
@@ -2786,6 +3389,7 @@ def render_index_html(
     movies = snapshot.get("movies") or []
     release_intel = snapshot.get("release_intel") or {}
     dash_meta = snapshot.get("dashboard") or {}
+    config_path = _first_nonempty_str(dash_meta.get("config_path"))
     paths_meta = snapshot.get("paths") or {}
     runtime = snapshot.get("runtime") or {}
     purchases_raw = snapshot.get("purchases_history")
@@ -2875,6 +3479,7 @@ def render_index_html(
         show_purchase=show_ph,
     )
     target_controls = _render_target_controls(target_count)
+    movie_add_panel = _render_movie_add_panel(config_path)
     sx_handles = social_x.get("handles") or {}
     if not isinstance(sx_handles, dict):
         sx_handles = {}
@@ -2893,7 +3498,9 @@ def render_index_html(
         mkey_slug = _html_id_slug(mkey)
         poster = _poster_url_for_movie(m, target_by_name=target_by_name)
         poster_html = _poster_html(poster, mtitle_raw, css_class="movie-group-poster")
-        release_date = html.escape(_fmt_release_date(m.get("release_date")))
+        release_date = html.escape(
+            _fmt_release_date(_release_date_for_movie(m, target_by_name=target_by_name))
+        )
         distributor = html.escape(_first_nonempty_str(m.get("distributor")) or "Distributor not set")
         tweet_embeds = _render_movie_tweet_embeds(m, social_handles=sx_handles)
         subcards: list[str] = []
@@ -3387,6 +3994,7 @@ def render_index_html(
   <section class="section-head" id="crawl" aria-label="Fandango crawl">
     <h2 class="section-label">Watchlist</h2>
     <p class="panel-tagline">Poster-first overview. Open each card only when you need diagnostics, screenshots, video, traces, or raw state.</p>
+    {movie_add_panel}
     {target_controls}
   </section>
   {crawl_body}

@@ -26,6 +26,16 @@ from fandango_watcher.watcher import crawl_target
 _STATIC_PAGE = """<!DOCTYPE html>
 <html><body>
 <p>Get Tickets</p>
+<span class="movie-detail-header__info-item" id="movie-detail-release-date">
+  Opening Jul 17
+</span>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Movie",
+  "image": "https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/default_poster--dark-mode.png/0/images/masterrepository/Fandango/241283/poster.jpg"
+}
+</script>
 <div data-testid="theater-card">
   <h3 class="theater-name">AMC Universal CityWalk 19 + IMAX</h3>
   <div class="format-section">
@@ -83,3 +93,8 @@ def test_crawl_target_local_static_theater_card(tmp_path: Path) -> None:
     assert result.citywalk_present is True
     assert result.citywalk_showtime_count >= 1
     assert FormatTag.IMAX_70MM in result.citywalk_formats_seen
+    assert result.release_date_text == "Opening Jul 17"
+    assert result.poster_url == (
+        "https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/"
+        "default_poster--dark-mode.png/0/images/masterrepository/Fandango/241283/poster.jpg"
+    )

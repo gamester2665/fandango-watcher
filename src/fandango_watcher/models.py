@@ -83,6 +83,7 @@ class CrawlContext(ModelBase):
     url: str
     page_title: str
     movie_title: str | None = None
+    release_date_text: str | None = None
     poster_url: str | None = None
     theater_zip: str | None = None
     crawled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

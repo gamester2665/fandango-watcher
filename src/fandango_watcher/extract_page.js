@@ -8,6 +8,32 @@
   };
   const imageSrc = (img) =>
     img ? img.currentSrc || img.src || img.getAttribute("src") || null : null;
+  const posterFromJsonLd = () => {
+    const scripts = Array.from(
+      document.querySelectorAll('script[type="application/ld+json"]')
+    );
+    for (const script of scripts) {
+      const raw = script.textContent || "";
+      if (!raw.trim()) continue;
+      try {
+        const data = JSON.parse(raw);
+        const nodes = Array.isArray(data) ? data : [data];
+        for (const node of nodes) {
+          const image = node && node.image;
+          if (typeof image === "string" && image.trim()) {
+            return image.trim();
+          }
+          if (Array.isArray(image)) {
+            const first = image.find((item) => typeof item === "string" && item.trim());
+            if (first) return first.trim();
+          }
+        }
+      } catch (_) {
+        // Ignore non-JSON script contents; the DOM/image heuristics below still apply.
+      }
+    }
+    return null;
+  };
   const posterFromImages = () => {
     const imgs = Array.from(document.querySelectorAll("img"));
     const candidates = imgs
@@ -189,9 +215,13 @@
     page_title: document.title || "",
     movie_title:
       text(document.querySelector('h1[class*="movie" i], h1[data-testid*="movie"], h1')) || null,
+    release_date_text:
+      text(document.querySelector('#movie-detail-release-date, .movie-detail-header__info-item[id="movie-detail-release-date"]')) ||
+      null,
     poster_url:
       metaContent('meta[property="og:image"]') ||
       metaContent('meta[name="twitter:image"]') ||
+      posterFromJsonLd() ||
       posterFromImages(),
     format_filter_labels: Array.from(new Set(formatFilterLabels)),
     theaters,

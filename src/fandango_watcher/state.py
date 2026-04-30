@@ -67,6 +67,7 @@ class TargetState(BaseModel):
     target_name: str
     current_state: WatcherState = WatcherState.IDLE
     last_release_schema: ReleaseSchema | None = None
+    last_release_date_text: str | None = None
     last_poster_url: str | None = None
     last_tick_at: datetime | None = None
     last_success_at: datetime | None = None
@@ -148,6 +149,7 @@ def transition(
         update={
             "current_state": new_watcher_state,
             "last_release_schema": new_schema,
+            "last_release_date_text": parsed.release_date_text or prev.last_release_date_text,
             "last_poster_url": parsed.poster_url or prev.last_poster_url,
             "last_tick_at": effective_now,
             "last_success_at": effective_now,
