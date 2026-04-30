@@ -3,8 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from datetime import UTC, datetime
 from typing import Any
+
+# Add the vendor directory to sys.path if it exists
+vendor_path = os.path.join(os.getcwd(), "vendor")
+if os.path.exists(vendor_path) and vendor_path not in sys.path:
+    sys.path.append(vendor_path)
 
 import yaml
 from pydantic import SecretStr
