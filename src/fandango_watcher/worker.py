@@ -20,7 +20,7 @@ from state import transition, record_error
 logger = logging.getLogger(__name__)
 
 async def on_fetch(request, env, ctx):
-    """Entry point for HTTP requests (manual trigger/health check)."""
+    """Entry point for HTTP requests (manual trigger/health check). Triggering new build."""
     res = await run_tick(env)
     from js import Response
     return Response.new(json.dumps(res), headers={"content-type": "application/json"})
