@@ -1,79 +1,12 @@
 [project]
 name = "fandango-watcher"
 version = "0.1.0"
-readme = "README.md"
-requires-python = ">=3.13"
 dependencies = [
-    "httpx>=0.28.1",
-    "playwright>=1.58.0",
-    "pydantic>=2.12.5",
-    "pydantic-settings>=2.13.1",
-    "pyyaml>=6.0.3",
-    "twilio>=9.10.5",
-    # IANA time zones for :class:`zoneinfo.ZoneInfo` on Windows (dashboard PT).
-    "tzdata>=2025.2",
+    "pyyaml",
+    "httpx",
+    "pydantic",
+    "pydantic-settings"
 ]
 
-[project.optional-dependencies]
-# Phase 6 — open-source agent fallback (browser-use + an OpenAI-compatible
-# vision LLM). Install with:  uv sync --extra agent
-# Pin loosely on purpose: browser-use is iterating fast and we lazy-import
-# it from agent_fallback.py so a missing/incompatible install fails clean
-# at first invocation rather than at module load time.
-agent = [
-    "browser-use>=0.1.40",
-    "langchain-openai>=0.3.0",
-]
-
-[project.scripts]
-fandango-watcher = "fandango_watcher:main"
-
-[build-system]
-requires = ["uv_build>=0.9.18,<0.10.0"]
-build-backend = "uv_build"
-
-[dependency-groups]
-dev = [
-    "pytest>=9.0.3",
-    "pytest-timeout>=2.4.0",
-    "ruff>=0.9.0",
-    "mypy>=1.15.0",
-    "types-PyYAML>=6.0.12",
-]
-
-[tool.ruff]
-line-length = 100
-target-version = "py313"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
-ignore = [
-    "E501",
-    "B017",
-    "UP047",
-]
-
-[tool.mypy]
-python_version = "3.13"
-packages = ["fandango_watcher"]
-mypy_path = "src"
-explicit_package_bases = true
-warn_unused_ignores = true
-ignore_missing_imports = true
-show_error_codes = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config"
-markers = [
-    "integration: Playwright and/or local HTTP (slower than unit tests)",
-]
-filterwarnings = [
-    "error",
-    "ignore::DeprecationWarning:pydantic._internal._config",
-    # http.server on Windows + Python 3.13 occasionally finalizes a closed
-    # socket with a harmless ResourceWarning that pytest re-raises as
-    # PytestUnraisableExceptionWarning. Our healthz integration tests hit
-    # this every run; suppress to keep the suite deterministic.
-    "ignore::pytest.PytestUnraisableExceptionWarning",
-]
+[tool.pywrangler]
+main = "src/fandango_watcher/worker.py"
