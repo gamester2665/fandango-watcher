@@ -1,4 +1,0 @@
-pyyaml
-httpx
-pydantic
-pydantic-settings

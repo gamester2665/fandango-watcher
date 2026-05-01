@@ -10,6 +10,7 @@ browser-profile/
 
 # Python
 .venv/
+.venv-workers/
 __pycache__/
 *.pyc
 *.pyo
