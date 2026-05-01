@@ -1,7 +1,7 @@
 #:schema https://raw.githubusercontent.com/cloudflare/wrangler/main/packages/wrangler/config-schema.json
 name = "fandango-watcher"
 main = "src/fandango_watcher/worker.py"
-compatibility_date = "2024-04-30"
+compatibility_date = "2026-04-30"
 compatibility_flags = ["python_workers"]
 
 # Cloudflare Workers Python dependencies are managed via requirements.txt
