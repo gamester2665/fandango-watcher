@@ -79,6 +79,8 @@ fandango-watcher once --config config.yaml --target odyssey-overview --direct-ap
 
 There is no bundled CI. Deploy by building the Docker image (or installing with `uv` on the host), copying `config.yaml` and a populated `.env`, and running `watch` (or `docker compose` as in the repo). Verify the process with `GET http://127.0.0.1:8787/healthz` (or your bound host/port) and optional `GET /metrics` for heartbeat counters. The read-only dashboard on `/` exposes `/api/status`, `/api/purchases` (tail of `state/purchases.jsonl`), and `/api/revision` for live reload.
 
+**Optional — Cloudflare Python Worker:** `wrangler.toml` defines a scheduled Worker (`uv run pywrangler deploy` after `wrangler login`, or `CLOUDFLARE_API_TOKEN` for non-interactive shells). Bundled defaults live in `worker-config.yaml`; set Twilio/SMTP values with `npx wrangler secret put …` (see comments in `wrangler.toml` and `.env.example`). Convenience scripts: `scripts/deploy-worker.sh` / `scripts/deploy-worker.ps1`.
+
 **Policy:** do not deploy to a VPS until you have manually confirmed behavior locally. Same rule is spelled out in [`PLAN.md`](./PLAN.md) (local sign-off gate).
 
 ---

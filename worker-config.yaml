@@ -1,0 +1,363 @@
+# =============================================================================
+# Bundled defaults for the Cloudflare Python Worker (see wrangler.toml).
+# Customize targets/theater here; copy to a private path and point WATCHER_CONFIG
+# if you need a different layout. Secrets are Wrangler secrets / env bindings, not this file.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# URLs to crawl on each tick. The first entry is primary; additional entries
+# act as backups for format-filtered routes or alternate slugs.
+#
+# Optional per-target keys (click a format chip after load, before screenshot +
+# extraction) — use when the URL alone does not select the row you want
+# (e.g. IMAX 3D at CityWalk):
+#   format_filter_click_selector: CSS selector for the chip (first match)
+#   format_filter_click_label:    substring, case-insensitive, if selector unset
+#     (scoped to #lazyload-format-filters, else .format-filter__list-item)
+#   format_filter_click_timeout_ms: default 12000
+# -----------------------------------------------------------------------------
+targets:
+  - name: odyssey-imax-70mm
+    url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview?format=IMAX%2070MM
+    wait_until: domcontentloaded
+    timeout_ms: 30000
+    # Optional direct-API overrides; usually movies[].fandango_movie_id/title is enough.
+    # direct_api_movie_id: 241283
+    # direct_api_formats: [IMAX_70MM]
+
+  - name: odyssey-overview
+    url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview
+    wait_until: domcontentloaded
+    timeout_ms: 30000
+    # Optional — uncomment for titles where Fandango needs a chip click (e.g. IMAX 3D):
+    # format_filter_click_label: "IMAX 3D"
+
+# -----------------------------------------------------------------------------
+# Theater identity. We only alert / purchase when this theater's card shows
+# populated bookable showtimes.
+# -----------------------------------------------------------------------------
+theater:
+  display_name: "AMC Universal CityWalk 19 + IMAX"
+  # Substring matched against theater-card headings on Fandango.
+  fandango_theater_anchor: "AMC Universal CityWalk"
+
+# -----------------------------------------------------------------------------
+# Which formats trigger alerts vs. auto-purchase. Values map to FormatTag
+# enum values in src/fandango_watcher/models.py.
+# -----------------------------------------------------------------------------
+formats:
+  # Fire SMS + email + purchaser on these.
+  require: [IMAX, IMAX_70MM]
+  # Also auto-purchase if these drop; no separate alert scheduling.
+  include: [DOLBY, LASER_RECLINER]
+
+# -----------------------------------------------------------------------------
+# Direct Fandango API detection. Enabled by default: each watch tick first checks
+# Fandango's JSON endpoints for CityWalk showtimes matching the target movie and
+# desired format, then falls back to browser crawling if the private API drifts.
+# Browser automation is still used for checkout/login and as the recovery path.
+#
+# CLI overrides:
+#   --direct-api-mode auto     # use this YAML block
+#   --direct-api-mode api      # force direct API
+#   --direct-api-mode browser  # force Playwright/browser crawl
+#   --no-browser-fallback      # fail direct API errors instead of falling back
+# -----------------------------------------------------------------------------
+direct_api:
+  enabled: true
+  fallback_to_browser: true
+  theater_id: AAAWX
+  chain_code: AMC
+  zip_code: "91608"
+  timeout_seconds: 30
+  max_dates_per_tick: 90
+  stop_on_first_match: true
+  alert_unknown_formats: true
+
+# -----------------------------------------------------------------------------
+# Polling cadence. Defaults target ~5 min with small jitter; increase if
+# Fandango starts pushing back (403s, throttling, empty DOMs).
+# -----------------------------------------------------------------------------
+poll:
+  min_seconds: 270
+  max_seconds: 330
+  error_backoff_multiplier: 2
+  error_backoff_cap_seconds: 1800
+
+# -----------------------------------------------------------------------------
+# Positive-ticketing heuristic inputs used by the Schema A/B/C classifier.
+# Prefer evidence of real theater cards over bare text matches.
+# -----------------------------------------------------------------------------
+signal:
+  page_text_contains_any:
+    - "Get Tickets"
+    - "Buy Tickets"
+    - "Reserve Seats"
+  require_theater_card_for: "AMC Universal CityWalk"
+
+# -----------------------------------------------------------------------------
+# Purchase tier. `mode: full_auto` is the default because A-List reduces the
+# blast radius of a mistake to near zero, and the $0.00 invariant below is
+# the hard kill switch that prevents any non-free purchase.
+# -----------------------------------------------------------------------------
+purchase:
+  enabled: true
+  # full_auto | hold_and_confirm | notify_only
+  mode: notify_only
+
+  # The $0.00 invariant: "Complete Reservation" is clicked ONLY when every
+  # check here passes on the review page. Python re-reads the DOM directly.
+  invariant:
+    require_total_equals: "$0.00"
+    require_benefit_phrase_any:
+      - "AMC Stubs A-List"
+      - "A-List Benefit"
+      - "Stubs A-List"
+    # These are cross-checked against what the watcher enqueued.
+    require_theater_match: true
+    require_showtime_match: true
+    require_seat_match: true
+
+  # Format -> auditorium -> priority-ordered seat list. The purchaser picks
+  # the first available seat from the list.
+  seat_priority:
+    IMAX_70MM:
+      auditorium: 19
+      seats: [N10, N11, N12, N13, N14, N15, N16, N17]
+    IMAX:
+      auditorium: 19
+      seats: [N10, N11, N12, N13, N14, N15, N16, N17]
+    DOLBY:                            # "Prime" at CityWalk
+      auditorium: 1
+      seats: [E9, E10, E11, E12]
+    LASER_RECLINER:
+      auditorium: 14
+      seats: [H8]                     # balcony Row H, seat 8
+
+  # If none of the preferred seats in `seat_priority[format]` are available,
+  # what do we do? v1 = stop and SMS the human (do NOT grab any random seat).
+  on_preferred_sold_out: notify_only  # notify_only | try_next_showtime
+  max_quantity: 1
+
+# -----------------------------------------------------------------------------
+# Agent fallback. Runs only when the scripted purchaser fails mid-checkout.
+# The Python $0.00 invariant ALWAYS re-runs after the agent returns and
+# remains the sole gate on the final "Complete Reservation" click.
+#
+# Default provider is the open-source `browser_use` (browser-use library
+# driving any OpenAI-compatible vision LLM). To use it:
+#   1. Install the optional dep:   uv sync --extra agent
+#   2. Set keys in .env: OPENROUTER_API_KEY when base_url is OpenRouter;
+#      OPENAI_API_KEY for OpenAI / Together / Fireworks / vLLM (non-OpenRouter).
+#      You can set both; the correct one is picked from base_url.
+#   3. Tune model + base_url below (OpenRouter is the default example).
+#
+# -----------------------------------------------------------------------------
+agent_fallback:
+  enabled: false
+  provider: browser_use               # browser_use | noop
+  # ANY OpenAI-compatible chat-completions model id is valid here. The
+  # value is passed straight through to the endpoint at `base_url`.
+  # Recommended (OpenRouter, ranked cheapest-to-most-capable):
+  #   * "qwen/qwen2.5-vl-72b-instruct"   (~$0.40 in / $1.20 out per 1M tok; best OSS GUI grounding)
+  #   * "z-ai/glm-4.6v"                  (~$0.30 in / $0.90 out; competitive with Qwen)
+  #   * "google/gemini-2.5-flash"        (~$0.30 in / $2.50 out; closed weights but very fast)
+  # Self-hosted vLLM:  use the model id you loaded, e.g. "qwen2.5-vl-72b-instruct".
+  model: qwen/qwen2.5-vl-72b-instruct
+  # OpenAI-compatible endpoint. Leave null for OpenAI proper. Examples:
+  #   base_url: https://openrouter.ai/api/v1            # OpenRouter (recommended — pay-per-token, no commitment)
+  #   base_url: http://localhost:8000/v1                # self-hosted vLLM
+  #   base_url: https://api.together.xyz/v1             # Together AI
+  #   base_url: https://api.fireworks.ai/inference/v1   # Fireworks
+  base_url: https://openrouter.ai/api/v1
+  invoke_only_on:
+    - scripted_selector_failure
+    - scripted_step_timeout
+  # Wall-clock cap for a single vision-agent rescue (seconds).
+  max_wall_seconds: 300
+  max_steps: 40
+  max_cost_usd: 2.00                  # hard ceiling per invocation
+
+# -----------------------------------------------------------------------------
+# Notifications. Both channels fire in parallel on every listed event.
+# -----------------------------------------------------------------------------
+notify:
+  channels: [twilio, smtp]
+  # When true, SMTP emails attach crawl / purchase PNGs (and .webm if you
+  # enable browser.record_video). Twilio SMS stays plain text — open the
+  # email on your phone to see screenshots. Large files are skipped per
+  # email_max_attachment_bytes.
+  attach_screenshots_to_email: false
+  email_max_attachments: 5
+  email_max_attachment_bytes: 6000000
+  on_events:
+    - release_transition_bad_to_good
+    - purchase_succeeded
+    - purchase_held_for_confirm
+    - purchase_halted_invariant
+    - purchase_halted_preferred_sold_out
+    - purchase_failed_scripted
+    - watcher_stuck_on_error_streak
+    # Soft hint from the X / Twitter poller (Phase 2.5). Pre-wired so it
+    # fires the moment you flip `social_x.enabled: true` below; remove
+    # this line if you would rather suppress X notifications without
+    # disabling polling itself.
+    - social_x_match
+
+# -----------------------------------------------------------------------------
+# Screenshot retention. Every crawl writes a timestamped PNG; each purchase
+# attempt writes a labeled PNG per step under purchase-attempts/<ts>/.
+# -----------------------------------------------------------------------------
+screenshots:
+  dir: /app/artifacts/screenshots
+  max_age_days: 7
+  per_purchase_dir: /app/artifacts/purchase-attempts
+  # Optional safety net on top of max_age_days.
+  keep_last_n: 200
+
+# -----------------------------------------------------------------------------
+# Per-target state persistence. The watch loop writes one JSON per target
+# so a restart resumes cleanly (no duplicate "tickets live" alerts).
+# -----------------------------------------------------------------------------
+state:
+  dir: /app/state
+
+# -----------------------------------------------------------------------------
+# Read-only dashboard (HTML + JSON on the healthz port with watch / dashboard).
+# Purchase history tails state/purchases.jsonl (newest rows shown first in the UI).
+# -----------------------------------------------------------------------------
+dashboard:
+  show_purchase_history: true
+  purchase_history_max_lines: 50
+
+# -----------------------------------------------------------------------------
+# Purchase audit log rotation. state/purchases.jsonl is appended once per
+# purchase attempt; on long-lived hosts cap its size and keep N rotated copies.
+# Set max_bytes: null to disable rotation entirely.
+# -----------------------------------------------------------------------------
+purchase_audit:
+  max_bytes: 5000000
+  keep_rotated: 3
+
+# -----------------------------------------------------------------------------
+# Dashboard: xAI (Grok) release/ticketing news summaries (optional).
+# Set XAI_API_KEY in .env. Responses are cached as state/release_intel_cache.json.
+# -----------------------------------------------------------------------------
+release_intel:
+  enabled: false
+  model: grok-3-mini-latest
+  cache_ttl_seconds: 3600
+  timeout_seconds: 90
+
+# -----------------------------------------------------------------------------
+# Browser. Headless in production; the `login` compose service overrides to
+# headed for the one-time Fandango + AMC Stubs login.
+# -----------------------------------------------------------------------------
+browser:
+  headless: true
+  user_data_dir: /app/browser-profile
+  locale: en-US
+  timezone: America/Los_Angeles
+  viewport:
+    width: 1440
+    height: 900
+  # Playwright saves one .webm per browser context when true (file appears
+  # after the crawl or purchase closes the context). Disk-heavy — default off.
+  record_video: false
+  record_video_dir: /app/artifacts/videos
+
+# -----------------------------------------------------------------------------
+# Social signals: X / Twitter (Phase 2.5 — ADVISORY ONLY).
+#
+# Polls a small set of official movie / studio accounts for early "tickets
+# soon" hints. Matches fire `social_x_match` events (must be listed under
+# notify.on_events to actually send). Fandango remains the single source of
+# truth for `release_transition_bad_to_good`. The dashboard also classifies
+# the latest saved tweet text as available / soon / not an announcement so you
+# can quickly see whether the account appears to be announcing tickets.
+#
+# Requires X_BEARER_TOKEN in .env. Disabled by default.
+# -----------------------------------------------------------------------------
+social_x:
+  enabled: false
+  # ~15 min cadence with jitter. Stays well inside X v2 free/basic-tier
+  # read budgets even with several handles. Increase if you add more.
+  min_seconds: 900
+  max_seconds: 1200
+  max_results_per_handle: 10
+
+  # Fallback keyword list applied when an X handle (either here or under
+  # a movie below) declares no keywords of its own.
+  default_keywords:
+    - "tickets"
+    - "on sale"
+    - "presale"
+    - "now available"
+    - "imax"
+
+  # OPTIONAL: free-form X handles that aren't tied to a single movie.
+  # Most users should leave this empty and define accounts under the
+  # `movies:` block below instead -- that way every match is auto-labeled
+  # with the movie title and deep-links the right Fandango target.
+  handles: []
+
+# -----------------------------------------------------------------------------
+# Movies registry (Phase 2.5).
+#
+# Acts as the join table between Fandango targets and X / Twitter accounts.
+# When a tweet from any handle in `x_handles` matches this movie's
+# `x_keywords`, the resulting `social_x_match` notification is auto-labeled
+# with `title` and (when `fandango_targets` is non-empty) deep-links the
+# first listed Fandango target so you go from "X hint" to "buy" in one tap.
+#
+# Same handle can appear under multiple movies (e.g. `IMAX` under both
+# Odyssey and Dune); the poller dedupes API calls but emits one match per
+# movie context that the tweet hits.
+# -----------------------------------------------------------------------------
+movies:
+  - key: odyssey
+    title: "The Odyssey (2026)"
+    fandango_movie_id: 241283
+    distributor: "Universal Pictures"
+    release_date: "2026-07-17"
+    # Optional Fandango-hosted poster URL. Browser crawls also capture the
+    # page's own og:image/twitter:image into state when Fandango exposes one.
+    poster_url: https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/default_poster--dark-mode.png/0/images/masterrepository/Fandango/241283/ODY_Helmet1Sheet12_RGB_1.jpg
+    fandango_targets: [odyssey-imax-70mm, odyssey-overview]
+    preferred_formats: [IMAX_70MM, IMAX]
+    reference_page_key: the_odyssey_imax_70mm
+    x_handles:
+      - "TheOdysseyFilm"
+      - "UniversalPictures"
+      - "IMAX"
+    # Combine movie-specific terms (title, premium-format hints) with the
+    # generic ticket-vocab so we catch both "Odyssey IMAX 70mm tickets..."
+    # and a plain "Odyssey now on sale".
+    x_keywords:
+      - "odyssey"
+      - "tickets"
+      - "on sale"
+      - "presale"
+      - "imax"
+      - "70mm"
+
+  # Example second movie -- not currently being watched by Fandango (no
+  # fandango_targets), but its X handles still poll for early hints so we
+  # know when to ADD a Fandango target later.
+  - key: dune_part_three
+    title: "Dune: Part Three"
+    distributor: "Warner Bros. Pictures"
+    release_date: "2026-12-18"
+    fandango_targets: []
+    preferred_formats: [IMAX_70MM, IMAX]
+    reference_page_key: dune_part_three_imax_70mm
+    x_handles:
+      - "dunemovie"
+      - "IMAX"
+    x_keywords:
+      - "dune"
+      - "tickets"
+      - "on sale"
+      - "presale"
+      - "imax"
+      - "70mm"

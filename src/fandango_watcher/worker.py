@@ -3,25 +3,44 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
-from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-import yaml
+from cloudflare_browser import crawl_target_worker
+from cloudflare_state import D1StateProvider
+from config import Settings, load_config
+from direct_api_detect import detect_target_direct_api
+from loop import ERROR_STREAK_THRESHOLD, _apply_direct_api_meta, _emit_events
+from notify import build_notifier
 from pydantic import SecretStr
 
-from config import Settings, WatcherConfig, load_config
-from cloudflare_state import D1StateProvider
-from cloudflare_browser import crawl_target_worker
-from direct_api_detect import detect_target_direct_api
-from loop import _emit_events, _apply_direct_api_meta, ERROR_STREAK_THRESHOLD
-from notify import build_notifier
-from state import transition, record_error
+from state import record_error, transition
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_worker_config_path(config_rel: str) -> Path:
+    """Resolve ``WATCHER_CONFIG`` for the Python Worker bundle.
+
+    The isolate working directory is not guaranteed. Walk upward from this
+    module so ``worker-config.yaml`` at the repo root is found when bundled.
+    """
+    p = Path(config_rel)
+    if p.is_file():
+        return p.resolve()
+    here = Path(__file__).resolve().parent
+    for ancestor in [here, *here.parents]:
+        cand = (ancestor / config_rel).resolve()
+        try:
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return p.resolve()
+
+
 async def on_fetch(request, env, ctx):
-    """Entry point for HTTP requests (manual trigger/health check). Triggering new build."""
+    """Entry point for HTTP requests (manual trigger/health check)."""
     res = await run_tick(env)
     from js import Response
     return Response.new(json.dumps(res), headers={"content-type": "application/json"})
@@ -40,13 +59,9 @@ async def run_tick(env: Any):
     """Run one iteration of the watch loop."""
     # 1. Load config and settings from environment
     try:
-        # For Workers, we look for 'config.yaml' in the root of the worker bundle.
-        config_path = os.environ.get("WATCHER_CONFIG", "config.yaml")
-        
-        # Manually load YAML to avoid 'yaml' module issues in Pyodide if it's not bundled correctly
-        # But load_config uses it, so we must ensure it's available.
-        cfg = load_config(config_path)
-        
+        config_rel = os.environ.get("WATCHER_CONFIG", "config.yaml")
+        cfg = load_config(_resolve_worker_config_path(config_rel))
+
         # Pydantic-settings will pick up env vars from env
         # Cloudflare Workers provides env vars as attributes on the 'env' object
         # We need to map them to the Settings model.
@@ -85,7 +100,7 @@ async def run_tick(env: Any):
                 parsed = direct_result.parsed
                 meta = direct_result.meta
                 fallback = False
-            except Exception as e:
+            except Exception:
                 if not cfg.direct_api.fallback_to_browser:
                     raise
                 
