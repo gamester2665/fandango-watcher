@@ -5,6 +5,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Load CLOUDFLARE_API_TOKEN from .env when unset (do not source the whole file).
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -f .env ]]; then
+  token="$(
+    grep -E '^[[:space:]]*CLOUDFLARE_API_TOKEN=' .env \
+      | tail -n1 \
+      | cut -d= -f2- \
+      | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" \
+      | tr -d '\r'
+  )" || true
+  if [[ -n "${token:-}" ]]; then
+    export CLOUDFLARE_API_TOKEN="$token"
+  fi
+fi
+
 if ! npx --yes wrangler versions list >/dev/null 2>&1; then
   echo "Wrangler is not authenticated for API calls (needed for deploy)." >&2
   echo "  Fix: npx wrangler login   (local terminal)" >&2
