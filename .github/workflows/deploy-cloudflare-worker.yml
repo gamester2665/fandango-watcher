@@ -1,0 +1,54 @@
+# Deploy the Cloudflare Python Worker (see wrangler.toml + scripts/deploy-worker.sh).
+#
+# Requires repository secret: CLOUDFLARE_API_TOKEN
+# GitHub → Settings → Secrets and variables → Actions → New repository secret
+#
+# Create a token with at least: Workers Scripts (Edit), Account (Read), and any
+# bindings your worker uses (e.g. D1 Edit). See .env.example Cloudflare section.
+
+name: Deploy Cloudflare Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-cloudflare-worker.yml"
+      - "src/fandango_watcher/worker.py"
+      - "wrangler.toml"
+      - "worker-config.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "scripts/deploy-worker.sh"
+
+concurrency:
+  group: deploy-cloudflare-worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Deploy (pywrangler + wrangler)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::Set the Actions secret CLOUDFLARE_API_TOKEN (repo Settings → Secrets and variables → Actions). See .env.example Cloudflare section for token scopes."
+            exit 1
+          fi
+          bash scripts/deploy-worker.sh
