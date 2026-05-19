@@ -31,7 +31,7 @@ Deploy the **same Docker stack** validated locally onto the shared RackNerd VPS 
 ssh root@74.48.91.123
 
 cd /root
-git clone git@github.com:<you>/fandango_watcher.git fandango-watcher
+git clone git@github.com:gamester2665/fandango-watcher.git fandango-watcher
 cd fandango-watcher
 
 # Secrets + config (from laptop, SFTP, or Rose-style upload helper)
@@ -59,6 +59,13 @@ From laptop (SSH only; does not upload secrets):
 ```bash
 export FANDANGO_VPS_HOST=74.48.91.123
 bash scripts/vps-deploy.sh
+```
+
+Upload secrets first (requires SSH key or password auth):
+
+```bash
+bash scripts/vps-sync-secrets.sh
+# or: powershell -File scripts/vps-sync-secrets.ps1
 ```
 
 Compose files used:

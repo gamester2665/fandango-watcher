@@ -40,6 +40,8 @@ DOCKER_OPERATOR_SCRIPTS = (
     "scripts/docker-common.ps1",
     "scripts/vps-deploy.sh",
     "scripts/vps-pull-and-restart.sh",
+    "scripts/vps-sync-secrets.sh",
+    "scripts/vps-sync-secrets.ps1",
 )
 
 
