@@ -43,6 +43,8 @@ DOCKER_OPERATOR_SCRIPTS = (
     "scripts/vps-sync-secrets.sh",
     "scripts/vps-sync-secrets.ps1",
     "scripts/vps-first-time.sh",
+    "scripts/vps-preflight.sh",
+    "scripts/vps-verify-neighbors.sh",
     "scripts/docker-soak-check.sh",
     "scripts/docker-soak-check.ps1",
 )
@@ -202,6 +204,9 @@ class TestComposeVps:
     def test_vps_watch_command_no_open(self, compose_vps: dict[str, object]) -> None:
         watcher = compose_vps["services"]["watcher"]  # type: ignore[index]
         assert watcher["command"] == ["watch", "--no-open"]
+
+    def test_vps_compose_project_name_isolated(self, compose_vps: dict[str, object]) -> None:
+        assert compose_vps.get("name") == "fandango-watcher"
 
 
 # ---------------------------------------------------------------------------

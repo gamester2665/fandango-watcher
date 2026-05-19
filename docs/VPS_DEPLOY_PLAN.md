@@ -6,6 +6,27 @@ Deploy **fandango_watcher** on `root@74.48.91.123` next to Rose Astrology and th
 
 ---
 
+## Safety — existing connections (will NOT break)
+
+Deploy scripts are **read-only toward neighbors** until `compose up` in `/root/fandango-watcher` only.
+
+| Existing stack | What we do | What we never do |
+|----------------|------------|------------------|
+| **Mail** (Postfix, Dovecot, nginx:8080, MariaDB) | `vps-preflight.sh` asserts units stay `active`; re-check after deploy | `systemctl stop/restart` mail; bind ports 25/587/8080/3306 |
+| **Rose** (`/root/rose-astrology`, `:7166`, hook `:8989`) | Preflight/postflight `curl` Rose → must stay **200**; abort if not | `cd` Rose dir; `docker compose` there; change `:7166`/`:8989` |
+| **Cloudflare Tunnel** (`email.mtom.co`, `rose.geobregon.com`) | Optional **new** hostname → `127.0.0.1:8787` only | Edit `/etc/cloudflared/config.yml`; repoint Rose ingress rules |
+| **Docker isolation** | Compose project `fandango-watcher`; volumes `fandango_watcher_fandango_*` | `docker system prune -a`; prune Rose volumes; simultaneous `--build` with Rose |
+
+**Port bind:** `127.0.0.1:8787:8787` only — no new `0.0.0.0` listeners (unlike Rose’s `:7166`).
+
+**Cutover (Phase 6)** affects **fandango only**: disable Cloudflare **Worker** cron (duplicate SMS), stop **local** Docker/`uv watch`. Does **not** stop Rose, mail, or tunnels.
+
+**Rollback:** `cd /root/fandango-watcher && docker compose -f docker-compose.yml -f docker-compose.vps.yml down` — removes fandango container only; Rose/mail untouched.
+
+Automated guards: `scripts/vps-preflight.sh` (before build), `scripts/vps-verify-neighbors.sh` (after healthz).
+
+---
+
 ## Resource map
 
 | Stack | Path / port | Do not touch |

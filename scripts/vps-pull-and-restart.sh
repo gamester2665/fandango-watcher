@@ -17,6 +17,8 @@ if [[ -f .env.production ]]; then
   chmod 600 .env.production
 fi
 
+bash scripts/vps-preflight.sh
+
 docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build watcher
 
 docker compose -f docker-compose.yml -f docker-compose.vps.yml ps
@@ -24,5 +26,7 @@ curl -fsS http://127.0.0.1:8787/healthz || {
   echo "healthz not ready yet; check: docker compose logs watcher" >&2
   exit 1
 }
+
+bash scripts/vps-verify-neighbors.sh
 
 echo "VPS deploy OK"

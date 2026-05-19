@@ -8,11 +8,9 @@ INSTALL_DIR="${FANDANGO_VPS_DIR:-/root/fandango-watcher}"
 echo "== preflight =="
 command -v docker >/dev/null
 docker compose version >/dev/null
+bash scripts/vps-preflight.sh
 df -h /
 docker system df || true
-
-echo "== avoid Rose port collisions =="
-ss -tlnp 2>/dev/null | grep -E ':7166|:8989|:8787' || true
 
 if [[ ! -d "$INSTALL_DIR/.git" ]]; then
   echo "== clone =="
@@ -44,4 +42,4 @@ bash scripts/vps-pull-and-restart.sh
 
 echo ""
 echo "OK: curl -fsS http://127.0.0.1:8787/healthz"
-echo "Rose check: curl -fsS -o /dev/null -w '%{http_code}\n' 'https://rose.geobregon.com/api/solar-snapshot?instant=2000-01-01T00:00:00.000Z'"
+echo "Neighbors verified (Rose + mail) by scripts/vps-verify-neighbors.sh"

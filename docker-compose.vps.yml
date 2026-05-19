@@ -5,6 +5,8 @@
 # bind healthz to localhost only; expose dashboard via Cloudflare Tunnel if needed.
 # See docs/VPS_DEPLOY.md and docs/VPS_COLOCATION_HANDOFF.md.
 
+name: fandango-watcher
+
 services:
   watcher:
     env_file:

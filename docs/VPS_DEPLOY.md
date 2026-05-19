@@ -169,7 +169,17 @@ Document the Worker name and disable step in your operator notes before VPS cuto
 
 - Do **not** run `docker compose --build` for Rose and fandango_watcher at the same time.
 - Prefer CI/laptop `docker build` + registry, or build off-peak.
-- Before deploy: `docker builder prune -f` if disk is tight.
+- Before deploy: `docker builder prune -f` if disk is tight (cache only — **not** `docker system prune -a`).
+
+## 7b. Neighbor safety scripts
+
+Before every VPS deploy:
+
+```bash
+bash scripts/vps-preflight.sh    # aborts if mail down or Rose ≠ 200
+bash scripts/vps-pull-and-restart.sh   # includes preflight + post verify
+bash scripts/vps-verify-neighbors.sh   # Rose + mail still OK after fandango up
+```
 
 ---
 
