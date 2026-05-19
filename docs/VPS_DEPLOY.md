@@ -6,6 +6,8 @@ Deploy the **same Docker stack** validated locally onto the shared RackNerd VPS 
 
 **Host constraints:** See [VPS_COLOCATION_HANDOFF.md](./VPS_COLOCATION_HANDOFF.md) for ports, RAM (2.4 GiB), disk, and Tunnel patterns.
 
+**Step-by-step checklist:** [VPS_DEPLOY_PLAN.md](./VPS_DEPLOY_PLAN.md)
+
 ---
 
 ## fandango_watcher on this VPS

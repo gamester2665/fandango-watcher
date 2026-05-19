@@ -369,6 +369,7 @@ You are deploying **a second Docker application** on an existing Ubuntu VPS.
 | Secrets | `.env.production` |
 | Deploy script | `scripts/vps-pull-and-restart.sh` (on server) / `scripts/vps-deploy.sh` (from laptop) |
 | Runbook | `docs/VPS_DEPLOY.md` |
+| Deploy plan | `docs/VPS_DEPLOY_PLAN.md` |
 
 **Gate:** 24h local Docker soak before VPS production cutover. Disable Cloudflare Worker cron when VPS is primary to avoid duplicate SMS.
 
