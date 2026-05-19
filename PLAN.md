@@ -591,8 +591,11 @@ or replacing the Fandango watcher as the source of truth for "can I buy?".
   once per poll, then emits one match per movie context.
 - [x] `fandango-watcher movies` CLI subcommand prints the registry for
   pre-flight verification (no network access).
-- [ ] Validate against a live handle (e.g. `@IMAX` or `@TheOdysseyFilm`)
-  with real bearer token; capture rate-limit headroom on a 15 min cadence.
+- [x] Notification anti-spam: bootstrap polls (first `since_id` for a handle)
+  advance the cursor without SMS; matches require ticket-announcement
+  language; one SMS per tweet id (not one per movie context).
+- [ ] Validate against a live handle with real bearer token; capture
+  rate-limit headroom on a 15 min cadence after anti-spam guards.
 
 ### Phase 3 — Notifications
 
@@ -666,7 +669,9 @@ remains the **sole** gate on the final "Complete Reservation" click.
 
 - [x] Write `README.md` with `docker compose` commands, the first-run headed-login flow, config + `.env` setup, and troubleshooting.
 - [x] Document how to re-warm the profile volume after an AMC Stubs logout or session expiry.
-- [ ] **Blocked on local sign-off:** smoke-test the same image on a VPS (VNC for the one-time login) to prove portability — **only after** you have manually confirmed end-to-end behavior on your home PC. **No VPS deploy until then.**
+- [x] Docker operator scripts: `scripts/docker-{cutover,smoke,seed-volumes,volume-backup}.*` + [docs/docker_implementation.md](./docs/docker_implementation.md).
+- [x] CI: `.github/workflows/docker-build.yml` (production image build + optional dev-image pytest).
+- [ ] **Blocked on Docker local sign-off:** run `scripts/docker-cutover.*`, 24h soak on production compose, then smoke-test the same image on a VPS (VNC for one-time login). **No VPS deploy until Docker local sign-off passes.**
 - [x] Record known risks (Fandango markup drift, fraud-detection friction, A-List policy changes on premium formats).
 
 ---

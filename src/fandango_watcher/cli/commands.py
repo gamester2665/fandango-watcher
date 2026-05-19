@@ -350,6 +350,7 @@ def _run_watch(args: argparse.Namespace) -> int:
         screenshot_dir=screenshot_dir,
         stop_event=stop_event,
         healthz_port=healthz_port,
+        healthz_host=settings.healthz_host,
         max_ticks=args.max_ticks,
         open_browser=not args.no_open,
         dashboard_refresh_seconds=args.dashboard_refresh_seconds,

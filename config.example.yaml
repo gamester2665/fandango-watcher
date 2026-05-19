@@ -71,7 +71,7 @@ direct_api:
   chain_code: AMC
   zip_code: "91608"
   timeout_seconds: 30
-  max_dates_per_tick: 90
+  max_dates_per_tick: 28
   stop_on_first_match: true
   alert_unknown_formats: true
 
@@ -293,8 +293,6 @@ social_x:
     - "tickets"
     - "on sale"
     - "presale"
-    - "now available"
-    - "imax"
 
   # OPTIONAL: free-form X handles that aren't tied to a single movie.
   # Most users should leave this empty and define accounts under the
@@ -312,8 +310,9 @@ social_x:
 # first listed Fandango target so you go from "X hint" to "buy" in one tap.
 #
 # Same handle can appear under multiple movies (e.g. `IMAX` under both
-# Odyssey and Dune); the poller dedupes API calls but emits one match per
-# movie context that the tweet hits.
+# Odyssey and Dune); the poller dedupes API calls. Avoid bare `"imax"` in
+# `x_keywords` for shared accounts — it matches nearly every @IMAX tweet.
+# Notifications require ticket-announcement language and dedupe per tweet id.
 # -----------------------------------------------------------------------------
 movies:
   - key: odyssey
@@ -339,7 +338,6 @@ movies:
       - "tickets"
       - "on sale"
       - "presale"
-      - "imax"
       - "70mm"
 
   # Example second movie -- not currently being watched by Fandango (no
@@ -360,5 +358,4 @@ movies:
       - "tickets"
       - "on sale"
       - "presale"
-      - "imax"
       - "70mm"

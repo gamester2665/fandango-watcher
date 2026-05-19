@@ -21,6 +21,10 @@ from .social_x import load_social_x_state
 
 _PT = ZoneInfo("America/Los_Angeles")
 _CITYWALK_THEATER_SLUG = "universal-cinema-amc-at-citywalk-hollywood-aaawx"
+_TWEET_URL_RE = re.compile(
+    r"https?://[^\s<>\"']+",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,12 @@ class DashboardData:
     public_port: int | None = None
     # ``(revision_hex, raw_fingerprint)`` — skip re-hashing when inputs unchanged.
     _revision_cache: tuple[str, str] | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class SxHandleRender:
+    table_row_html: str
+    detail_card_html: str
 
 
 def _latest_artifact_for_target(
@@ -178,6 +188,130 @@ def _relative_ago(
         return f"{secs // 86400}d ago"
     except (ValueError, OSError, TypeError):
         return ""
+
+
+def _fmt_timestamp_html(iso: str | None, *, now: datetime) -> str:
+    """Pacific absolute time + relative parenthetical; returns safe HTML."""
+    if not iso:
+        return "—"
+    pt = _fmt_pt(iso)
+    if pt == str(iso):
+        return html.escape(str(iso))
+    rel = _relative_ago(iso, now=now)
+    pt_esc = html.escape(pt)
+    if rel:
+        return f'{pt_esc} <span class="rel">({html.escape(rel)})</span>'
+    return pt_esc
+
+
+def _linkify_tweet_text(raw: str) -> str:
+    """Escape tweet text and wrap http(s) URLs in anchors."""
+    parts: list[str] = []
+    last = 0
+    for m in _TWEET_URL_RE.finditer(raw):
+        parts.append(html.escape(raw[last : m.start()]))
+        url = m.group(0).rstrip(".,;:!?)\"']")
+        href = html.escape(url, quote=True)
+        label = html.escape(url)
+        parts.append(
+            f'<a class="sx-tweet-link-inline" href="{href}" '
+            f'target="_blank" rel="noopener noreferrer">{label}</a>'
+        )
+        last = m.end()
+    parts.append(html.escape(raw[last:]))
+    return "".join(parts)
+
+
+_SX_STATE_NOT_POLLED = "not_polled"
+_SX_STATE_ERROR = "error"
+_SX_STATE_MISSING_TEXT = "missing_text"
+_SX_STATE_EMPTY_TIMELINE = "empty_timeline"
+_SX_STATE_OK = "ok"
+
+
+def _classify_sx_handle_state(hst: dict[str, Any] | None) -> str:
+    if not hst or not hst.get("last_polled_at"):
+        return _SX_STATE_NOT_POLLED
+    if _as_int(hst.get("consecutive_errors")) > 0 or hst.get("last_error_message"):
+        return _SX_STATE_ERROR
+    tid = hst.get("last_seen_tweet_id")
+    text = hst.get("last_seen_tweet_text")
+    if tid and not (isinstance(text, str) and text.strip()):
+        return _SX_STATE_MISSING_TEXT
+    if not tid:
+        return _SX_STATE_EMPTY_TIMELINE
+    if isinstance(text, str) and text.strip():
+        return _SX_STATE_OK
+    return _SX_STATE_EMPTY_TIMELINE
+
+
+def _sx_empty_message(state: str) -> str:
+    return {
+        _SX_STATE_NOT_POLLED: "Not polled yet — run x-poll or wait for watch.",
+        _SX_STATE_ERROR: "Last poll failed — see errors column or Per-handle details.",
+        _SX_STATE_MISSING_TEXT: (
+            "Tweet text not cached yet — run x-poll or wait for the next watch poll."
+        ),
+        _SX_STATE_EMPTY_TIMELINE: (
+            "No public tweets returned by the X API for this handle."
+        ),
+    }.get(state, "No tweet text available.")
+
+
+def _sx_handle_status_badge(state: str) -> str:
+    if state == _SX_STATE_OK:
+        return ""
+    labels: dict[str, tuple[str, tuple[str, ...]]] = {
+        _SX_STATE_NOT_POLLED: ("Not polled", ("pill-muted",)),
+        _SX_STATE_EMPTY_TIMELINE: ("Empty timeline", ("pill-muted",)),
+        _SX_STATE_MISSING_TEXT: ("Text pending", ("pill-warn",)),
+        _SX_STATE_ERROR: ("Poll error", ("pill-warn",)),
+    }
+    spec = labels.get(state)
+    if not spec:
+        return ""
+    label, variants = spec
+    return render_status_pill(html.escape(label), variants=variants)
+
+
+def _summarize_social_x(
+    handles: dict[str, Any],
+    *,
+    enabled: bool,
+) -> dict[str, int]:
+    out = {"total": 0, "errors": 0, "empty_timeline": 0, "ticket_signals": 0}
+    if not isinstance(handles, dict):
+        return out
+    out["total"] = sum(1 for v in handles.values() if isinstance(v, dict))
+    if not enabled:
+        return out
+    for hst in handles.values():
+        if not isinstance(hst, dict):
+            continue
+        state = _classify_sx_handle_state(hst)
+        if state == _SX_STATE_ERROR:
+            out["errors"] += 1
+        elif state == _SX_STATE_EMPTY_TIMELINE:
+            out["empty_timeline"] += 1
+        analysis = hst.get("last_seen_ticket_analysis")
+        if isinstance(analysis, dict) and analysis.get("announces_tickets"):
+            out["ticket_signals"] += 1
+    return out
+
+
+def _fmt_social_x_ops_summary(summary: dict[str, int], *, enabled: bool) -> str:
+    if not enabled:
+        return "disabled"
+    parts: list[str] = []
+    if summary["errors"]:
+        n = summary["errors"]
+        parts.append(f"{n} error{'s' if n != 1 else ''}")
+    if summary["empty_timeline"]:
+        n = summary["empty_timeline"]
+        parts.append(f"{n} empty")
+    n = summary["ticket_signals"]
+    parts.append(f"{n} ticket signal{'s' if n != 1 else ''}")
+    return " · ".join(parts) if parts else "all clear"
 
 
 def _fmt_duration(seconds: int | float | str | None) -> str:
@@ -736,10 +870,146 @@ def _social_state_for_handle(
     return None
 
 
+def _format_sx_tweet_body_html(
+    tw_text: object,
+    *,
+    empty_message: str,
+) -> str:
+    """Readable tweet body for dashboard tables and cards."""
+    if isinstance(tw_text, str) and tw_text.strip():
+        inner = _linkify_tweet_text(tw_text.strip())
+        return f'<blockquote class="sx-tweet-body">{inner}</blockquote>'
+    return (
+        f'<blockquote class="sx-tweet-body">'
+        f'<em class="sx-no-text">{html.escape(empty_message)}</em>'
+        f"</blockquote>"
+    )
+
+
+def _render_sx_handle_cells(
+    hkey: str,
+    hst: dict[str, Any],
+    *,
+    now: datetime,
+) -> SxHandleRender:
+    h_raw = str(hst.get("handle") or hkey)
+    handle_display = html.escape(h_raw)
+    path_handle = h_raw.lstrip("@")
+    uid = html.escape(str(hst.get("user_id") or "—"))
+    state = _classify_sx_handle_state(hst)
+    badge = _sx_handle_status_badge(state)
+
+    tw_text = hst.get("last_seen_tweet_text")
+    tw_at = hst.get("last_seen_tweet_created_at")
+    tid_raw = hst.get("last_seen_tweet_id")
+    tid_disp = html.escape(str(tid_raw) if tid_raw else "—")
+    ticket_analysis = hst.get("last_seen_ticket_analysis")
+    ce = html.escape(str(hst.get("consecutive_errors") or 0))
+    err = hst.get("last_error_message")
+
+    body = _format_sx_tweet_body_html(
+        tw_text if state == _SX_STATE_OK else None,
+        empty_message=_sx_empty_message(state),
+    )
+    tweet_cell = f'<td class="sx-tweet-read-cell">{body}</td>'
+
+    posted_html = _fmt_timestamp_html(str(tw_at) if tw_at else None, now=now)
+    posted_cell = f'<td><span class="sx-ts">{posted_html}</span></td>'
+
+    polled_html = _fmt_timestamp_html(
+        str(hst.get("last_polled_at") or "") or None,
+        now=now,
+    )
+    polled_cell = f'<td><span class="sx-ts">{polled_html}</span></td>'
+
+    if tid_raw:
+        tweet_href = f"https://x.com/{path_handle}/status/{tid_raw}"
+        href_e = html.escape(tweet_href, quote=True)
+        tid_row = (
+            f'<p class="sx-tweet-idline">'
+            f'<a class="sx-tweet-link" href="{href_e}" target="_blank" rel="noopener">Open on X</a>'
+            f' · id <code class="tweet-snowflake" title="Snowflake id">{tid_disp}</code>'
+            f"</p>"
+        )
+        open_cell = f'<a href="{href_e}" target="_blank" rel="noopener">Open</a>'
+    else:
+        tid_row = '<p class="sx-tweet-idline">No saved tweet yet.</p>'
+        open_cell = "—"
+
+    le_short = "—" if not err else html.escape(str(err).replace("\n", " ")[:100])
+    if err and len(str(err)) > 100:
+        le_short += "…"
+    err_html = (
+        f'<p class="sx-err">Last error: {html.escape(str(err))}</p>' if err else ""
+    )
+
+    analysis_cell = "—"
+    analysis_card = ""
+    announces = False
+    status_slug = "unknown"
+    if isinstance(ticket_analysis, dict):
+        status = str(ticket_analysis.get("status") or "unknown")
+        status_slug = re.sub(r"[^a-z0-9_-]", "", status.lower()) or "unknown"
+        announces = bool(ticket_analysis.get("announces_tickets"))
+        confidence = str(ticket_analysis.get("confidence") or "unknown")
+        reason = str(ticket_analysis.get("reason") or "")
+        phrases = ticket_analysis.get("matched_phrases") or []
+        phrase_text = ", ".join(str(p) for p in phrases if str(p).strip())
+        title_bits = [f"confidence: {confidence}"]
+        if reason:
+            title_bits.append(reason)
+        if phrase_text:
+            title_bits.append(f"matched: {phrase_text}")
+        variants: tuple[str, ...] = ("pill-ok",) if announces else ("pill-muted",)
+        if announces and status == "soon":
+            variants = ("pill-warn",)
+        analysis_cell = render_status_pill(
+            html.escape(status.replace("_", " ")),
+            variants=variants,
+            title_esc=" · ".join(title_bits),
+        )
+        analysis_card = (
+            '<p class="sx-ticket-analysis"><strong>Ticket analysis:</strong> '
+            f"{analysis_cell}</p>"
+        )
+
+    row_classes = ["sx-row"]
+    card_classes = ["sx-card"]
+    if announces:
+        row_classes.append("sx-row-ticket-signal")
+        card_classes.append("sx-row-ticket-signal")
+        row_classes.append(f"sx-status-{status_slug}")
+        card_classes.append(f"sx-status-{status_slug}")
+    if state == _SX_STATE_ERROR:
+        row_classes.append("sx-row-error")
+
+    handle_cell = (
+        f'<td class="sx-handle-cell"><strong>@{handle_display}</strong> {badge}</td>'
+    )
+    row_cls = html.escape(" ".join(row_classes), quote=True)
+    card_cls = html.escape(" ".join(card_classes), quote=True)
+
+    table_row = (
+        f'<tr class="{row_cls}">{handle_cell}{tweet_cell}{posted_cell}'
+        f"<td>{analysis_cell}</td>{polled_cell}<td>{ce}</td>"
+        f"<td>{le_short}</td><td>{open_cell}</td></tr>"
+    )
+    detail_card = (
+        f'<article class="{card_cls}" aria-label="X handle {handle_display}">'
+        f'<h4 class="sx-handle">@{handle_display} {badge}</h4>'
+        f'<p class="sx-meta">user_id <code>{uid}</code> · posted <span class="sx-ts">'
+        f"{posted_html}</span> · polled <span class=\"sx-ts\">{polled_html}</span>"
+        f" · err streak {ce}</p>"
+        f"{tid_row}{analysis_card}{body}{err_html}</article>"
+    )
+    return SxHandleRender(table_row_html=table_row, detail_card_html=detail_card)
+
+
 def _render_movie_tweet_embeds(
     movie: dict[str, Any],
     *,
     social_handles: dict[str, Any],
+    now: datetime,
     max_items: int = 3,
 ) -> str:
     """Embed-style last-tweet previews for the movie's configured X handles."""
@@ -759,17 +1029,27 @@ def _render_movie_tweet_embeds(
         handle_e = html.escape(handle)
         profile_url = f"https://x.com/{handle}"
         if not hst:
+            badge = _sx_handle_status_badge(_SX_STATE_NOT_POLLED)
+            body = _format_sx_tweet_body_html(
+                None,
+                empty_message=_sx_empty_message(_SX_STATE_NOT_POLLED),
+            ).replace('class="sx-tweet-body"', 'class="tweet-body"', 1)
             cards.append(
                 '<article class="tweet-embed tweet-empty-card">'
-                f'<p class="tweet-handle">@{handle_e}</p>'
-                '<p class="tweet-empty">No poll data yet. Run <code>x-poll</code> or wait for <code>watch</code>.</p>'
+                f'<p class="tweet-handle">@{handle_e} {badge}</p>'
+                f"{body}"
                 f'<p class="tweet-actions"><a href="{html.escape(profile_url, quote=True)}" target="_blank" rel="noopener">Open profile</a></p>'
                 "</article>"
             )
             continue
 
-        text_raw = hst.get("last_seen_tweet_text")
-        text = html.escape(str(text_raw).strip()) if isinstance(text_raw, str) and text_raw.strip() else ""
+        state = _classify_sx_handle_state(hst)
+        badge = _sx_handle_status_badge(state)
+        card_classes = ["tweet-embed"]
+        if state != _SX_STATE_OK:
+            card_classes.append("tweet-empty-card")
+
+        text_raw = hst.get("last_seen_tweet_text") if state == _SX_STATE_OK else None
         tid = hst.get("last_seen_tweet_id")
         tw_at = hst.get("last_seen_tweet_created_at")
         polled = hst.get("last_polled_at")
@@ -780,31 +1060,39 @@ def _render_movie_tweet_embeds(
         )
         meta_bits = []
         if tw_at:
-            meta_bits.append(f"posted {html.escape(str(tw_at))}")
+            meta_bits.append(
+                f'posted <span class="sx-ts">{_fmt_timestamp_html(str(tw_at), now=now)}</span>'
+            )
         if polled:
-            meta_bits.append(f"polled {html.escape(str(polled))}")
+            meta_bits.append(
+                f'polled <span class="sx-ts">{_fmt_timestamp_html(str(polled), now=now)}</span>'
+            )
         meta = " · ".join(meta_bits) or "latest saved post"
         analysis = hst.get("last_seen_ticket_analysis")
         analysis_html = ""
         if isinstance(analysis, dict):
             status = str(analysis.get("status") or "unknown").replace("_", " ")
+            status_raw = str(analysis.get("status") or "unknown")
             announces = bool(analysis.get("announces_tickets"))
+            if announces:
+                slug = re.sub(r"[^a-z0-9_-]", "", status_raw.lower()) or "unknown"
+                card_classes.extend(["sx-ticket-signal", f"sx-status-{slug}"])
             variants = ("pill-ok",) if announces else ("pill-muted",)
-            if announces and status == "soon":
+            if announces and status_raw == "soon":
                 variants = ("pill-warn",)
             analysis_html = (
                 '<p class="tweet-analysis">'
                 + render_status_pill(html.escape(status), variants=variants)
                 + "</p>"
             )
-        body = (
-            f'<blockquote class="tweet-body">{text}</blockquote>'
-            if text
-            else '<p class="tweet-empty">No tweet text saved yet.</p>'
-        )
+        body = _format_sx_tweet_body_html(
+            text_raw,
+            empty_message=_sx_empty_message(state),
+        ).replace('class="sx-tweet-body"', 'class="tweet-body"', 1)
+        card_cls = html.escape(" ".join(card_classes), quote=True)
         cards.append(
-            '<article class="tweet-embed">'
-            f'<p class="tweet-handle">@{handle_e}</p>'
+            f'<article class="{card_cls}">'
+            f'<p class="tweet-handle">@{handle_e} {badge}</p>'
             f"{body}"
             f"{analysis_html}"
             f'<p class="tweet-meta">{meta}</p>'
@@ -1035,6 +1323,8 @@ def _render_operator_status_strip(
     last_tick_pt: str,
     now: datetime,
     show_purchase: bool,
+    social_x_handles: dict[str, Any] | None = None,
+    social_x_enabled: bool = False,
 ) -> str:
     target_dicts = [x for x in targets if isinstance(x, dict)]
     threshold = _stale_threshold_seconds(fandango_poll)
@@ -1044,7 +1334,10 @@ def _render_operator_status_strip(
         if not isinstance(st, dict):
             st = {}
         counts[_target_filter_tier(st, now=now, stale_threshold_sec=threshold)] += 1
-    attention = counts["error"] + counts["stale"]
+    handles = social_x_handles if isinstance(social_x_handles, dict) else {}
+    sx_summary = _summarize_social_x(handles, enabled=social_x_enabled)
+    sx_line = html.escape(_fmt_social_x_ops_summary(sx_summary, enabled=social_x_enabled))
+    attention = counts["error"] + counts["stale"] + sx_summary["errors"]
     purchase_label = purchase_mode if purchase_enabled else f"{purchase_mode} (disabled)"
     purchase_href = "#purchase" if show_purchase else "#runtime"
     return f"""
@@ -1053,6 +1346,7 @@ def _render_operator_status_strip(
   <a href="#crawl"><strong>Fandango</strong><span>{html.escape(str(counts['stale']))} stale · {html.escape(str(counts['error']))} errors</span></a>
   <a href="#crawl" data-filter-shortcut="signal"><strong>Signals</strong><span>{html.escape(str(counts['signal']))} targets</span></a>
   <a href="{purchase_href}"><strong>Purchase</strong><span><code>{html.escape(purchase_label)}</code></span></a>
+  <a href="#x"><strong>X</strong><span>{sx_line}</span></a>
   <span><strong>Last tick</strong><span>{html.escape(last_tick_pt or "—")}</span></span>
 </section>
 """
@@ -2280,13 +2574,19 @@ def dashboard_css() -> str:
       border: 0;
     }
     .sx-snapshot { margin: 0.35rem 0 0.85rem; }
-    .sx-tweet-preview-cell {
-      max-width: 36ch;
-      font-size: 0.82rem;
+    .sx-tweet-preview-cell,
+    .sx-tweet-read-cell {
+      min-width: 18rem;
+      max-width: 42rem;
+      font-size: 0.86rem;
       color: var(--text);
       line-height: 1.45;
       vertical-align: top;
       word-break: break-word;
+    }
+    .sx-tweet-read-cell .sx-tweet-body {
+      margin: 0;
+      font-size: 0.86rem;
     }
     .sx-preview-missing { color: var(--muted); }
     .sx-cards {
@@ -2331,6 +2631,41 @@ def dashboard_css() -> str:
       word-break: break-word;
     }
     .sx-tweet-body em.sx-no-text { color: var(--muted); font-style: italic; }
+    .sx-tweet-body a.sx-tweet-link-inline,
+    .tweet-body a.sx-tweet-link-inline {
+      color: var(--accent);
+      text-decoration: underline;
+      text-decoration-color: rgba(0, 122, 255, 0.35);
+      word-break: break-all;
+    }
+    .sx-ts { font-size: 0.82rem; color: var(--text); }
+    .sx-ts .rel { color: var(--muted); font-size: 0.78rem; font-weight: 450; }
+    .sx-handle-cell {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      align-items: center;
+      vertical-align: top;
+    }
+    tr.sx-row-ticket-signal {
+      background: rgba(52, 199, 89, 0.06);
+    }
+    tr.sx-row-ticket-signal.sx-status-soon {
+      background: rgba(255, 159, 10, 0.08);
+    }
+    tr.sx-row-error {
+      background: rgba(215, 0, 21, 0.04);
+    }
+    article.sx-card.sx-row-ticket-signal,
+    article.tweet-embed.sx-ticket-signal {
+      border-color: rgba(52, 199, 89, 0.35);
+      box-shadow: inset 3px 0 0 var(--ok);
+    }
+    article.sx-card.sx-status-soon,
+    article.tweet-embed.sx-status-soon {
+      border-color: rgba(255, 159, 10, 0.35);
+      box-shadow: inset 3px 0 0 var(--warn);
+    }
     .sx-err { margin: 0.5rem 0 0 0; }
     .inline-fold {
       margin-top: 0.65rem;
@@ -2987,6 +3322,8 @@ def _render_triage_panel(
     runtime: dict[str, Any],
     fandango_poll: dict[str, Any],
     now: datetime,
+    social_x_handles: dict[str, Any] | None = None,
+    social_x_enabled: bool = False,
 ) -> str:
     n_targets = len(targets)
     n_shots = sum(
@@ -3049,6 +3386,21 @@ def _render_triage_panel(
             "Next: inspect latest errors, browser login/session health, and direct API fallback state."
         )
 
+    sx_handles = social_x_handles if isinstance(social_x_handles, dict) else {}
+    sx_summary = _summarize_social_x(sx_handles, enabled=social_x_enabled)
+    if social_x_enabled and sx_summary["ticket_signals"] > 0:
+        n = sx_summary["ticket_signals"]
+        attention.append(
+            f"<strong>{n}</strong> X handle(s) report ticket availability language — "
+            '<a href="#x">review latest tweets</a> and confirm on Fandango before acting.'
+        )
+    if social_x_enabled and sx_summary["errors"] > 0:
+        n = sx_summary["errors"]
+        attention.append(
+            f"<strong>{n}</strong> X handle(s) have poll errors — "
+            '<a href="#x">inspect the X poller panel</a>.'
+        )
+
     att_html = (
         "<ul class=\"attention-list\">"
         + "".join(f"<li>{a}</li>" for a in attention)
@@ -3063,6 +3415,13 @@ def _render_triage_panel(
         stale_threshold_sec=thr,
     )
 
+    sx_enabled_label = "enabled" if social_x_enabled else "disabled"
+    sx_metrics = (
+        "<div><strong>X poller</strong>"
+        f"<span>{html.escape(sx_enabled_label)} · "
+        f"{sx_summary['ticket_signals']} ticket signal(s) · "
+        f"{sx_summary['errors']} error(s)</span></div>"
+    )
     metrics_html = "".join(
         (
             "<div><strong>Targets</strong>"
@@ -3076,6 +3435,7 @@ def _render_triage_panel(
             "</span></div>",
             "<div><strong>Registry</strong>"
             f"<span>{n_movies} movies · {watching} watching/idle</span></div>",
+            sx_metrics,
         )
     )
 
@@ -3446,6 +3806,10 @@ def render_index_html(
     social_state_path = html.escape(
         str(social_poll.get("state_path") or paths_meta.get("social_x_state_path") or "state/social_x.json")
     )
+    sx_handles = social_x.get("handles") or {}
+    if not isinstance(sx_handles, dict):
+        sx_handles = {}
+    social_x_enabled = bool(social_poll.get("enabled"))
 
     no_target_history = False
     if targets:
@@ -3467,6 +3831,8 @@ def render_index_html(
         runtime=runtime if isinstance(runtime, dict) else {},
         fandango_poll=fandango_poll,
         now=now,
+        social_x_handles=sx_handles,
+        social_x_enabled=social_x_enabled,
     )
     target_count = sum(1 for x in targets if isinstance(x, dict))
     operator_status = _render_operator_status_strip(
@@ -3477,12 +3843,11 @@ def render_index_html(
         last_tick_pt=str(healthz.get("last_tick_at_pt") or "—"),
         now=now,
         show_purchase=show_ph,
+        social_x_handles=sx_handles,
+        social_x_enabled=social_x_enabled,
     )
     target_controls = _render_target_controls(target_count)
     movie_add_panel = _render_movie_add_panel(config_path)
-    sx_handles = social_x.get("handles") or {}
-    if not isinstance(sx_handles, dict):
-        sx_handles = {}
 
     assigned: set[str] = set()
     crawl_blocks: list[str] = []
@@ -3502,7 +3867,7 @@ def render_index_html(
             _fmt_release_date(_release_date_for_movie(m, target_by_name=target_by_name))
         )
         distributor = html.escape(_first_nonempty_str(m.get("distributor")) or "Distributor not set")
-        tweet_embeds = _render_movie_tweet_embeds(m, social_handles=sx_handles)
+        tweet_embeds = _render_movie_tweet_embeds(m, social_handles=sx_handles, now=now)
         subcards: list[str] = []
         for tn in ft:
             tname = str(tn)
@@ -3540,7 +3905,7 @@ def render_index_html(
         rest_html = "".join(
             _render_target_card(x, fandango_poll=fandango_poll, now=now) for x in rest
         )
-        rest_tweets = _render_movie_tweet_embeds({"x_handles": []}, social_handles=sx_handles)
+        rest_tweets = _render_movie_tweet_embeds({"x_handles": []}, social_handles=sx_handles, now=now)
         crawl_blocks.append(
             f'<section class="movie-group" id="crawl-ungrouped">'
             f'{_poster_html(None, "Other targets", css_class="movie-group-poster")}'
@@ -3594,114 +3959,17 @@ def render_index_html(
         if not isinstance(hst, dict):
             continue
         n_social += 1
-        h_raw = str(hst.get("handle") or hkey)
-        handle_display = html.escape(h_raw)
-        uid = html.escape(str(hst.get("user_id") or "—"))
-        polled = html.escape(str(hst.get("last_polled_at") or "—"))
-        tid_raw = hst.get("last_seen_tweet_id")
-        tid_disp = html.escape(str(tid_raw) if tid_raw else "—")
-        path_handle = h_raw.lstrip("@")
-        tw_text = hst.get("last_seen_tweet_text")
-        tw_at = hst.get("last_seen_tweet_created_at")
-        ticket_analysis = hst.get("last_seen_ticket_analysis")
-        ce = html.escape(str(hst.get("consecutive_errors") or 0))
-        err = hst.get("last_error_message")
-        err_html = (
-            f'<p class="sx-err">Last error: {html.escape(str(err))}</p>'
-            if err
-            else ""
-        )
-        if isinstance(tw_text, str) and tw_text.strip():
-            body = html.escape(tw_text)
-        else:
-            body = (
-                "<em class=\"sx-no-text\">No tweet text in state yet. The poller will save "
-                "the latest tweet body after new posts, or <strong>backfill by id</strong> on the "
-                "next run when the timeline is empty. Run <code>x-poll</code> or wait for "
-                "<code>watch</code>.</em>"
-            )
-        t_flat = " ".join(str(tw_text).split()) if isinstance(tw_text, str) else ""
-        if t_flat:
-            t_prev = t_flat[:220] + ("…" if len(t_flat) > 220 else "")
-            preview_cell = html.escape(t_prev)
-        else:
-            preview_cell = (
-                "<span class=\"sx-preview-missing\" "
-                "title=\"Text arrives after the next X poll fetches the tweet body.\">"
-                "—</span>"
-            )
-        at_line = (
-            f'<p class="sx-tweet-when">Post time (from API): {html.escape(str(tw_at))}</p>'
-            if tw_at
-            else ""
-        )
-        if tid_raw:
-            tweet_href = f"https://x.com/{path_handle}/status/{tid_raw}"
-            href_e = html.escape(tweet_href, quote=True)
-            tid_row = (
-                f'<p class="sx-tweet-idline">Tweet id <code class="tweet-snowflake" title="Snowflake id">{tid_disp}</code> '
-                f'· <a class="sx-tweet-link" href="{href_e}" target="_blank" rel="noopener">Open on X</a></p>'
-            )
-            open_cell = f'<a href="{href_e}" target="_blank" rel="noopener">Open</a>'
-        else:
-            tid_row = f'<p class="sx-tweet-idline">Tweet id: {tid_disp}</p>'
-            open_cell = "—"
-        le_short = "—" if not err else html.escape(str(err).replace("\n", " ")[:100])
-        if err and len(str(err)) > 100:
-            le_short += "…"
-        analysis_cell = "—"
-        analysis_card = ""
-        if isinstance(ticket_analysis, dict):
-            status = str(ticket_analysis.get("status") or "unknown")
-            announces = bool(ticket_analysis.get("announces_tickets"))
-            confidence = str(ticket_analysis.get("confidence") or "unknown")
-            reason = str(ticket_analysis.get("reason") or "")
-            phrases = ticket_analysis.get("matched_phrases") or []
-            phrase_text = ", ".join(str(p) for p in phrases if str(p).strip())
-            title_bits = [f"confidence: {confidence}"]
-            if reason:
-                title_bits.append(reason)
-            if phrase_text:
-                title_bits.append(f"matched: {phrase_text}")
-            variants = ("pill-ok",) if announces else ("pill-muted",)
-            if announces and status == "soon":
-                variants = ("pill-warn",)
-            analysis_cell = render_status_pill(
-                html.escape(status.replace("_", " ")),
-                variants=variants,
-                title_esc=" · ".join(title_bits),
-            )
-            analysis_card = (
-                '<p class="sx-ticket-analysis"><strong>Ticket analysis:</strong> '
-                f"{analysis_cell}</p>"
-            )
-        sx_table_rows.append(
-            f"<tr><td><strong>@{handle_display}</strong></td><td><code>{uid}</code></td>"
-            f"<td><code>{polled}</code></td><td><code>{tid_disp}</code></td>"
-            f'<td class="sx-tweet-preview-cell">{preview_cell}</td>'
-            f"<td>{analysis_cell}</td><td>{ce}</td><td>{le_short}</td><td>{open_cell}</td></tr>"
-        )
-
-        sx_cards.append(
-            f'<article class="sx-card" aria-label="X handle {handle_display}">'
-            f'<h4 class="sx-handle">@{handle_display}</h4>'
-            f'<p class="sx-meta">user_id <code>{uid}</code> · polled <code>{polled}</code> · err streak {ce}</p>'
-            f"{tid_row}"
-            f"{at_line}"
-            f"{analysis_card}"
-            f'<blockquote class="sx-tweet-body">{body}</blockquote>'
-            f"{err_html}"
-            f"</article>"
-        )
+        rendered = _render_sx_handle_cells(hkey, hst, now=now)
+        sx_table_rows.append(rendered.table_row_html)
+        sx_cards.append(rendered.detail_card_html)
     thead = "".join(
         f'<th scope="col">{html.escape(col)}</th>'
         for col in (
             "Handle",
-            "user_id",
-            "last_polled_at",
-            "last_seen_tweet_id",
-            "tweet text (preview)",
+            "Latest tweet",
+            "Posted",
             "ticket analysis",
+            "last_polled_at",
             "errors",
             "last_error",
             "open",
@@ -3712,10 +3980,10 @@ def render_index_html(
             thead_row=thead,
             tbody_rows_html="".join(sx_table_rows),
             table_classes=("data-table",),
-            caption="Per-handle poller state and last tweet text preview",
+            caption="Latest tweet text per monitored X handle",
             caption_class="visually-hidden",
             wrapper_class="table-wrap sx-snapshot",
-            outer_prefix='<div role="region" aria-label="X handles, tweet text snapshot">',
+            outer_prefix='<div role="region" aria-label="X handles and latest tweet text">',
             outer_suffix="</div>",
         )
         if sx_table_rows
@@ -3735,8 +4003,10 @@ def render_index_html(
         fetches up to {social_max_results} tweets per handle when needed.
       </p>
       <p class="hint">
-        Compact poller state first. Per-handle tweet bodies remain available below for deeper review.
-        Use <code>x-poll</code> or <code>x-poll --reset</code> to refresh <code>{social_state_path}</code>.
+        Latest tweet bodies are shown below (full text, not just ids). Technical ids stay in
+        <strong>Per-handle details</strong> and on the Open on X link.
+        Use <code>x-poll</code> or wait for <code>watch</code> to refresh
+        <code>{social_state_path}</code>.
       </p>
       {sx_table_html}
       {sx_cards_html}

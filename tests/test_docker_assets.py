@@ -24,6 +24,23 @@ COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
 DOCKERIGNORE_PATH = REPO_ROOT / ".dockerignore"
 GITIGNORE_PATH = REPO_ROOT / ".gitignore"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
+DOCKER_CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "docker-build.yml"
+COMPOSE_VPS_PATH = REPO_ROOT / "docker-compose.vps.yml"
+
+DOCKER_OPERATOR_SCRIPTS = (
+    "scripts/docker-smoke.sh",
+    "scripts/docker-smoke.ps1",
+    "scripts/docker-cutover.sh",
+    "scripts/docker-cutover.ps1",
+    "scripts/docker-seed-volumes.sh",
+    "scripts/docker-seed-volumes.ps1",
+    "scripts/docker-volume-backup.sh",
+    "scripts/docker-volume-backup.ps1",
+    "scripts/docker-common.sh",
+    "scripts/docker-common.ps1",
+    "scripts/vps-deploy.sh",
+    "scripts/vps-pull-and-restart.sh",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +167,38 @@ class TestCompose:
         assert "DISPLAY" in joined
 
 
+@pytest.fixture(scope="module")
+def compose_vps() -> dict[str, object]:
+    raw = COMPOSE_VPS_PATH.read_text(encoding="utf-8")
+    data = yaml.safe_load(raw)
+    assert isinstance(data, dict)
+    return data
+
+
+class TestComposeVps:
+    def test_vps_overlay_binds_loopback_8787(
+        self, compose_vps: dict[str, object]
+    ) -> None:
+        watcher = compose_vps["services"]["watcher"]  # type: ignore[index]
+        ports = watcher["ports"]
+        assert any(p.startswith("127.0.0.1:8787:") for p in ports)
+
+    def test_vps_overlay_uses_production_env_file(
+        self, compose_vps: dict[str, object]
+    ) -> None:
+        watcher = compose_vps["services"]["watcher"]  # type: ignore[index]
+        env_files = watcher["env_file"]
+        assert any(
+            (isinstance(e, dict) and e.get("path") == ".env.production")
+            or e == ".env.production"
+            for e in env_files
+        )
+
+    def test_vps_watch_command_no_open(self, compose_vps: dict[str, object]) -> None:
+        watcher = compose_vps["services"]["watcher"]  # type: ignore[index]
+        assert watcher["command"] == ["watch", "--no-open"]
+
+
 # ---------------------------------------------------------------------------
 # .dockerignore and .gitignore
 # ---------------------------------------------------------------------------
@@ -172,3 +221,44 @@ class TestIgnoreFiles:
             ".venv/",
         ):
             assert pattern in content, f".gitignore missing {pattern!r}"
+
+
+# ---------------------------------------------------------------------------
+# Docker operator scripts and CI
+# ---------------------------------------------------------------------------
+
+
+class TestDockerOperatorScripts:
+    def test_operator_scripts_exist(self) -> None:
+        for path in DOCKER_OPERATOR_SCRIPTS:
+            assert (REPO_ROOT / path).exists(), f"missing {path}"
+
+    def test_docker_smoke_uses_compose_not_host_uv(self) -> None:
+        for path in ("scripts/docker-smoke.sh", "scripts/docker-smoke.ps1"):
+            content = (REPO_ROOT / path).read_text(encoding="utf-8")
+            assert "docker compose" in content
+            assert "uv run fandango-watcher" not in content
+
+    def test_docker_smoke_sms_is_opt_in(self) -> None:
+        for path in ("scripts/docker-smoke.sh", "scripts/docker-smoke.ps1"):
+            content = (REPO_ROOT / path).read_text(encoding="utf-8")
+            assert "test-notify" in content
+            assert "SMOKE_NOTIFY" in content or "NotifySmoke" in content
+
+    def test_seed_and_backup_scripts_reference_named_volumes(self) -> None:
+        seed = (REPO_ROOT / "scripts/docker-seed-volumes.sh").read_text(encoding="utf-8")
+        backup = (REPO_ROOT / "scripts/docker-volume-backup.sh").read_text(
+            encoding="utf-8"
+        )
+        assert "fandango_state" in seed
+        assert "fandango_profile" in seed
+        assert "fandango_state" in backup
+        assert "backups/docker-volumes" in backup
+
+    def test_docker_ci_workflow_exists_and_is_secret_free(self) -> None:
+        assert DOCKER_CI_WORKFLOW.exists(), "missing .github/workflows/docker-build.yml"
+        content = DOCKER_CI_WORKFLOW.read_text(encoding="utf-8")
+        assert "docker compose build watcher" in content
+        forbidden = ("TWILIO_", "X_BEARER_TOKEN", ".env", "test-notify", "api-drift")
+        for token in forbidden:
+            assert token not in content, f"docker-build.yml must not reference {token!r}"

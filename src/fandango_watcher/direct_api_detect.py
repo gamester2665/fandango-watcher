@@ -245,6 +245,7 @@ def detect_target_direct_api(
     cfg: WatcherConfig,
     *,
     client: FandangoApiClient | None = None,
+    calendar_dates: list[str] | None = None,
 ) -> DirectApiDetectionResult:
     owns_client = client is None
     api = client or FandangoApiClient(
@@ -254,8 +255,8 @@ def detect_target_direct_api(
         timeout=cfg.direct_api.timeout_seconds,
     )
     try:
-        calendar_dates = api.calendar_dates()
-        scan_dates = calendar_dates[: cfg.direct_api.max_dates_per_tick]
+        dates = calendar_dates if calendar_dates is not None else api.calendar_dates()
+        scan_dates = dates[: cfg.direct_api.max_dates_per_tick]
         inspected_dates: list[str] = []
         meta = DirectApiDetectionMeta()
         movie_id, movie_title = _movie_matchers(target, cfg)

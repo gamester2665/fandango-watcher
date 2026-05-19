@@ -38,6 +38,7 @@ from .artifacts import prune_artifact_trees
 from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig, plain_secret
 from .dashboard import DashboardData, DashboardPaths
 from .direct_api_detect import DirectApiDetectionMeta, detect_target_direct_api
+from .fandango_api import FandangoApiClient
 from .fandango_api import FandangoApiError
 from .healthz import HealthzContext, Heartbeat, start_healthz_server
 from .models import ParsedPageData
@@ -437,7 +438,17 @@ def _emit_social_x_matches(
         return []
     target_by_name = {t.name: t for t in cfg.targets}
     results: list[ChannelResult] = []
+    notified_tweet_ids: set[str] = set()
     for m in matches:
+        if m.tweet_id in notified_tweet_ids:
+            logger.debug(
+                "skipping duplicate social_x notify for tweet %s (handle=@%s label=%s)",
+                m.tweet_id,
+                m.handle,
+                m.label,
+            )
+            continue
+        notified_tweet_ids.add(m.tweet_id)
         url = (
             target_by_name[m.target_name].url
             if m.target_name and m.target_name in target_by_name
@@ -747,23 +758,162 @@ def run_watch(
                 )
 
             tick_had_successful_crawl = False
-            for target in cfg.targets:
-                if local_stop.is_set():
-                    break
-                prev = target_states[target.name]
-                direct_meta: DirectApiDetectionMeta | None = None
-                if use_direct_api:
-                    try:
-                        direct_result = detect_target_direct_api(target, cfg)
-                        parsed = direct_result.parsed
-                        direct_meta = direct_result.meta
-                        tick_had_successful_crawl = True
-                    except Exception as e:  # noqa: BLE001
-                        if not cfg.direct_api.fallback_to_browser:
+            direct_api_client: FandangoApiClient | None = None
+            shared_calendar_dates: list[str] | None = None
+            if use_direct_api:
+                direct_api_client = FandangoApiClient(
+                    base_url=cfg.direct_api.base_url,
+                    theater_id=cfg.direct_api.theater_id,
+                    chain_code=cfg.direct_api.chain_code,
+                    timeout=cfg.direct_api.timeout_seconds,
+                )
+                try:
+                    shared_calendar_dates = direct_api_client.calendar_dates()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "direct API calendar fetch failed; per-target browser fallback: %s",
+                        e,
+                    )
+
+            try:
+                for target in cfg.targets:
+                    if local_stop.is_set():
+                        break
+                    prev = target_states[target.name]
+                    direct_meta: DirectApiDetectionMeta | None = None
+                    if use_direct_api:
+                        try:
+                            direct_result = detect_target_direct_api(
+                                target,
+                                cfg,
+                                client=direct_api_client,
+                                calendar_dates=shared_calendar_dates,
+                            )
+                            parsed = direct_result.parsed
+                            direct_meta = direct_result.meta
+                            tick_had_successful_crawl = True
+                        except Exception as e:  # noqa: BLE001
+                            if not cfg.direct_api.fallback_to_browser:
+                                with hb.mutex:
+                                    hb.total_errors += 1
+                                logger.exception(
+                                    "direct API detection failed target=%s url=%s",
+                                    target.name,
+                                    target.url,
+                                )
+                                err_result = record_error(
+                                    prev,
+                                    e,
+                                    error_streak_threshold=ERROR_STREAK_THRESHOLD,
+                                )
+                                if isinstance(e, FandangoApiError) and err_result.state.consecutive_errors >= ERROR_STREAK_THRESHOLD:
+                                    err_result.events.append(Event.DIRECT_API_FAILURE_STREAK)
+                                target_states[target.name] = err_result.state
+                                save_target_state(state_dir, err_result.state)
+                                _emit_events(
+                                    notify_impl,
+                                    result=err_result,
+                                    cfg=cfg,
+                                    target_name=target.name,
+                                    target_url=target.url,
+                                    parsed=None,
+                                    error=e,
+                                )
+                                continue
+                            logger.warning(
+                                "direct API failed for target=%s; falling back to browser: %s",
+                                target.name,
+                                e,
+                            )
+                            direct_meta = DirectApiDetectionMeta(
+                                status="fallback",
+                                used_direct_api=False,
+                                used_browser_fallback=True,
+                                drift_warning=f"{type(e).__name__}: {e}",
+                            )
+                            try:
+                                parsed = crawl_target(
+                                    target,
+                                    browser_cfg=cfg.browser,
+                                    citywalk_anchor=cfg.theater.fandango_theater_anchor,
+                                    screenshot_dir=screenshot_dir,
+                                )
+                                tick_had_successful_crawl = True
+                            except Exception as browser_error:  # noqa: BLE001
+                                with hb.mutex:
+                                    hb.total_errors += 1
+                                logger.exception(
+                                    "browser fallback failed target=%s url=%s",
+                                    target.name,
+                                    target.url,
+                                )
+                                err_result = record_error(
+                                    prev,
+                                    browser_error,
+                                    error_streak_threshold=ERROR_STREAK_THRESHOLD,
+                                )
+                                target_states[target.name] = _apply_direct_api_meta(
+                                    err_result.state,
+                                    direct_meta,
+                                    fallback=True,
+                                )
+                                save_target_state(state_dir, target_states[target.name])
+                                _emit_events(
+                                    notify_impl,
+                                    result=err_result,
+                                    cfg=cfg,
+                                    target_name=target.name,
+                                    target_url=target.url,
+                                    parsed=None,
+                                    error=browser_error,
+                                )
+                                continue
+                    elif use_shared_playwright:
+                        raw_out = tick_batch.get(target.name)
+                        assert raw_out is not None
+                        if isinstance(raw_out, BaseException):
+                            crawl_error = raw_out
                             with hb.mutex:
                                 hb.total_errors += 1
                             logger.exception(
-                                "direct API detection failed target=%s url=%s",
+                                "crawl failed target=%s url=%s",
+                                target.name,
+                                target.url,
+                            )
+                            err_result = record_error(
+                                prev,
+                                crawl_error,
+                                error_streak_threshold=ERROR_STREAK_THRESHOLD,
+                            )
+                            target_states[target.name] = err_result.state
+                            save_target_state(state_dir, err_result.state)
+                            _emit_events(
+                                notify_impl,
+                                result=err_result,
+                                cfg=cfg,
+                                target_name=target.name,
+                                target_url=target.url,
+                                parsed=None,
+                                error=crawl_error,
+                            )
+                            continue
+                        parsed = raw_out
+                        tick_had_successful_crawl = True
+                    else:
+                        assert crawl_impl is not None
+                        try:
+                            parsed = crawl_impl(
+                                target,
+                                browser_cfg=cfg.browser,
+                                citywalk_anchor=cfg.theater.fandango_theater_anchor,
+                                screenshot_dir=screenshot_dir,
+                            )
+                            tick_had_successful_crawl = True
+                        except Exception as e:  # noqa: BLE001
+                            with hb.mutex:
+                                hb.total_errors += 1
+                            logger.exception(
+                                "crawl failed target=%s url=%s",
                                 target.name,
                                 target.url,
                             )
@@ -772,8 +922,6 @@ def run_watch(
                                 e,
                                 error_streak_threshold=ERROR_STREAK_THRESHOLD,
                             )
-                            if isinstance(e, FandangoApiError) and err_result.state.consecutive_errors >= ERROR_STREAK_THRESHOLD:
-                                err_result.events.append(Event.DIRECT_API_FAILURE_STREAK)
                             target_states[target.name] = err_result.state
                             save_target_state(state_dir, err_result.state)
                             _emit_events(
@@ -786,203 +934,92 @@ def run_watch(
                                 error=e,
                             )
                             continue
-                        logger.warning(
-                            "direct API failed for target=%s; falling back to browser",
-                            target.name,
-                            exc_info=True,
+
+                    ok_result = transition(prev, parsed)
+                    if (
+                        direct_meta is not None
+                        and direct_meta.unknown_formats
+                        and cfg.direct_api.alert_unknown_formats
+                    ):
+                        ok_result.events.append(Event.DIRECT_API_UNKNOWN_FORMATS)
+                    ok_state = _apply_direct_api_meta(ok_result.state, direct_meta)
+                    if (
+                        direct_meta is not None
+                        and direct_meta.used_browser_fallback
+                        and ok_state.direct_api_fallback_count >= ERROR_STREAK_THRESHOLD
+                    ):
+                        ok_result.events.append(Event.DIRECT_API_FAILURE_STREAK)
+                    target_states[target.name] = ok_state
+                    save_target_state(state_dir, ok_state)
+                    _emit_events(
+                        notify_impl,
+                        result=ok_result,
+                        cfg=cfg,
+                        target_name=target.name,
+                        target_url=target.url,
+                        parsed=parsed,
+                        error=None,
+                    )
+
+                    if (
+                        Event.RELEASE_TRANSITION_BAD_TO_GOOD in ok_result.events
+                        and cfg.purchase.enabled
+                        and cfg.purchase.mode in ("full_auto", "hold_and_confirm")
+                    ):
+                        buy_plan = plan_purchase(
+                            parsed,
+                            target_name=target.name,
+                            purchase_cfg=cfg.purchase,
                         )
-                        direct_meta = DirectApiDetectionMeta(
-                            status="fallback",
-                            used_direct_api=False,
-                            used_browser_fallback=True,
-                            drift_warning=f"{type(e).__name__}: {e}",
-                        )
-                        try:
-                            parsed = crawl_target(
-                                target,
-                                browser_cfg=cfg.browser,
-                                citywalk_anchor=cfg.theater.fandango_theater_anchor,
-                                screenshot_dir=screenshot_dir,
+                        if buy_plan is not None:
+                            art_root = (
+                                purchase_artifacts_dir
+                                if purchase_artifacts_dir is not None
+                                else Path(cfg.screenshots.per_purchase_dir)
                             )
-                            tick_had_successful_crawl = True
-                        except Exception as browser_error:  # noqa: BLE001
-                            with hb.mutex:
-                                hb.total_errors += 1
-                            logger.exception(
-                                "browser fallback failed target=%s url=%s",
-                                target.name,
-                                target.url,
-                            )
-                            err_result = record_error(
-                                prev,
-                                browser_error,
-                                error_streak_threshold=ERROR_STREAK_THRESHOLD,
-                            )
-                            target_states[target.name] = _apply_direct_api_meta(
-                                err_result.state,
-                                direct_meta,
-                                fallback=True,
-                            )
-                            save_target_state(state_dir, target_states[target.name])
-                            _emit_events(
+                            try:
+                                attempt = purchase_impl(
+                                    buy_plan,
+                                    browser_cfg=cfg.browser,
+                                    purchase_cfg=cfg.purchase,
+                                    per_purchase_dir=art_root,
+                                    hold_for_confirm=(
+                                        cfg.purchase.mode == "hold_and_confirm"
+                                    ),
+                                    settings=settings,
+                                    agent_fallback_cfg=cfg.agent_fallback,
+                                )
+                            except Exception as e:  # noqa: BLE001
+                                logger.exception(
+                                    "purchase_fn raised target=%s", target.name
+                                )
+                                attempt = PurchaseAttempt(
+                                    plan=buy_plan,
+                                    started_at=datetime.now(UTC),
+                                    finished_at=datetime.now(UTC),
+                                    outcome=PurchaseOutcome.FAILED_SCRIPTED,
+                                    error_message=f"{type(e).__name__}: {e}",
+                                )
+                            _emit_purchase_outcome(
                                 notify_impl,
-                                result=err_result,
-                                cfg=cfg,
+                                cfg,
+                                attempt=attempt,
                                 target_name=target.name,
                                 target_url=target.url,
-                                parsed=None,
-                                error=browser_error,
                             )
-                            continue
-                elif use_shared_playwright:
-                    raw_out = tick_batch.get(target.name)
-                    assert raw_out is not None
-                    if isinstance(raw_out, BaseException):
-                        crawl_error = raw_out
-                        with hb.mutex:
-                            hb.total_errors += 1
-                        logger.exception(
-                            "crawl failed target=%s url=%s",
-                            target.name,
-                            target.url,
-                        )
-                        err_result = record_error(
-                            prev,
-                            crawl_error,
-                            error_streak_threshold=ERROR_STREAK_THRESHOLD,
-                        )
-                        target_states[target.name] = err_result.state
-                        save_target_state(state_dir, err_result.state)
-                        _emit_events(
-                            notify_impl,
-                            result=err_result,
-                            cfg=cfg,
-                            target_name=target.name,
-                            target_url=target.url,
-                            parsed=None,
-                            error=crawl_error,
-                        )
-                        continue
-                    parsed = raw_out
-                    tick_had_successful_crawl = True
-                else:
-                    assert crawl_impl is not None
-                    try:
-                        parsed = crawl_impl(
-                            target,
-                            browser_cfg=cfg.browser,
-                            citywalk_anchor=cfg.theater.fandango_theater_anchor,
-                            screenshot_dir=screenshot_dir,
-                        )
-                        tick_had_successful_crawl = True
-                    except Exception as e:  # noqa: BLE001
-                        with hb.mutex:
-                            hb.total_errors += 1
-                        logger.exception(
-                            "crawl failed target=%s url=%s",
-                            target.name,
-                            target.url,
-                        )
-                        err_result = record_error(
-                            prev,
-                            e,
-                            error_streak_threshold=ERROR_STREAK_THRESHOLD,
-                        )
-                        target_states[target.name] = err_result.state
-                        save_target_state(state_dir, err_result.state)
-                        _emit_events(
-                            notify_impl,
-                            result=err_result,
-                            cfg=cfg,
-                            target_name=target.name,
-                            target_url=target.url,
-                            parsed=None,
-                            error=e,
-                        )
-                        continue
-
-                ok_result = transition(prev, parsed)
-                if (
-                    direct_meta is not None
-                    and direct_meta.unknown_formats
-                    and cfg.direct_api.alert_unknown_formats
-                ):
-                    ok_result.events.append(Event.DIRECT_API_UNKNOWN_FORMATS)
-                ok_state = _apply_direct_api_meta(ok_result.state, direct_meta)
-                if (
-                    direct_meta is not None
-                    and direct_meta.used_browser_fallback
-                    and ok_state.direct_api_fallback_count >= ERROR_STREAK_THRESHOLD
-                ):
-                    ok_result.events.append(Event.DIRECT_API_FAILURE_STREAK)
-                target_states[target.name] = ok_state
-                save_target_state(state_dir, ok_state)
-                _emit_events(
-                    notify_impl,
-                    result=ok_result,
-                    cfg=cfg,
-                    target_name=target.name,
-                    target_url=target.url,
-                    parsed=parsed,
-                    error=None,
-                )
-
-                if (
-                    Event.RELEASE_TRANSITION_BAD_TO_GOOD in ok_result.events
-                    and cfg.purchase.enabled
-                    and cfg.purchase.mode in ("full_auto", "hold_and_confirm")
-                ):
-                    buy_plan = plan_purchase(
-                        parsed,
-                        target_name=target.name,
-                        purchase_cfg=cfg.purchase,
-                    )
-                    if buy_plan is not None:
-                        art_root = (
-                            purchase_artifacts_dir
-                            if purchase_artifacts_dir is not None
-                            else Path(cfg.screenshots.per_purchase_dir)
-                        )
-                        try:
-                            attempt = purchase_impl(
-                                buy_plan,
-                                browser_cfg=cfg.browser,
-                                purchase_cfg=cfg.purchase,
-                                per_purchase_dir=art_root,
-                                hold_for_confirm=(
-                                    cfg.purchase.mode == "hold_and_confirm"
-                                ),
-                                settings=settings,
-                                agent_fallback_cfg=cfg.agent_fallback,
+                            append_purchase_jsonl(
+                                state_dir,
+                                {
+                                    "target": target.name,
+                                    "at": datetime.now(UTC).isoformat(),
+                                    "attempt": attempt.model_dump(mode="json"),
+                                },
+                                max_bytes=cfg.purchase_audit.max_bytes,
+                                keep_rotated=cfg.purchase_audit.keep_rotated,
                             )
-                        except Exception as e:  # noqa: BLE001
-                            logger.exception(
-                                "purchase_fn raised target=%s", target.name
-                            )
-                            attempt = PurchaseAttempt(
-                                plan=buy_plan,
-                                started_at=datetime.now(UTC),
-                                finished_at=datetime.now(UTC),
-                                outcome=PurchaseOutcome.FAILED_SCRIPTED,
-                                error_message=f"{type(e).__name__}: {e}",
-                            )
-                        _emit_purchase_outcome(
-                            notify_impl,
-                            cfg,
-                            attempt=attempt,
-                            target_name=target.name,
-                            target_url=target.url,
-                        )
-                        append_purchase_jsonl(
-                            state_dir,
-                            {
-                                "target": target.name,
-                                "at": datetime.now(UTC).isoformat(),
-                                "attempt": attempt.model_dump(mode="json"),
-                            },
-                            max_bytes=cfg.purchase_audit.max_bytes,
-                            keep_rotated=cfg.purchase_audit.keep_rotated,
-                        )
+            finally:
+                if direct_api_client is not None:
+                    direct_api_client.close()
 
             try:
                 prune_artifact_trees(cfg)

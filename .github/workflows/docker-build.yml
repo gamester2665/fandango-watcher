@@ -1,0 +1,57 @@
+# Build the production Docker image (and optionally run pytest in the dev image).
+# No secrets or live smoke — offline guardrail only.
+
+name: Docker Build
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "scripts/docker-*.sh"
+      - "scripts/docker-*.ps1"
+      - ".github/workflows/docker-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "scripts/docker-*.sh"
+      - "scripts/docker-*.ps1"
+      - ".github/workflows/docker-build.yml"
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production watcher image
+        run: docker compose build watcher
+
+  test-dev-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build development image
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml build watcher
+
+      - name: Run pytest in dev image
+        run: >
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml
+          run --rm --entrypoint "" watcher uv run pytest -q

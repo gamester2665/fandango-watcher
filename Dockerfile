@@ -51,8 +51,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Install Chromium + system deps into a known path (PLAYWRIGHT_BROWSERS_PATH).
 # `--with-deps` runs apt-get under the hood; we're root during build.
+# Use the venv binary directly — `uv run` would try to build the project before src/ exists.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv run playwright install --with-deps chromium \
+    /app/.venv/bin/playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
@@ -60,6 +61,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # -----------------------------------------------------------------------------
 FROM deps AS app
 
+COPY README.md ./README.md
 COPY src/ ./src/
 COPY config.example.yaml ./config.example.yaml
 

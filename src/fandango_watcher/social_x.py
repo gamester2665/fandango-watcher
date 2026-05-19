@@ -93,7 +93,27 @@ _TICKET_NEGATIVE_PHRASES = (
     "tickets are not",
     "tickets aren't",
     "tickets not",
+    "imax store",
+    "shop our",
+    "merch",
 )
+# Keywords shared across many movies/handles — matching only these on a generic
+# account (e.g. @IMAX) is not enough to SMS; require ticket-announcement copy.
+_GENERIC_X_KEYWORDS = frozenset({
+    "imax",
+    "70mm",
+    "tickets",
+    "ticket",
+    "tix",
+    "on sale",
+    "presale",
+    "pre-sale",
+    "pre sale",
+    "now available",
+    "available now",
+})
+# Availability phrases that are too broad without an explicit ticket term.
+_TICKETLESS_AVAILABLE_PHRASES = frozenset({"available now", "now available"})
 
 
 # -----------------------------------------------------------------------------
@@ -425,6 +445,14 @@ def analyze_ticket_announcement(text: str) -> dict[str, Any]:
             "reason": "negative ticket-availability language",
         }
     if available:
+        # "Available now" alone matches IMAX Store merch, not ticket drops.
+        bare_only = all(
+            phrase.strip().lower() in _TICKETLESS_AVAILABLE_PHRASES
+            for phrase in available
+        )
+        if bare_only and not has_ticket_term:
+            available = []
+    if available:
         return {
             "announces_tickets": True,
             "status": "available",
@@ -476,10 +504,97 @@ def _matched_ticket_terms(text_lower: str) -> list[str]:
     ]
 
 
+def _stamp_tweet_snapshot(
+    handle_state: HandleState,
+    *,
+    text: str,
+    created_at: object | None,
+) -> None:
+    """Persist tweet body + derived ticket analysis for dashboard display."""
+    txt = text.strip()
+    handle_state.last_seen_tweet_text = txt or None
+    handle_state.last_seen_tweet_created_at = (
+        str(created_at) if created_at is not None else None
+    )
+    handle_state.last_seen_ticket_analysis = (
+        analyze_ticket_announcement(txt) if txt else None
+    )
+
+
+def _maybe_backfill_tweet_snapshot(
+    handle_state: HandleState,
+    x: XClient,
+    *,
+    norm_handle: str,
+) -> None:
+    """Ensure dashboard has readable tweet text when a cursor id is known."""
+    if str(handle_state.last_seen_tweet_text or "").strip():
+        handle_state.last_seen_ticket_analysis = analyze_ticket_announcement(
+            str(handle_state.last_seen_tweet_text or "")
+        )
+        return
+    tid = handle_state.last_seen_tweet_id
+    if not tid:
+        return
+    try:
+        one = x.get_tweet(str(tid))
+    except XApiError as e:
+        logger.debug(
+            "social_x: backfill tweet %s for @%s: %s",
+            tid,
+            norm_handle,
+            e,
+        )
+        return
+    if one:
+        _stamp_tweet_snapshot(
+            handle_state,
+            text=str(one.get("text") or ""),
+            created_at=one.get("created_at"),
+        )
+
+
 def _effective_keywords(
     handle_cfg: SocialXHandleConfig, defaults: list[str]
 ) -> list[str]:
     return handle_cfg.keywords if handle_cfg.keywords else list(defaults)
+
+
+def should_emit_x_match(
+    text: str,
+    matched_keywords: list[str],
+    *,
+    bootstrap: bool,
+) -> bool:
+    """Return True when a keyword hit should become a notify-worthy X hint.
+
+    Guards against three common spam paths:
+
+    * **Bootstrap replay** — first poll for a handle (``since_id`` was unset)
+      advances the cursor but must not SMS historical tweets.
+    * **Promo / merch copy** — keyword hits without ticket-announcement language
+      (e.g. @starwars set photos that mention "Mandalorian" + "IMAX").
+    * **Generic @IMAX hits** — "imax" alone on a shared studio account matching
+      every movie registry entry for the same tweet.
+    """
+    if bootstrap:
+        return False
+    analysis = analyze_ticket_announcement(text)
+    if not analysis.get("announces_tickets"):
+        return False
+    specific = [
+        kw
+        for kw in matched_keywords
+        if kw.strip().lower() not in _GENERIC_X_KEYWORDS
+    ]
+    if specific:
+        return True
+    # Generic keywords only — require explicit ticket language in the tweet body.
+    return (
+        analysis.get("status") == "available"
+        and analysis.get("confidence") == "high"
+        and bool(_matched_ticket_terms(text.lower()))
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -542,6 +657,7 @@ def check_x_signals(
     for norm_handle, entries in groups.items():
         result.handles_polled += 1
         handle_state = state.for_handle(norm_handle)
+        bootstrap_poll = handle_state.last_seen_tweet_id is None
         try:
             if handle_state.user_id is None:
                 handle_state.user_id = x.get_user_id(norm_handle)
@@ -573,6 +689,10 @@ def check_x_signals(
                     hits = match_tweet(text, keywords)
                     if not hits:
                         continue
+                    if not should_emit_x_match(
+                        text, hits, bootstrap=bootstrap_poll
+                    ):
+                        continue
                     # Avoid an exact duplicate when two movie entries share
                     # the same (target, label) pair.
                     dedupe_key = (entry.target_name, entry.label)
@@ -596,53 +716,27 @@ def check_x_signals(
             handle_state.last_polled_at = effective_now
             handle_state.consecutive_errors = 0
             handle_state.last_error_message = None
+            if bootstrap_poll and tweets:
+                logger.info(
+                    "social_x bootstrap @%s: advanced cursor over %d tweet(s); "
+                    "notifications suppressed until incremental polls",
+                    norm_handle,
+                    len(tweets),
+                )
             if tweets and new_max_id:
                 for tw in tweets:
                     if str(tw.get("id") or "") == new_max_id:
-                        txt = str(tw.get("text") or "").strip()
-                        handle_state.last_seen_tweet_text = txt or None
-                        handle_state.last_seen_ticket_analysis = (
-                            analyze_ticket_announcement(txt) if txt else None
-                        )
-                        ca = tw.get("created_at")
-                        handle_state.last_seen_tweet_created_at = (
-                            str(ca) if ca is not None else None
+                        _stamp_tweet_snapshot(
+                            handle_state,
+                            text=str(tw.get("text") or ""),
+                            created_at=tw.get("created_at"),
                         )
                         break
-            elif (
-                not tweets
-                and new_max_id
-                and not (str(handle_state.last_seen_tweet_text or "").strip())
-            ):
-                # Steady-state: ``since_id`` returns nothing, but the dashboard
-                # still needs body text for the cursor — fetch the tweet by id.
-                try:
-                    one = x.get_tweet(new_max_id)
-                except XApiError as e:
-                    logger.debug(
-                        "social_x: backfill tweet %s for @%s: %s",
-                        new_max_id,
-                        norm_handle,
-                        e,
-                    )
-                else:
-                    if one:
-                        txt = str(one.get("text") or "").strip()
-                        handle_state.last_seen_tweet_text = txt or None
-                        handle_state.last_seen_ticket_analysis = (
-                            analyze_ticket_announcement(txt) if txt else None
-                        )
-                        ca = one.get("created_at")
-                        handle_state.last_seen_tweet_created_at = (
-                            str(ca) if ca is not None else None
-                        )
-            elif (
-                str(handle_state.last_seen_tweet_text or "").strip()
-                and handle_state.last_seen_ticket_analysis is None
-            ):
-                handle_state.last_seen_ticket_analysis = analyze_ticket_announcement(
-                    str(handle_state.last_seen_tweet_text or "")
-                )
+            _maybe_backfill_tweet_snapshot(
+                handle_state,
+                x,
+                norm_handle=norm_handle,
+            )
         except XApiError as e:
             result.handles_failed += 1
             if e.status_code == 429 and e.headers is not None:
@@ -740,4 +834,5 @@ __all__ = [
     "match_tweet",
     "matches_to_jsonable",
     "save_social_x_state",
+    "should_emit_x_match",
 ]

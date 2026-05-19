@@ -32,7 +32,7 @@ phased checklist.
 | 4     | Scripted purchaser (dry-run)        | done — `purchaser.py` + `$0.00` invariant + fixture-driven invariant tests. |
 | 5     | Full auto-buy                       | wired; defaulted to `notify_only` until calibrated against a live drop. |
 | 6     | Agent rescue (browser-use + VLM)    | wired into `run_scripted_purchase` on Complete-button miss; `max_cost_usd` enforced; calibration workflow in `tests/fixtures/rescue/README.md`. |
-| 7     | Hardening / VPS readiness           | in progress (this README is part of it). |
+| 7     | Hardening / VPS readiness           | in progress — local watch + smoke scripts; VPS gated on sign-off. |
 
 440+ unit + integration tests; run `uv run pytest -q`.
 
@@ -81,7 +81,7 @@ Deploy the Docker/VPS stack by building the Docker image (or installing with `uv
 
 **Optional — Cloudflare Python Worker:** `wrangler.toml` defines a scheduled Worker. Deploy with `bash scripts/deploy-worker.sh` (or `scripts/deploy-worker.ps1`) after `npx wrangler login`, **or** set `CLOUDFLARE_API_TOKEN` in `.env` / `.env.local` (or `FANDANGO_WATCHER_ENV_FILE`) — see `.env.example`. **CI:** add the same token as a GitHub Actions repository secret `CLOUDFLARE_API_TOKEN`, then run the **Deploy Cloudflare Worker** workflow (or push a change under the paths listed in `.github/workflows/deploy-cloudflare-worker.yml`). Set `account_id` in `wrangler.toml` to your Cloudflare account (from the dashboard URL) if it differs. Bundled defaults live in `worker-config.yaml`; set Twilio/SMTP values with `npx wrangler secret put …` (see comments in `wrangler.toml`). If Wrangler OAuth fails with HTTP 400, run `npx wrangler logout` then `npx wrangler login` again.
 
-**Policy:** do not deploy to a VPS until you have manually confirmed behavior locally. Same rule is spelled out in [`PLAN.md`](./PLAN.md) (local sign-off gate).
+**Policy:** do not deploy to a VPS until you have manually confirmed behavior locally. Same rule is spelled out in [`PLAN.md`](./PLAN.md) (local sign-off gate). When ready, use [`docs/VPS_DEPLOY.md`](./docs/VPS_DEPLOY.md) and [`docs/VPS_COLOCATION_HANDOFF.md`](./docs/VPS_COLOCATION_HANDOFF.md) for the shared RackNerd host.
 
 ---
 
@@ -94,7 +94,7 @@ Use this when you want **everything** validated: core behavior, long-running sta
 ### A — Local core (first gate)
 
 1. **Secrets + config:** `.env` from `.env.example`; `config.yaml` from `config.example.yaml` (targets, theater, formats, `notify`, `purchase`). Optional: `scripts/bootstrap.ps1` or `scripts/bootstrap.sh` creates `config.yaml` from the example when missing.
-2. **Validate:** `fandango-watcher doctor` — confirms YAML loads, `notify.channels` match env-backed credentials, and surfaces risky settings (`full_auto`, `social_x` without bearer token, empty browser profile). Use `--json` for scripts.
+2. **Validate:** `fandango-watcher doctor` — confirms YAML loads, `notify.channels` match env-backed credentials, and surfaces risky settings (`full_auto`, `social_x` without bearer token, empty browser profile). Use `--json` for scripts. Optional full smoke: `bash scripts/smoke.sh` or `powershell -File scripts/smoke.ps1` (set `SMOKE_NOTIFY=1` to ping Twilio).
 3. **Browser session:** `uv run fandango-watcher login --headed` (or Docker `login` profile) so Fandango + AMC Stubs + CityWalk context is real.
 4. **Crawl:** `once` per target; optional `--write-state` to match `watch` persistence. Inspect `state/<target>.json` and `artifacts/screenshots/`.
 5. **Watch + HTTP:** `watch` with healthz on; open `http://127.0.0.1:8787/` (dashboard), hit `/healthz`, `/api/status`, `/api/purchases` if you use purchases.
@@ -111,7 +111,7 @@ Use this when you want **everything** validated: core behavior, long-running sta
 
 ### D — X / Twitter (if `social_x` is enabled)
 
-10. `x-poll --check-bearer`, then a real **`x-poll`** against your configured handles. Confirm `state/social_x.json` advances and that X hints do not drown out Fandango truth (they are advisory only).
+10. `x-poll --check-bearer`, then a real **`x-poll`** against your configured handles. Confirm `state/social_x.json` advances. X hints are advisory only; the poller suppresses bootstrap replay SMS, requires ticket-announcement language, and sends at most one SMS per tweet (not one per movie).
 
 ### E — Purchase mode escalation (only when A–D feel solid)
 
@@ -250,6 +250,22 @@ Videos from crawls and purchases are renamed to **`{target-name}-{timestamp}.web
 
 ## Quick start (Docker)
 
+Operator runbook: **[docs/docker_implementation.md](./docs/docker_implementation.md)**.
+
+**Cutover from host `uv` to Docker** (stop host `watch` first, free port `8787`):
+
+```powershell
+# Windows
+powershell -File scripts/docker-cutover.ps1
+```
+
+```bash
+# Unix
+bash scripts/docker-cutover.sh
+```
+
+Manual path:
+
 ```bash
 cp .env.example .env                       # Twilio + SMTP + agent + X keys
 cp config.example.yaml config.yaml         # edit targets / seat priorities
@@ -266,6 +282,16 @@ docker compose --profile tools run --rm login
 docker compose up -d
 docker compose logs -f watcher
 ```
+
+**Smoke / seed / backup:**
+
+```powershell
+powershell -File scripts/docker-smoke.ps1
+powershell -File scripts/docker-seed-volumes.ps1 -State -Profile
+powershell -File scripts/docker-volume-backup.ps1 -All
+```
+
+Host-native smoke (no Docker): `scripts/smoke.ps1` / `scripts/smoke.sh`.
 
 **Docker-first development:** merge **`docker-compose.dev.yml`** so `src/` and `tests/` bind-mount into the container, the image builds target **`development`** (pytest / ruff / mypy via uv dev deps), and you restart **`watcher`** after edits instead of rebuilding every time. See **[docs/DOCKER_DEV.md](./docs/DOCKER_DEV.md)** or **`scripts/docker-compose-dev.sh`** / **`scripts/docker-compose-dev.ps1`**.
 

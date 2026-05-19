@@ -51,6 +51,7 @@ services:
     environment:
       - WATCHER_CONFIG=/app/config.yaml
       - WATCHER_MODE=watch
+      - WATCHER_HEALTHZ_HOST=0.0.0.0
     ports:
       - "127.0.0.1:8787:8787"          # healthz only bound to loopback by default
     command: ["watch"]

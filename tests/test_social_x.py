@@ -40,6 +40,7 @@ from fandango_watcher.social_x import (
     load_social_x_state,
     match_tweet,
     save_social_x_state,
+    should_emit_x_match,
 )
 
 # -----------------------------------------------------------------------------
@@ -96,6 +97,48 @@ class TestAnalyzeTicketAnnouncement:
         got = analyze_ticket_announcement("The Matrix returns to theaters.")
         assert got["announces_tickets"] is False
         assert got["matched_phrases"] == []
+
+    def test_imax_store_merch_is_not_ticket_announcement(self) -> None:
+        got = analyze_ticket_announcement(
+            "Shop our new Retro Collection. Available now. Exclusively in the IMAX Store."
+        )
+        assert got["announces_tickets"] is False
+        assert got["status"] != "available"
+
+
+class TestShouldEmitXMatch:
+    def test_bootstrap_suppresses_even_with_ticket_copy(self) -> None:
+        assert should_emit_x_match(
+            "Tickets on sale now for The Odyssey!",
+            ["tickets", "odyssey"],
+            bootstrap=True,
+        ) is False
+
+    def test_requires_ticket_announcement_language(self) -> None:
+        assert should_emit_x_match(
+            "Pedro Pascal at Galaxy's Edge for Mandalorian and Grogu in theaters.",
+            ["mandalorian", "grogu", "imax"],
+            bootstrap=False,
+        ) is False
+
+    def test_movie_specific_keyword_with_announcement(self) -> None:
+        assert should_emit_x_match(
+            "Odyssey IMAX 70mm tickets on sale now!",
+            ["odyssey", "imax", "tickets"],
+            bootstrap=False,
+        ) is True
+
+    def test_generic_imax_only_requires_ticket_term(self) -> None:
+        assert should_emit_x_match(
+            "IMAX tickets on sale now!",
+            ["imax", "tickets"],
+            bootstrap=False,
+        ) is True
+        assert should_emit_x_match(
+            "Available now in the IMAX Store.",
+            ["imax", "available now"],
+            bootstrap=False,
+        ) is False
 
 
 # -----------------------------------------------------------------------------
@@ -217,6 +260,12 @@ class TestCheckXSignals:
         assert client.user_id_calls == ["imax"]  # not called the second time
 
     def test_match_emitted_and_since_id_advances(self, tmp_path: Path) -> None:
+        s = SocialXState()
+        h = s.for_handle("IMAX")
+        h.user_id = "111"
+        h.last_seen_tweet_id = "9"
+        save_social_x_state(tmp_path, s)
+
         client = _StubXClient(
             users={"imax": "111"},
             tweets_by_user={
@@ -325,10 +374,16 @@ class TestCheckXSignals:
         assert rstate.handles["imax"].last_seen_ticket_analysis["status"] == "not_announcement"
 
     def test_handle_failure_isolated(self, tmp_path: Path) -> None:
+        s = SocialXState()
+        g = s.for_handle("good")
+        g.user_id = "1"
+        g.last_seen_tweet_id = "0"
+        save_social_x_state(tmp_path, s)
+
         client = _StubXClient(
             users={"good": "1", "bad": "2"},
             tweets_by_user={
-                "1": [{"id": "1", "text": "tickets!", "created_at": "t"}]
+                "1": [{"id": "1", "text": "Tickets on sale now!", "created_at": "t"}]
             },
             fail_users={"bad"},
         )
@@ -344,6 +399,63 @@ class TestCheckXSignals:
         assert result.handles_failed == 1
         assert len(result.matches) == 1
         assert result.matches[0].handle == "good"
+
+    def test_bootstrap_poll_advances_cursor_without_matches(self, tmp_path: Path) -> None:
+        client = _StubXClient(
+            users={"imax": "111"},
+            tweets_by_user={
+                "111": [
+                    {"id": "10", "text": "Odyssey tickets on sale now!", "created_at": "t1"},
+                    {"id": "9", "text": "behind the scenes", "created_at": "t0"},
+                ]
+            },
+        )
+        cfg = _cfg(
+            [
+                SocialXHandleConfig(
+                    handle="IMAX",
+                    keywords=["odyssey", "tickets"],
+                    target_name="odyssey-imax-70mm",
+                    label="The Odyssey",
+                )
+            ]
+        )
+        result = check_x_signals(cfg, "tok", tmp_path, client=client)
+        assert result.matches == []
+        rstate = load_social_x_state(tmp_path)
+        assert rstate.handles["imax"].last_seen_tweet_id == "10"
+
+        result2 = check_x_signals(cfg, "tok", tmp_path, client=client)
+        assert result2.matches == []
+
+    def test_incremental_poll_emits_after_bootstrap(self, tmp_path: Path) -> None:
+        s = SocialXState()
+        h = s.for_handle("IMAX")
+        h.user_id = "111"
+        h.last_seen_tweet_id = "9"
+        save_social_x_state(tmp_path, s)
+
+        client = _StubXClient(
+            users={"imax": "111"},
+            tweets_by_user={
+                "111": [
+                    {"id": "10", "text": "Odyssey tickets on sale now!", "created_at": "t1"},
+                ]
+            },
+        )
+        cfg = _cfg(
+            [
+                SocialXHandleConfig(
+                    handle="IMAX",
+                    keywords=["odyssey", "tickets"],
+                    target_name="odyssey-imax-70mm",
+                    label="The Odyssey",
+                )
+            ]
+        )
+        result = check_x_signals(cfg, "tok", tmp_path, client=client)
+        assert len(result.matches) == 1
+        assert result.matches[0].tweet_id == "10"
 
 
 # -----------------------------------------------------------------------------
@@ -515,10 +627,17 @@ class TestMovieExpansion:
 class TestSharedHandleAcrossMovies:
     """A handle shared by multiple movies (e.g. @IMAX) must:
     1. Hit the X API exactly once per poll (dedupe by handle)
-    2. Emit one match per movie whose keywords match the tweet
+    2. Emit one match per movie whose keywords AND ticket-announcement rules pass
+       (the watch loop dedupes SMS to one message per tweet id).
     """
 
     def test_one_api_call_two_matches(self, tmp_path: Path) -> None:
+        s = SocialXState()
+        h = s.for_handle("IMAX")
+        h.user_id = "111"
+        h.last_seen_tweet_id = "99"
+        save_social_x_state(tmp_path, s)
+
         client = _StubXClient(
             users={"imax": "111"},
             tweets_by_user={
@@ -558,9 +677,15 @@ class TestSharedHandleAcrossMovies:
         labels = {m.label for m in result.matches}
         assert labels == {"The Odyssey", "Dune: Part Three"}
 
-    def test_only_movies_whose_keywords_hit_get_matches(
+    def test_only_movies_whose_keywords_hit_without_ticket_copy_emit_nothing(
         self, tmp_path: Path
     ) -> None:
+        s = SocialXState()
+        h = s.for_handle("IMAX")
+        h.user_id = "111"
+        h.last_seen_tweet_id = "99"
+        save_social_x_state(tmp_path, s)
+
         client = _StubXClient(
             users={"imax": "111"},
             tweets_by_user={
@@ -585,4 +710,4 @@ class TestSharedHandleAcrossMovies:
             ],
         )
         result = check_x_signals(cfg, "tok", tmp_path, client=client)
-        assert [m.label for m in result.matches] == ["Odyssey"]
+        assert result.matches == []

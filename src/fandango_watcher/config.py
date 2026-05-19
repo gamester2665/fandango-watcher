@@ -86,7 +86,7 @@ class DirectApiConfig(ConfigBase):
     zip_code: str = "91608"
     base_url: str = "https://www.fandango.com"
     timeout_seconds: float = Field(default=30.0, gt=0, le=120)
-    max_dates_per_tick: int = Field(default=90, ge=1, le=365)
+    max_dates_per_tick: int = Field(default=28, ge=1, le=365)
     stop_on_first_match: bool = True
     alert_unknown_formats: bool = True
 
@@ -565,6 +565,11 @@ class Settings(BaseSettings):
         ge=1,
         le=65535,
         validation_alias=AliasChoices("WATCHER_HEALTHZ_PORT", "healthz_port"),
+    )
+    # Bind address for watch/dashboard HTTP. Use 0.0.0.0 in Docker so published ports work.
+    healthz_host: str = Field(
+        default="127.0.0.1",
+        validation_alias=AliasChoices("WATCHER_HEALTHZ_HOST", "healthz_host"),
     )
 
     # Twilio

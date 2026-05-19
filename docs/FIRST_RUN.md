@@ -57,6 +57,8 @@ Heavy shells sometimes hit memory limits; closing other apps or increasing the p
 
 If you prefer developing **inside Compose** (same Chromium + Debian Playwright stack as CI/VPS), use **[DOCKER_DEV.md](./DOCKER_DEV.md)** — merge `docker-compose.yml` + `docker-compose.dev.yml`, bind-mount `src/` + `tests/`, build target `development`, then `restart watcher` after code changes.
 
+For production Docker cutover (seed volumes, smoke, rollback), see **[docker_implementation.md](./docker_implementation.md)** and run `scripts/docker-cutover.ps1` or `scripts/docker-cutover.sh` after stopping host `uv run watch`.
+
 ## 7. Before VPS
 
-Do not deploy until local behavior is signed off (see README **VPS / production** and [PLAN.md](../PLAN.md)).
+Do not deploy until **Docker local sign-off** passes (24h soak on `docker compose up -d watcher`). See **[docker_implementation.md](./docker_implementation.md)**, README **VPS / production**, and [PLAN.md](../PLAN.md).

@@ -22,8 +22,12 @@ from fandango_watcher.config import (
 from fandango_watcher.dashboard import (
     DashboardData,
     DashboardPaths,
+    _classify_sx_handle_state,
+    _fmt_timestamp_html,
     _latest_artifact_for_target,
+    _linkify_tweet_text,
     _relative_ago,
+    _summarize_social_x,
     add_movie_from_fandango_search_result,
     artifact_url,
     collect_dashboard_state,
@@ -634,7 +638,8 @@ def test_x_poller_section_prioritizes_snapshot_table_over_detail_cards() -> None
     }
     html_out = render_index_html(snap, refresh_seconds=0)
     assert 'id="x" aria-label="X / Twitter poller">' in html_out
-    assert "tweet text (preview)" in html_out
+    assert "Latest tweet" in html_out
+    assert "Tickets are on sale now" in html_out
     assert "ticket analysis" in html_out
     assert "available" in html_out
     assert "ticket availability language found" in html_out
@@ -645,6 +650,157 @@ def test_x_poller_section_prioritizes_snapshot_table_over_detail_cards() -> None
         r'<details class="panel panel-fold" open>',
         html_out,
     )
+    assert "sx-row-ticket-signal" in html_out
+    assert "sx-status-available" in html_out
+    assert "sx-ts" in html_out
+    x_table = html_out.split("Latest tweet")[1].split("Per-handle details")[0]
+    assert "2026-01-01T00:00:00Z" not in x_table
+
+
+def test_linkify_tweet_text_wraps_urls() -> None:
+    out = _linkify_tweet_text("See https://t.co/abc now")
+    assert 'href="https://t.co/abc"' in out
+    assert 'rel="noopener noreferrer"' in out
+    assert "See " in out
+
+
+def test_linkify_tweet_text_escapes_html() -> None:
+    out = _linkify_tweet_text("<bad> https://x.com/y")
+    assert "<bad>" not in out
+    assert "&lt;bad&gt;" in out
+
+
+def test_fmt_timestamp_html_pt_and_relative() -> None:
+    now = datetime(2026, 1, 1, 2, 0, tzinfo=UTC)
+    out = _fmt_timestamp_html("2026-01-01T00:00:00Z", now=now)
+    assert "PST" in out or "PDT" in out
+    assert "rel" in out
+    assert "ago" in out
+
+
+def test_classify_sx_handle_state_error_beats_empty() -> None:
+    hst = {
+        "last_polled_at": "2026-01-01T00:00:00Z",
+        "last_seen_tweet_id": None,
+        "consecutive_errors": 2,
+    }
+    assert _classify_sx_handle_state(hst) == "error"
+
+
+def test_summarize_social_x_counts() -> None:
+    handles = {
+        "a": {"last_polled_at": "x", "consecutive_errors": 1},
+        "b": {"last_polled_at": "x", "last_seen_tweet_id": None},
+        "c": {
+            "last_polled_at": "x",
+            "last_seen_tweet_text": "on sale",
+            "last_seen_tweet_id": "1",
+            "last_seen_ticket_analysis": {"announces_tickets": True},
+        },
+    }
+    s = _summarize_social_x(handles, enabled=True)
+    assert s == {"total": 3, "errors": 1, "empty_timeline": 1, "ticket_signals": 1}
+
+
+def test_ops_strip_shows_x_summary() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {
+            "handles": {
+                "erracct": {
+                    "handle": "erracct",
+                    "last_polled_at": "2026-01-01T00:00:00Z",
+                    "consecutive_errors": 1,
+                    "last_error_message": "rate limit",
+                },
+                "emptyacct": {
+                    "handle": "emptyacct",
+                    "last_polled_at": "2026-01-01T00:00:00Z",
+                },
+                "signalacct": {
+                    "handle": "signalacct",
+                    "last_polled_at": "2026-01-01T00:00:00Z",
+                    "last_seen_tweet_id": "1",
+                    "last_seen_tweet_text": "Tickets on sale",
+                    "last_seen_ticket_analysis": {
+                        "announces_tickets": True,
+                        "status": "available",
+                    },
+                },
+            }
+        },
+        "release_intel": {"status": "disabled"},
+        "movies": [],
+        "runtime": {
+            "social_x_poll": {"enabled": True},
+            "fandango_poll": {
+                "min_seconds": 30,
+                "max_seconds": 35,
+                "error_backoff_cap_seconds": 1800,
+            },
+        },
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert 'href="#x"' in html_out
+    assert "1 error" in html_out
+    assert "1 empty" in html_out
+    assert "1 ticket signal" in html_out
+
+
+def test_triage_lists_x_ticket_attention() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {
+            "handles": {
+                "signalacct": {
+                    "handle": "signalacct",
+                    "last_polled_at": "2026-01-01T00:00:00Z",
+                    "last_seen_tweet_id": "1",
+                    "last_seen_tweet_text": "Tickets on sale",
+                    "last_seen_ticket_analysis": {
+                        "announces_tickets": True,
+                        "status": "available",
+                    },
+                },
+            }
+        },
+        "release_intel": {"status": "disabled"},
+        "movies": [],
+        "runtime": {
+            "social_x_poll": {"enabled": True},
+            "fandango_poll": {},
+        },
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert "attention-list" in html_out
+    assert "ticket availability language" in html_out
+    assert 'href="#x"' in html_out
+
+
+def test_sx_empty_handle_badges_differ() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [],
+        "social_x": {
+            "handles": {
+                "never": {"handle": "never"},
+                "empty": {
+                    "handle": "empty",
+                    "last_polled_at": "2026-01-01T00:00:00Z",
+                },
+            }
+        },
+        "release_intel": {"status": "disabled"},
+        "movies": [],
+        "runtime": {"social_x_poll": {"enabled": True}, "fandango_poll": {}},
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert "Not polled" in html_out
+    assert "Empty timeline" in html_out
+    assert "Not polled yet" in html_out
+    assert "No public tweets returned" in html_out
 
 
 def test_render_dashboard_not_found_includes_routes() -> None:

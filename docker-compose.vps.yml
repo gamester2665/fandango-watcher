@@ -1,0 +1,19 @@
+# VPS production overlay — use with base compose:
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+#
+# On the server: place secrets in .env.production (mode 600), config.yaml, and
+# bind healthz to localhost only; expose dashboard via Cloudflare Tunnel if needed.
+# See docs/VPS_DEPLOY.md and docs/VPS_COLOCATION_HANDOFF.md.
+
+services:
+  watcher:
+    env_file:
+      - path: .env.production
+        required: false
+    command: ["watch", "--no-open"]
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      - WATCHER_CONFIG=/app/config.yaml
+      - WATCHER_MODE=watch
+      - WATCHER_HEALTHZ_HOST=0.0.0.0

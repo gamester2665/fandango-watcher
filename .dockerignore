@@ -33,8 +33,7 @@ build/
 dist/
 *.egg-info/
 
-# Docs / scratch
+# Docs / scratch (README needed for uv package build)
 *.log
 *.tmp
 PLAN.md
-README.md
