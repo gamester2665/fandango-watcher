@@ -47,7 +47,7 @@ FROM base AS deps
 COPY pyproject.toml uv.lock ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --group watcher
+    uv sync --frozen --no-install-project --no-dev --group core --group watcher
 
 # Install Chromium + system deps into a known path (PLAYWRIGHT_BROWSERS_PATH).
 # `--with-deps` runs apt-get under the hood; we're root during build.
@@ -66,7 +66,7 @@ COPY src/ ./src/
 COPY config.example.yaml ./config.example.yaml
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --group watcher
+    uv sync --frozen --no-dev --group core --group watcher
 
 # Pre-create volume mount points so they exist with sane ownership when users
 # mount empty named volumes. These paths match docker-compose.yml.
@@ -96,7 +96,7 @@ FROM app AS development
 COPY tests/ ./tests/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --group dev --group watcher
+    uv sync --frozen --group dev --group core --group watcher
 
 # Prefer mounted ./src over site-packages when docker-compose.dev.yml bind-mounts src/.
 ENV PYTHONPATH=/app/src
