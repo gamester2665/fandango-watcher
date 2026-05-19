@@ -35,7 +35,20 @@ if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -n "${CF_API_TOKEN:-}" ]]; then
   export CLOUDFLARE_API_TOKEN="$CF_API_TOKEN"
 fi
 
-if ! npx --yes wrangler whoami >/dev/null 2>&1; then
+export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-7f3e024b68ea359931e13d4688fde4a6}"
+
+_wrangler_auth_ok() {
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    return 1
+  fi
+  # whoami fails for some scoped tokens even when deploy works; account_id is in wrangler.toml.
+  if npx --yes wrangler whoami >/dev/null 2>&1; then
+    return 0
+  fi
+  [[ -n "${CLOUDFLARE_API_TOKEN}" ]]
+}
+
+if ! _wrangler_auth_ok; then
   echo "Wrangler is not authenticated for API calls (needed for deploy)." >&2
   echo "  Fix: npx wrangler login   (local terminal)" >&2
   echo "  Fix: set CLOUDFLARE_API_TOKEN in the environment, or in .env / .env.local" >&2
