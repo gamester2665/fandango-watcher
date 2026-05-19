@@ -831,6 +831,10 @@ def run_watch(
                                 used_browser_fallback=True,
                                 drift_warning=f"{type(e).__name__}: {e}",
                             )
+                            logger.info(
+                                "browser fallback crawl starting target=%s",
+                                target.name,
+                            )
                             try:
                                 parsed = crawl_target(
                                     target,
@@ -936,6 +940,15 @@ def run_watch(
                             continue
 
                     ok_result = transition(prev, parsed)
+                    if (
+                        direct_meta is not None
+                        and direct_meta.used_browser_fallback
+                    ):
+                        ok_result.events = [
+                            event
+                            for event in ok_result.events
+                            if event != Event.RELEASE_TRANSITION_BAD_TO_GOOD
+                        ]
                     if (
                         direct_meta is not None
                         and direct_meta.unknown_formats

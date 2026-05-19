@@ -62,7 +62,7 @@ from fandango_watcher.notify import (
     Notifier,
 )
 from fandango_watcher.purchase import PurchaseAttempt, PurchaseOutcome, PurchasePlan
-from fandango_watcher.state import Event, load_target_state
+from fandango_watcher.state import Event, TargetState, WatcherState, load_target_state, save_target_state
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_EXAMPLE_PATH = REPO_ROOT / "config.example.yaml"
@@ -252,6 +252,49 @@ class TestRunWatchHappyPath:
         assert persisted.direct_api_last_fallback is True
         assert persisted.direct_api_fallback_count == 1
         assert persisted.direct_api_last_status == "fallback"
+
+    def test_direct_api_browser_fallback_does_not_emit_release_transition(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _minimal_cfg(tmp_path)
+        settings = _settings()
+        state_dir = tmp_path / "state"
+        save_target_state(
+            state_dir,
+            TargetState(
+                schema_version=1,
+                target_name="odyssey",
+                current_state=WatcherState.WATCHING,
+                last_release_schema=ReleaseSchema.NOT_ON_SALE,
+            ),
+        )
+
+        def fail_direct(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("api drift")
+
+        def fake_browser(*_args: Any, **_kwargs: Any) -> PartialReleasePageData:
+            return _parsed_partial()
+
+        monkeypatch.setattr("fandango_watcher.loop.detect_target_direct_api", fail_direct)
+        monkeypatch.setattr("fandango_watcher.loop.crawl_target", fake_browser)
+
+        capture = _CapturingNotifier()
+        run_watch(
+            cfg,
+            settings,
+            state_dir=state_dir,
+            screenshot_dir=None,
+            notifier=_fanout(capture),
+            healthz_port=None,
+            sleep_fn=lambda _s: None,
+            max_ticks=1,
+        )
+
+        assert [m.event for m in capture.sent] == []
+        persisted = load_target_state(state_dir, "odyssey")
+        assert persisted.last_release_schema == ReleaseSchema.PARTIAL_RELEASE
 
     def test_events_not_in_on_events_are_dropped(self, tmp_path: Path) -> None:
         cfg = _minimal_cfg(tmp_path)
