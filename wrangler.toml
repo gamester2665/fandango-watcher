@@ -2,7 +2,7 @@
 name = "fandango-watcher"
 # From Cloudflare dashboard URL: https://dash.cloudflare.com/<account_id>/...
 account_id = "7f3e024b68ea359931e13d4688fde4a6"
-main = "src/fandango_watcher/worker.py"
+main = "src/fandango_watcher/worker_api.py"
 compatibility_date = "2026-04-30"
 compatibility_flags = ["python_workers"]
 

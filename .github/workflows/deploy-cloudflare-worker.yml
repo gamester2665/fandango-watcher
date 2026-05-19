@@ -14,6 +14,8 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/deploy-cloudflare-worker.yml"
+      - "src/fandango_watcher/worker_api.py"
+      - "src/fandango_watcher/worker_config_api.py"
       - "src/fandango_watcher/worker.py"
       - "wrangler.toml"
       - "worker-config.yaml"

@@ -103,15 +103,6 @@ async def handle_config_fetch(request, env) -> Any:
     if path.startswith("/api/movies"):
         return await _handle_movies_crud(request, env, provider, path, method)
 
-    if path == "/tick" and method == "POST":
-        if not require_admin(request, env):
-            return error_response("unauthorized", "missing or invalid admin token", status=401)
-        import importlib
-
-        worker_mod = importlib.import_module("worker")
-        result = await worker_mod.run_tick(env)
-        return json_response({"ok": True, **result})
-
     return error_response("not_found", "route not found", status=404)
 
 

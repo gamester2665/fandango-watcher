@@ -45,7 +45,7 @@ dev = [
 ]
 
 [tool.pywrangler]
-main = "src/fandango_watcher/worker.py"
+main = "src/fandango_watcher/worker_api.py"
 
 [tool.ruff]
 line-length = 100
