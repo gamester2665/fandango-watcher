@@ -59,5 +59,5 @@ if ! _wrangler_auth_ok; then
   exit 1
 fi
 
-uv sync --group dev
+uv sync --group dev --no-default-groups
 exec uv run pywrangler deploy "$@"

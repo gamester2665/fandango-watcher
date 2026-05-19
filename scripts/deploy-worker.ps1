@@ -43,5 +43,5 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-uv sync --group dev
+uv sync --group dev --no-default-groups
 uv run pywrangler deploy @args

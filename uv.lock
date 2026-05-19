@@ -505,12 +505,9 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
-    { name = "playwright" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
-    { name = "twilio" },
-    { name = "tzdata" },
 ]
 
 [package.optional-dependencies]
@@ -529,18 +526,20 @@ dev = [
     { name = "workers-py" },
     { name = "workers-runtime-sdk" },
 ]
+watcher = [
+    { name = "playwright" },
+    { name = "twilio" },
+    { name = "tzdata" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "browser-use", marker = "extra == 'agent'", specifier = ">=0.1.40" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain-openai", marker = "extra == 'agent'", specifier = ">=0.3.0" },
-    { name = "playwright", specifier = ">=1.58.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "twilio", specifier = ">=9.10.5" },
-    { name = "tzdata", specifier = ">=2025.2" },
 ]
 provides-extras = ["agent"]
 
@@ -553,6 +552,11 @@ dev = [
     { name = "types-pyyaml", specifier = ">=6.0.12" },
     { name = "workers-py", specifier = ">=1.9.0" },
     { name = "workers-runtime-sdk", specifier = ">=1.1.0" },
+]
+watcher = [
+    { name = "playwright", specifier = ">=1.58.0" },
+    { name = "twilio", specifier = ">=9.10.5" },
+    { name = "tzdata", specifier = ">=2025.2" },
 ]
 
 [[package]]
