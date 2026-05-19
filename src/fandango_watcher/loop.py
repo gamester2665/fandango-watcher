@@ -30,6 +30,7 @@ import os
 import random
 import signal
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -666,6 +667,9 @@ def run_watch(
     open_browser: bool = True,
     dashboard_refresh_seconds: int = 10,
     config_path: Path | None = None,
+    policy_cfg: WatcherConfig | None = None,
+    config_revision: int | None = None,
+    config_meta: dict[str, Any] | None = None,
 ) -> int:
     """Run the watch loop until ``stop_event`` is set or ``max_ticks`` is hit.
 
@@ -701,9 +705,17 @@ def run_watch(
     # ``social_x.{min,max}_seconds`` cadence.
     next_x_poll_at: datetime = datetime.now(UTC)
 
+    policy = policy_cfg if policy_cfg is not None else cfg
+    cached_revision: int | None = config_revision
+    runtime_meta = dict(config_meta or {})
+    last_config_check = 0.0
+
     healthz_ctx: HealthzContext | None = None
+    dashboard_data: DashboardData | None = None
     if healthz_port is not None:
         try:
+            from .config_api_client import config_writes_enabled
+
             dash_paths = DashboardPaths.from_config(cfg)
             dashboard_data = DashboardData(
                 cfg=cfg,
@@ -712,6 +724,11 @@ def run_watch(
                 heartbeat=hb,
                 settings=settings,
                 refresh_seconds=max(0, int(dashboard_refresh_seconds)),
+                policy_cfg=policy,
+                config_revision=cached_revision,
+                config_source=str(runtime_meta.get("config_source") or "yaml"),
+                config_cache_age_seconds=runtime_meta.get("config_cache_age_seconds"),
+                config_writes_enabled=config_writes_enabled(settings),
             )
             healthz_ctx = start_healthz_server(
                 hb,
@@ -741,6 +758,43 @@ def run_watch(
     tick = 0
     try:
         while not local_stop.is_set():
+            api_url = settings.config_api_url.strip()
+            if api_url and time.monotonic() - last_config_check >= settings.config_poll_seconds:
+                last_config_check = time.monotonic()
+                try:
+                    from .config import merge_watchlist
+                    from .config_api_client import fetch_revision_http, fetch_watchlist_http, write_watchlist_cache
+
+                    rev = fetch_revision_http(api_url)
+                    if rev != cached_revision:
+                        remote = fetch_watchlist_http(api_url)
+                        write_watchlist_cache(
+                            settings.config_cache_path,
+                            remote,
+                            source=api_url,
+                        )
+                        cfg = merge_watchlist(policy, remote.targets, remote.movies)
+                        cached_revision = rev
+                        for target in cfg.targets:
+                            if target.name not in target_states:
+                                target_states[target.name] = load_target_state(
+                                    state_dir, target.name
+                                )
+                        if dashboard_data is not None:
+                            dashboard_data.cfg = cfg
+                            dashboard_data.paths = DashboardPaths.from_config(cfg)
+                            dashboard_data.config_revision = rev
+                            dashboard_data.config_source = "d1"
+                            dashboard_data.config_cache_age_seconds = 0
+                        logger.info(
+                            "config reload revision=%s targets=%d movies=%d",
+                            rev,
+                            len(cfg.targets),
+                            len(cfg.movies),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("config revision check failed: %s", exc)
+
             tick += 1
             now_tick = datetime.now(UTC)
             with hb.mutex:

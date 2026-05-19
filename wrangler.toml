@@ -8,8 +8,9 @@ compatibility_flags = ["python_workers"]
 
 # Python deps: pyproject.toml + `uv run pywrangler deploy` (see Cloudflare Python packages docs).
 
-[triggers]
-crons = ["*/5 * * * *"]
+# MVP: Worker serves D1 watchlist config API only. Re-enable cron after polling ownership is explicit.
+# [triggers]
+# crons = ["*/5 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -25,3 +26,5 @@ binding = "BROWSER"
 [vars]
 FANDANGO_WATCHER_ENV = "production"
 WATCHER_CONFIG = "worker-config.yaml"
+CONFIG_API_ENABLED = "true"
+# Set CONFIG_ADMIN_TOKEN via: npx wrangler secret put CONFIG_ADMIN_TOKEN

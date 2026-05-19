@@ -22,6 +22,7 @@ from collections.abc import Sequence
 
 from .commands import (
     _run_api_drift,
+    _run_config_seed,
     _run_dashboard,
     _run_doctor,
     _run_dump_review,
@@ -77,6 +78,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_dump_review(args)
     if args.command == "doctor":
         return _run_doctor(args)
+    if args.command == "config-seed":
+        return _run_config_seed(args)
 
     parser.error(f"unknown command: {args.command}")
     return 2  # unreachable; argparse.error exits

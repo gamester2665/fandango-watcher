@@ -19,6 +19,13 @@ from ..config import (
     load_config,
     plain_secret,
 )
+from ..config_api_client import (
+    config_writes_enabled,
+    export_watchlist_yaml,
+    fetch_watchlist_http,
+    load_config_merged,
+    remote_replace_watchlist,
+)
 
 logger = logging.getLogger("fandango_watcher")
 
@@ -288,7 +295,14 @@ def _run_watch(args: argparse.Namespace) -> int:
         print(f"error: config file not found: {config_path}", file=sys.stderr)
         return 1
 
-    cfg = load_config(config_path)
+    policy_cfg = load_config(config_path)
+    settings = Settings()
+    try:
+        cfg, revision, meta = load_config_merged(config_path, settings)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     has_format_filter_override = _has_format_filter_cli_overrides(args)
     if has_format_filter_override and args.direct_api_mode == "api":
         print(
@@ -355,6 +369,9 @@ def _run_watch(args: argparse.Namespace) -> int:
         open_browser=not args.no_open,
         dashboard_refresh_seconds=args.dashboard_refresh_seconds,
         config_path=config_path,
+        policy_cfg=policy_cfg,
+        config_revision=revision,
+        config_meta=meta,
     )
 
 
@@ -371,10 +388,16 @@ def _run_dashboard(args: argparse.Namespace) -> int:
         print(f"error: config file not found: {config_path}", file=sys.stderr)
         return 1
 
-    cfg = load_config(config_path)
+    policy_cfg = load_config(config_path)
+    settings = Settings()
+    try:
+        cfg, revision, meta = load_config_merged(config_path, settings)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     paths = DashboardPaths.from_config(cfg)
     hb = Heartbeat()
-    settings = Settings()
     dd = DashboardData(
         cfg=cfg,
         paths=paths,
@@ -382,6 +405,11 @@ def _run_dashboard(args: argparse.Namespace) -> int:
         heartbeat=hb,
         settings=settings,
         refresh_seconds=max(0, int(args.refresh_seconds)),
+        policy_cfg=policy_cfg,
+        config_revision=revision,
+        config_source=str(meta.get("config_source") or "yaml"),
+        config_cache_age_seconds=meta.get("config_cache_age_seconds"),
+        config_writes_enabled=config_writes_enabled(settings),
     )
 
     bind_port = args.port if args.port is not None else settings.healthz_port
@@ -1042,6 +1070,79 @@ def _run_doctor(args: argparse.Namespace) -> int:
         print(f"warning: {w}", file=sys.stderr)
     for i in infos:
         print(f"note: {i}")
+    return 0
+
+
+def _validate_watchlist_orphans(cfg: Any) -> list[str]:
+    warnings: list[str] = []
+    target_names = {t.name for t in cfg.targets}
+    for movie in cfg.movies:
+        for target_name in movie.fandango_targets:
+            if target_name not in target_names:
+                warnings.append(
+                    f"movie {movie.key!r} references missing target {target_name!r}"
+                )
+    return warnings
+
+
+def _run_config_seed(args: argparse.Namespace) -> int:
+    config_path = _resolve_config_path(args.from_config)
+    if not config_path.is_file():
+        print(f"error: config file not found: {config_path}", file=sys.stderr)
+        return 1
+
+    cfg = load_config(config_path)
+    warnings = _validate_watchlist_orphans(cfg)
+    mode = "export-yaml" if args.export_yaml else ("apply" if args.apply else "dry-run")
+
+    print(f"Source: {config_path}")
+    print(f"Mode: {mode}")
+    print(f"Targets: {len(cfg.targets)}")
+    print(f"Movies: {len(cfg.movies)}")
+    print(f"Warnings: {len(warnings)}")
+    for warning in warnings:
+        print(f"  warning: {warning}")
+    print("Planned writes:")
+    for target in cfg.targets:
+        print(f"  upsert target {target.name}")
+    for movie in cfg.movies:
+        print(f"  upsert movie {movie.key}")
+
+    if args.export_yaml:
+        if args.apply or args.from_remote:
+            settings = Settings()
+            api_url = settings.config_api_url.strip()
+            if not api_url:
+                print("error: CONFIG_API_URL is required for --from-remote export", file=sys.stderr)
+                return 1
+            remote = fetch_watchlist_http(api_url)
+            yaml_text = export_watchlist_yaml(remote.targets, remote.movies)
+        else:
+            yaml_text = export_watchlist_yaml(cfg.targets, cfg.movies)
+        sys.stdout.write(yaml_text)
+        if not yaml_text.endswith("\n"):
+            sys.stdout.write("\n")
+        return 0
+
+    if not args.apply:
+        print("Revision: would bump current remote watchlist on apply")
+        return 0
+
+    settings = Settings()
+    if not settings.config_api_url.strip():
+        print("error: CONFIG_API_URL is required for --apply", file=sys.stderr)
+        return 1
+    if not plain_secret(settings.config_admin_token).strip():
+        print("error: CONFIG_ADMIN_TOKEN is required for --apply", file=sys.stderr)
+        return 1
+
+    result = remote_replace_watchlist(
+        settings,
+        cfg.targets,
+        cfg.movies,
+        force=bool(args.force),
+    )
+    print(f"Applied watchlist revision={result.get('revision')}")
     return 0
 
 

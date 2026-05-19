@@ -299,11 +299,6 @@ class SocialXConfig(ConfigBase):
         return self
 
 
-# -----------------------------------------------------------------------------
-# Movie registry (Phase 2.5 — ties Fandango targets to X handles)
-# -----------------------------------------------------------------------------
-
-
 class MovieConfig(ConfigBase):
     """One movie the watcher cares about.
 
@@ -386,11 +381,6 @@ class BrowserConfig(ConfigBase):
         p = Path(self.record_trace_dir)
         p.mkdir(parents=True, exist_ok=True)
         return p.resolve()
-
-
-# -----------------------------------------------------------------------------
-# Top-level config
-# -----------------------------------------------------------------------------
 
 
 class WatcherConfig(ConfigBase):
@@ -534,6 +524,22 @@ def load_config(path: str | Path) -> WatcherConfig:
     return _resolve_paths_against_config_dir(config_path.parent, cfg)
 
 
+class RemoteWatchlist(ConfigBase):
+    revision: int = Field(ge=0)
+    targets: list[TargetConfig] = Field(default_factory=list)
+    movies: list[MovieConfig] = Field(default_factory=list)
+
+
+def merge_watchlist(
+    base: WatcherConfig,
+    targets: list[TargetConfig],
+    movies: list[MovieConfig],
+) -> WatcherConfig:
+    """Overlay D1 watchlist onto YAML policy config."""
+    merged = base.model_copy(update={"targets": targets, "movies": movies})
+    return WatcherConfig.model_validate(merged.model_dump(mode="python"))
+
+
 def plain_secret(value: SecretStr | str) -> str:
     """String for Twilio/httpx/SMTP from :class:`~pydantic.types.SecretStr`."""
     if isinstance(value, SecretStr):
@@ -570,6 +576,26 @@ class Settings(BaseSettings):
     healthz_host: str = Field(
         default="127.0.0.1",
         validation_alias=AliasChoices("WATCHER_HEALTHZ_HOST", "healthz_host"),
+    )
+
+    # Remote D1 watchlist API (Cloudflare Worker)
+    config_api_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("CONFIG_API_URL", "config_api_url"),
+    )
+    config_admin_token: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        validation_alias=AliasChoices("CONFIG_ADMIN_TOKEN", "config_admin_token"),
+    )
+    config_poll_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        validation_alias=AliasChoices("CONFIG_POLL_SECONDS", "config_poll_seconds"),
+    )
+    config_cache_path: str = Field(
+        default="./state/watchlist-cache.json",
+        validation_alias=AliasChoices("CONFIG_CACHE_PATH", "config_cache_path"),
     )
 
     # Twilio

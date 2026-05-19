@@ -87,6 +87,7 @@ class TestBuildParser:
             "refs",
             "x-poll",
             "movies",
+            "config-seed",
             "dump-review",
             "doctor",
         }

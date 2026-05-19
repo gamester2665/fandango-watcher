@@ -72,6 +72,12 @@ class DashboardData:
     heartbeat: Any | None = None
     # Env for optional xAI (Grok) release-intel summaries on the dashboard.
     settings: Settings | None = None
+    # YAML policy snapshot used when overlaying remote D1 watchlist.
+    policy_cfg: WatcherConfig | None = None
+    config_revision: int | None = None
+    config_source: str = "yaml"
+    config_cache_age_seconds: int | None = None
+    config_writes_enabled: bool = False
     # HTML meta refresh interval; 0 disables auto-reload.
     refresh_seconds: int = 10
     # Set after the HTTP server binds (actual listen address for dashboard URL copy).
@@ -451,6 +457,15 @@ def collect_dashboard_state(data: DashboardData) -> dict[str, Any]:
                 "max_results_per_handle": data.cfg.social_x.max_results_per_handle,
                 "state_path": str(paths.social_x_state_path),
             },
+            "config_source": data.config_source,
+            "config_revision": data.config_revision,
+            "config_api_url": (
+                data.settings.config_api_url.strip()
+                if data.settings is not None
+                else ""
+            ),
+            "config_cache_age_seconds": data.config_cache_age_seconds,
+            "config_writes_enabled": data.config_writes_enabled,
         },
         "paths": {
             "state_dir": str(paths.state_dir),
@@ -665,8 +680,50 @@ def _movie_id_from_url(url: str) -> int | None:
 def add_movie_from_fandango_search_result(
     data: DashboardData,
     payload: dict[str, Any],
+    *,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Append selected Fandango search result to config and refresh dashboard config."""
+
+    active_settings = settings or data.settings
+    if active_settings is not None and active_settings.config_api_url.strip():
+        from .config_api_client import config_writes_enabled, reload_merged_config, remote_add_movie
+
+        if not config_writes_enabled(active_settings):
+            raise ValueError(
+                "CONFIG_ADMIN_TOKEN is not set on this server; dashboard writes are disabled"
+            )
+        with data.config_lock:
+            result = remote_add_movie(active_settings, payload)
+            policy = data.policy_cfg or data.cfg
+            if data.config_path is not None:
+                merged, revision, meta = reload_merged_config(
+                    data.config_path,
+                    active_settings,
+                    policy_cfg=policy,
+                )
+            else:
+                from .config_api_client import fetch_watchlist_http
+                from .config import merge_watchlist
+
+                remote = fetch_watchlist_http(active_settings.config_api_url)
+                merged = merge_watchlist(policy, remote.targets, remote.movies)
+                revision = remote.revision
+                meta = {"config_source": "d1", "config_revision": revision}
+            data.cfg = merged
+            data.paths = DashboardPaths.from_config(data.cfg)
+            data.config_revision = revision
+            data.config_source = str(meta.get("config_source") or "d1")
+            data.config_cache_age_seconds = meta.get("config_cache_age_seconds")
+        movie = result.get("movie") or {}
+        targets = result.get("targets") or []
+        return {
+            "movie": movie,
+            "targets": targets,
+            "config_path": str(data.config_path) if data.config_path else None,
+            "restart_watch_required": False,
+            "revision": result.get("revision"),
+        }
 
     config_path = data.config_path
     if config_path is None:
@@ -752,6 +809,106 @@ def add_movie_from_fandango_search_result(
         "targets": [{"name": name, "url": target_url} for name, target_url in new_targets],
         "config_path": str(config_path),
         "restart_watch_required": True,
+    }
+
+
+def delete_movie_from_watchlist(
+    data: DashboardData,
+    key: str,
+    *,
+    settings: Settings | None = None,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    active_settings = settings or data.settings
+    if active_settings is None or not active_settings.config_api_url.strip():
+        raise ValueError("remote watchlist is not configured")
+    from .config_api_client import config_writes_enabled, reload_merged_config, remote_delete_movie
+
+    if not config_writes_enabled(active_settings):
+        raise ValueError(
+            "CONFIG_ADMIN_TOKEN is not set on this server; dashboard writes are disabled"
+        )
+    with data.config_lock:
+        result = remote_delete_movie(
+            active_settings,
+            key,
+            expected_revision=expected_revision or data.config_revision,
+        )
+        policy = data.policy_cfg or data.cfg
+        if data.config_path is not None:
+            merged, revision, meta = reload_merged_config(
+                data.config_path,
+                active_settings,
+                policy_cfg=policy,
+            )
+        else:
+            from .config import merge_watchlist
+            from .config_api_client import fetch_watchlist_http
+
+            remote = fetch_watchlist_http(active_settings.config_api_url)
+            merged = merge_watchlist(policy, remote.targets, remote.movies)
+            revision = remote.revision
+            meta = {"config_source": "d1", "config_revision": revision}
+        data.cfg = merged
+        data.paths = DashboardPaths.from_config(data.cfg)
+        data.config_revision = revision
+        data.config_source = str(meta.get("config_source") or "d1")
+        data.config_cache_age_seconds = meta.get("config_cache_age_seconds")
+    return {
+        "deleted_key": key,
+        "revision": result.get("revision"),
+        "restart_watch_required": False,
+    }
+
+
+def patch_movie_in_watchlist(
+    data: DashboardData,
+    key: str,
+    patch: dict[str, Any],
+    *,
+    settings: Settings | None = None,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    active_settings = settings or data.settings
+    if active_settings is None or not active_settings.config_api_url.strip():
+        raise ValueError("remote watchlist is not configured")
+    from .config_api_client import config_writes_enabled, reload_merged_config, remote_patch_movie
+
+    if not config_writes_enabled(active_settings):
+        raise ValueError(
+            "CONFIG_ADMIN_TOKEN is not set on this server; dashboard writes are disabled"
+        )
+    payload = dict(patch)
+    if expected_revision is not None:
+        payload["expected_revision"] = expected_revision
+    elif data.config_revision is not None:
+        payload["expected_revision"] = data.config_revision
+    with data.config_lock:
+        result = remote_patch_movie(active_settings, key, payload)
+        policy = data.policy_cfg or data.cfg
+        if data.config_path is not None:
+            merged, revision, meta = reload_merged_config(
+                data.config_path,
+                active_settings,
+                policy_cfg=policy,
+            )
+        else:
+            from .config import merge_watchlist
+            from .config_api_client import fetch_watchlist_http
+
+            remote = fetch_watchlist_http(active_settings.config_api_url)
+            merged = merge_watchlist(policy, remote.targets, remote.movies)
+            revision = remote.revision
+            meta = {"config_source": "d1", "config_revision": revision}
+        data.cfg = merged
+        data.paths = DashboardPaths.from_config(data.cfg)
+        data.config_revision = revision
+        data.config_source = str(meta.get("config_source") or "d1")
+        data.config_cache_age_seconds = meta.get("config_cache_age_seconds")
+    return {
+        "movie_key": key,
+        "revision": result.get("revision"),
+        "restart_watch_required": False,
     }
 
 
@@ -1142,13 +1299,43 @@ def _render_target_controls(target_count: int) -> str:
 """
 
 
-def _render_movie_add_panel(config_path: str | None) -> str:
-    disabled = "" if config_path else " disabled"
-    disabled_hint = (
-        ""
-        if config_path
-        else '<p class="movie-add-status">Movie add is unavailable because the dashboard has no writable config path.</p>'
-    )
+def _render_movie_add_panel(
+    config_path: str | None,
+    *,
+    runtime: dict[str, Any] | None = None,
+) -> str:
+    runtime = runtime or {}
+    config_api_url = _first_nonempty_str(runtime.get("config_api_url"))
+    writes_enabled = bool(runtime.get("config_writes_enabled"))
+    config_source = _first_nonempty_str(runtime.get("config_source")) or "yaml"
+    config_revision = runtime.get("config_revision")
+
+    if writes_enabled:
+        disabled = ""
+        disabled_hint = ""
+        status_bits = [f"Config source: {config_source}"]
+        if config_revision is not None:
+            status_bits.append(f"revision {config_revision}")
+        status_text = " · ".join(status_bits)
+    elif config_api_url:
+        disabled = " disabled"
+        disabled_hint = (
+            '<p class="movie-add-status panel-warn">Watchlist is loaded from D1, but dashboard '
+            "writes are disabled because <code>CONFIG_ADMIN_TOKEN</code> is not set on this server.</p>"
+        )
+        status_text = f"Remote watchlist: {html.escape(config_api_url)}"
+    elif config_path:
+        disabled = ""
+        disabled_hint = ""
+        status_text = f"Config: {config_path}"
+    else:
+        disabled = " disabled"
+        disabled_hint = (
+            '<p class="movie-add-status">Movie add is unavailable because the dashboard has no '
+            "writable config path.</p>"
+        )
+        status_text = ""
+
     return f"""
 <section class="movie-add-panel" aria-label="Add movie from Fandango">
   <div>
@@ -1161,7 +1348,7 @@ def _render_movie_add_panel(config_path: str | None) -> str:
     <button type="submit" class="target-filter-btn"{disabled}>Search</button>
   </form>
   <div class="movie-add-results" id="movie-add-results"></div>
-  <p class="movie-add-status" id="movie-add-status">{html.escape('Config: ' + config_path) if config_path else ''}</p>
+  <p class="movie-add-status" id="movie-add-status">{html.escape(status_text)}</p>
   {disabled_hint}
 </section>
 """
@@ -1548,7 +1735,7 @@ def _dashboard_ui_script() -> str:
           });
         }).then(function (data) {
           var names = (data.targets || []).map(function (t) { return t.name; }).join(", ");
-          setAddStatus("Added " + data.movie.title + " (" + names + "). Restart watch/dashboard for the poll loop to use new targets.");
+          setAddStatus("Added " + data.movie.title + " (" + names + "). " + (data.restart_watch_required ? "Restart watch/dashboard for the poll loop to use new targets." : "Watch loop will reload automatically."));
           setTimeout(function () { window.location.reload(); }, 1200);
         }).catch(function (err) {
           action.disabled = false;
@@ -1587,6 +1774,27 @@ def _dashboard_ui_script() -> str:
         });
     });
   }
+  document.querySelectorAll(".movie-delete-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var key = btn.getAttribute("data-movie-key");
+      if (!key || !window.confirm("Delete movie " + key + " from the watchlist?")) return;
+      btn.disabled = true;
+      fetch("/api/movies/" + encodeURIComponent(key), { method: "DELETE" })
+        .then(function (resp) {
+          return resp.json().then(function (data) {
+            if (!resp.ok || data.ok === false) throw new Error(data.error || "Delete failed");
+            return data;
+          });
+        })
+        .then(function () {
+          window.location.reload();
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          window.alert(err && err.message ? err.message : "Delete failed");
+        });
+    });
+  });
   apply();
 })();
   </script>
@@ -3847,7 +4055,10 @@ def render_index_html(
         social_x_enabled=social_x_enabled,
     )
     target_controls = _render_target_controls(target_count)
-    movie_add_panel = _render_movie_add_panel(config_path)
+    movie_add_panel = _render_movie_add_panel(
+        config_path,
+        runtime=runtime if isinstance(runtime, dict) else {},
+    )
 
     assigned: set[str] = set()
     crawl_blocks: list[str] = []
@@ -4012,17 +4223,25 @@ def render_index_html(
       {sx_cards_html}
 """
 
+    config_writes_enabled = bool(runtime.get("config_writes_enabled")) if isinstance(runtime, dict) else False
     movie_rows: list[str] = []
     for m in movies:
         if not isinstance(m, dict):
             continue
         title = html.escape(str(m.get("title") or m.get("key") or ""))
         key = html.escape(str(m.get("key") or ""))
+        key_raw = str(m.get("key") or "")
         ftargets = html.escape(json.dumps(m.get("fandango_targets") or []))
         xh = html.escape(json.dumps(m.get("x_handles") or []))
+        actions = "—"
+        if config_writes_enabled and key_raw:
+            actions = (
+                f'<button type="button" class="target-filter-btn movie-delete-btn" '
+                f'data-movie-key="{html.escape(key_raw, quote=True)}">Delete</button>'
+            )
         movie_rows.append(
             f"<tr><td>{key}</td><td>{title}</td><td><code>{ftargets}</code></td>"
-            f"<td><code>{xh}</code></td></tr>"
+            f"<td><code>{xh}</code></td><td>{actions}</td></tr>"
         )
 
     n_registry = len(movie_rows)
@@ -4044,7 +4263,7 @@ def render_index_html(
 
     thead_reg = "".join(
         f'<th scope="col">{html.escape(col)}</th>'
-        for col in ("key", "title", "fandango_targets", "x_handles")
+        for col in ("key", "title", "fandango_targets", "x_handles", "actions")
     )
     reg_tbl = render_data_table(
         thead_row=thead_reg,

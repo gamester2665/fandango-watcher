@@ -88,6 +88,34 @@ After cutover, **laptop can be off** — VPS sends SMS via Twilio in `.env.produ
 | SSH health | `python vps/run_vps_cmd.py -p fandango-watcher "curl -fsS http://127.0.0.1:8787/healthz"` |
 | Preflight | `bash vps/scripts/preflight.sh` |
 
+### D1 watchlist CRUD (after deploy)
+
+1. Set matching secrets in `.env.production` and Wrangler:
+   - `CONFIG_API_URL=https://fandango-watcher.<account>.workers.dev`
+   - `CONFIG_ADMIN_TOKEN=<same random token>`
+   - `CONFIG_POLL_SECONDS=60`
+   - `CONFIG_CACHE_PATH=/app/state/watchlist-cache.json`
+2. Deploy Worker config API: `bash scripts/deploy-worker.sh`
+3. Seed D1 from YAML: `uv run fandango-watcher config-seed --from config.yaml --apply --force`
+4. Sync secrets to VPS and restart watcher container.
+5. Verify:
+   - `curl -fsS https://fandango.geobregon.com/api/status | jq '.runtime | {config_source, config_revision, config_writes_enabled}'`
+   - Add/delete a movie from the dashboard; confirm `docker logs fandango_watcher | rg "config reload"`
+
+Debug:
+
+```bash
+curl -sS "$CONFIG_API_URL/api/watchlist/revision"
+curl -sS -X POST "$CONFIG_API_URL/api/movies" \
+  -H "Authorization: Bearer $CONFIG_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test","url":"https://www.fandango.com/test-2027-999999/movie-overview"}'
+npx wrangler d1 execute fandango_watcher_db --remote --command \
+  "SELECT key, value FROM config_meta; SELECT COUNT(*) AS n FROM movies;"
+```
+
+Rollback: unset `CONFIG_API_URL` on VPS, restart container (YAML-only mode).
+
 ---
 
 ## 5. What we did *not* do (on purpose)

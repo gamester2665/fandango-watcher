@@ -7,17 +7,21 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from fandango_watcher.config import (
     BrowserConfig,
     NotifyConfig,
     PollConfig,
     PurchaseConfig,
     ScreenshotsConfig,
+    Settings,
     StateConfig,
     TargetConfig,
     TheaterConfig,
     ViewportConfig,
     WatcherConfig,
+    load_config,
 )
 from fandango_watcher.dashboard import (
     DashboardData,
@@ -202,6 +206,98 @@ movies: []
     assert added.fandango_movie_id == 244800
     assert added.release_date == "Friday, Dec 18, 2026"
     assert "targets:" in config_path.read_text(encoding="utf-8")
+
+
+def test_add_movie_uses_remote_api_when_config_api_url_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+targets:
+  - name: alpha
+    url: https://example.com/a
+theater:
+  display_name: CW
+  fandango_theater_anchor: AMC Universal CityWalk
+formats:
+  require: []
+  include: []
+poll:
+  min_seconds: 30
+  max_seconds: 35
+notify:
+  channels: []
+  on_events: []
+screenshots:
+  dir: artifacts/screenshots
+state:
+  dir: state
+purchase:
+  enabled: true
+  mode: notify_only
+movies: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    original_yaml = config_path.read_text(encoding="utf-8")
+    cfg = load_config(config_path)
+    settings = Settings(
+        config_api_url="https://worker.example",
+        config_admin_token="secret-token",
+    )
+    dd = DashboardData(
+        cfg=cfg,
+        paths=DashboardPaths.from_config(cfg),
+        config_path=config_path,
+        settings=settings,
+        policy_cfg=cfg,
+        config_writes_enabled=True,
+    )
+
+    def _fake_remote_add(_settings, payload):
+        assert payload["title"]
+        return {
+            "ok": True,
+            "revision": 3,
+            "movie": {"key": "dune_part_three", "title": payload["title"]},
+            "targets": [{"name": "dune-part-three-overview"}],
+        }
+
+    def _fake_reload(_path, _settings, policy_cfg=None):
+        from fandango_watcher.config import MovieConfig, TargetConfig, merge_watchlist
+
+        merged = merge_watchlist(
+            policy_cfg or cfg,
+            [TargetConfig(name="dune-part-three-overview", url=payload["url"].split("?", 1)[0])],
+            [
+                MovieConfig(
+                    key="dune_part_three",
+                    title=payload["title"],
+                    fandango_targets=["dune-part-three-overview"],
+                )
+            ],
+        )
+        return merged, 3, {"config_source": "d1"}
+
+    payload = {
+        "title": "Dune: Part Three (2026)",
+        "url": "https://www.fandango.com/dune-part-three-2026-244800/movie-overview",
+    }
+    monkeypatch.setattr(
+        "fandango_watcher.config_api_client.remote_add_movie",
+        _fake_remote_add,
+    )
+    monkeypatch.setattr(
+        "fandango_watcher.config_api_client.reload_merged_config",
+        _fake_reload,
+    )
+
+    result = add_movie_from_fandango_search_result(dd, payload, settings=settings)
+    assert result["restart_watch_required"] is False
+    assert result["revision"] == 3
+    assert dd.cfg.movies[-1].key == "dune_part_three"
+    assert config_path.read_text(encoding="utf-8") == original_yaml
 
 
 def test_render_index_html_escapes_movie_title() -> None:

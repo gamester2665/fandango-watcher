@@ -438,6 +438,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format (default: table).",
     )
 
+    # -- config-seed --------------------------------------------------------
+    p_seed = subparsers.add_parser(
+        "config-seed",
+        help="Seed or export the D1 watchlist from YAML via the Worker config API.",
+    )
+    p_seed.add_argument(
+        "--from",
+        dest="from_config",
+        default=None,
+        help="YAML config path (default: $WATCHER_CONFIG or ./config.yaml).",
+    )
+    p_seed.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print planned writes without contacting the Worker API (default).",
+    )
+    p_seed.add_argument(
+        "--apply",
+        action="store_true",
+        help="Replace the remote D1 watchlist with targets/movies from YAML.",
+    )
+    p_seed.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow replacing a non-empty remote watchlist during --apply.",
+    )
+    p_seed.add_argument(
+        "--export-yaml",
+        action="store_true",
+        help="Export watchlist YAML to stdout instead of seeding D1.",
+    )
+    p_seed.add_argument(
+        "--from-remote",
+        action="store_true",
+        help="With --export-yaml, fetch the remote watchlist instead of local YAML.",
+    )
+
     # -- doctor -------------------------------------------------------------
     p_doctor = subparsers.add_parser(
         "doctor",

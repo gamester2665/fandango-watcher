@@ -691,42 +691,98 @@ def _make_handler_cls(
             self._handle_readonly_request(send_body=False)
 
         def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+            self._handle_movie_mutation("POST")
+
+        def do_PATCH(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+            self._handle_movie_mutation("PATCH")
+
+        def do_DELETE(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+            self._handle_movie_mutation("DELETE")
+
+        def _handle_movie_mutation(self, method: str) -> None:
             parsed = urlparse(self.path)
             path_only = unquote(parsed.path)
-            if dashboard_data is None or path_only != "/api/movies/add":
+            if dashboard_data is None:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
                 return
+
+            add_path = path_only == "/api/movies/add"
+            patch_match = path_only.startswith("/api/movies/") and path_only != "/api/movies/add"
+            if method == "POST" and not add_path:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+                return
+            if method in ("PATCH", "DELETE") and not patch_match:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+                return
+            if method == "POST" and not add_path:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+                return
+
             try:
                 n = int(self.headers.get("Content-Length") or "0")
             except ValueError:
                 n = 0
-            if n <= 0 or n > 100_000:
-                _send_json(
-                    self,
-                    {"ok": False, "error": "invalid JSON body length"},
-                    status=HTTPStatus.BAD_REQUEST,
-                )
-                return
-            try:
-                payload = json.loads(self.rfile.read(n).decode("utf-8"))
-            except Exception:
-                _send_json(
-                    self,
-                    {"ok": False, "error": "invalid JSON body"},
-                    status=HTTPStatus.BAD_REQUEST,
-                )
-                return
-            if not isinstance(payload, dict):
-                _send_json(
-                    self,
-                    {"ok": False, "error": "JSON body must be an object"},
-                    status=HTTPStatus.BAD_REQUEST,
-                )
-                return
-            from .dashboard import add_movie_from_fandango_search_result
+            body = b""
+            if n > 0:
+                if n > 100_000:
+                    _send_json(
+                        self,
+                        {"ok": False, "error": "invalid JSON body length"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                body = self.rfile.read(n)
+
+            payload: dict[str, Any] = {}
+            if body:
+                try:
+                    parsed_body = json.loads(body.decode("utf-8"))
+                except Exception:
+                    _send_json(
+                        self,
+                        {"ok": False, "error": "invalid JSON body"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                if not isinstance(parsed_body, dict):
+                    _send_json(
+                        self,
+                        {"ok": False, "error": "JSON body must be an object"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                payload = parsed_body
+
+            from .dashboard import (
+                add_movie_from_fandango_search_result,
+                delete_movie_from_watchlist,
+                patch_movie_in_watchlist,
+            )
 
             try:
-                result = add_movie_from_fandango_search_result(dashboard_data, payload)
+                if method == "POST":
+                    result = add_movie_from_fandango_search_result(
+                        dashboard_data,
+                        payload,
+                        settings=getattr(dashboard_data, "settings", None),
+                    )
+                else:
+                    key = path_only.rsplit("/", 1)[-1]
+                    if method == "DELETE":
+                        result = delete_movie_from_watchlist(
+                            dashboard_data,
+                            key,
+                            settings=getattr(dashboard_data, "settings", None),
+                            expected_revision=payload.get("expected_revision"),
+                        )
+                    else:
+                        result = patch_movie_in_watchlist(
+                            dashboard_data,
+                            key,
+                            payload,
+                            settings=getattr(dashboard_data, "settings", None),
+                            expected_revision=payload.get("expected_revision"),
+                        )
             except ValueError as exc:
                 _send_json(
                     self,
@@ -735,10 +791,10 @@ def _make_handler_cls(
                 )
                 return
             except Exception as exc:  # noqa: BLE001 - keep dashboard POST JSON-shaped
-                logger.warning("failed to add movie from dashboard", exc_info=True)
+                logger.warning("failed movie watchlist mutation from dashboard", exc_info=True)
                 _send_json(
                     self,
-                    {"ok": False, "error": f"failed to update config: {type(exc).__name__}"},
+                    {"ok": False, "error": f"failed to update watchlist: {type(exc).__name__}"},
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
                 return
