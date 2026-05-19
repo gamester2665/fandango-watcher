@@ -42,6 +42,9 @@ DOCKER_OPERATOR_SCRIPTS = (
     "scripts/vps-pull-and-restart.sh",
     "scripts/vps-sync-secrets.sh",
     "scripts/vps-sync-secrets.ps1",
+    "scripts/vps-first-time.sh",
+    "scripts/docker-soak-check.sh",
+    "scripts/docker-soak-check.ps1",
 )
 
 

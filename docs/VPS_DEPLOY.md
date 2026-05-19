@@ -68,6 +68,19 @@ bash scripts/vps-sync-secrets.sh
 # or: powershell -File scripts/vps-sync-secrets.ps1
 ```
 
+**SSH from this machine:** add your public key on the VPS (`~/.ssh/authorized_keys`), or use password auth once:
+
+```bash
+type $env:USERPROFILE\.ssh\id_ed25519.pub   # PowerShell — paste on VPS
+ssh root@74.48.91.123
+```
+
+First deploy on VPS (after clone + secrets):
+
+```bash
+bash scripts/vps-first-time.sh
+```
+
 Compose files used:
 
 ```bash
