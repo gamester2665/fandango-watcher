@@ -11,7 +11,7 @@ Exact playbook used for production (May 2026). Copy `vps/` to other projects and
 - [ ] `vps/projects/fandango-watcher.env` committed (no secrets)
 - [ ] `docker-compose.vps.yml` — `127.0.0.1:8787`, `.env.production`
 - [ ] `.env` + `config.yaml` on laptop (never commit)
-- [ ] `CLOUDFLARE_API_TOKEN` in `.env` — Account **Cloudflare Tunnel Edit** + Zone **DNS Edit**
+- [ ] `CLOUDFLARE_API_TOKEN` in `.env` — **Workers Scripts Edit**, **D1 Edit**, plus Tunnel + DNS Edit (see `.env.example`)
 
 ---
 
