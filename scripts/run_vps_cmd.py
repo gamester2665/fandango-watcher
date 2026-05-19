@@ -17,17 +17,51 @@ DEFAULT_REMOTE_DIR = "/root/fandango-watcher"
 CONNECT_TIMEOUT = 90
 BANNER_TIMEOUT = 180
 
+# Rose monorepo secrets (same VPS as mail + Rose). Override with ROSE_SECRETS_VPS_MD.
+_ROSE_SECRETS_CANDIDATES = (
+    Path(os.environ.get("ROSE_SECRETS_VPS_MD", "")),
+    Path(r"G:/_backup/Code/_mom/rose_astrology/secrets.vps.md"),
+    Path.home() / "rose_astrology" / "secrets.vps.md",
+)
+
+
+def _password_from_secrets_file(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "SSH password" in line and ":" in line:
+            part = line.split(":", 1)[1].strip().strip("`").strip()
+            if part:
+                return part
+    return ""
+
+
+def _resolve_password(host: str, user: str) -> str:
+    for key in ("FANDANGO_VPS_SSH_PASSWORD", "ROSE_VPS_SSH_PASSWORD"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+
+    repo_root = Path(__file__).resolve().parent.parent
+    local_secrets = repo_root / "secrets.vps.md"
+    found = _password_from_secrets_file(local_secrets)
+    if found:
+        return found
+
+    for candidate in _ROSE_SECRETS_CANDIDATES:
+        if not candidate or str(candidate) == ".":
+            continue
+        found = _password_from_secrets_file(candidate)
+        if found:
+            return found
+
+    return getpass.getpass(f"SSH password for {user}@{host}: ")
+
 
 def _connect() -> paramiko.SSHClient:
     host = os.environ.get("FANDANGO_VPS_HOST") or os.environ.get("ROSE_VPS_HOST") or DEFAULT_HOST
     user = os.environ.get("FANDANGO_VPS_SSH_USER") or os.environ.get("ROSE_VPS_SSH_USER") or DEFAULT_USER
-    password = (
-        os.environ.get("FANDANGO_VPS_SSH_PASSWORD")
-        or os.environ.get("ROSE_VPS_SSH_PASSWORD")
-        or ""
-    )
-    if not password:
-        password = getpass.getpass(f"SSH password for {user}@{host}: ")
+    password = _resolve_password(host, user)
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())

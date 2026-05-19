@@ -77,13 +77,24 @@ type $env:USERPROFILE\.ssh\id_ed25519.pub   # PowerShell — paste on VPS
 ssh root@74.48.91.123
 ```
 
-Password helper (Paramiko, prompts if env unset):
+Password helper (Paramiko; reads Rose `secrets.vps.md` automatically if present):
 
 ```bash
-export ROSE_VPS_SSH_PASSWORD='…'   # or FANDANGO_VPS_SSH_PASSWORD
+# Same VPS password as Rose — pick one:
+#   G:/_backup/Code/_mom/rose_astrology/secrets.vps.md  (SSH password: line)
+#   export ROSE_VPS_SSH_PASSWORD='…'
+#   export ROSE_SECRETS_VPS_MD='G:/path/to/secrets.vps.md'
+
 python scripts/run_vps_cmd.py "docker ps"
 python scripts/run_vps_cmd.py --sync-secrets
-python scripts/run_vps_cmd.py "bash scripts/vps-first-time.sh"
+python scripts/run_vps_cmd.py "bash scripts/vps-preflight.sh"
+```
+
+Or use Rose's helper from its monorepo root (identical host):
+
+```bash
+cd G:/_backup/Code/_mom/rose_astrology
+python run_vps_cmd.py "docker ps"
 ```
 
 First deploy on VPS (after clone + secrets):
