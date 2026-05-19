@@ -28,8 +28,7 @@ Deploy **fandango_watcher** on `root@74.48.91.123` next to Rose Astrology and th
 
 ## Phase 1 — SSH access
 
-- [ ] Add laptop public key to VPS `/root/.ssh/authorized_keys`, **or** use `ROSE_VPS_SSH_PASSWORD` / Rose `secrets.vps.md`
-- [ ] Verify: `ssh root@74.48.91.123 "hostname && docker ps"`
+- [ ] Add laptop public key to VPS `/root/.ssh/authorized_keys`, **or** set `ROSE_VPS_SSH_PASSWORD` / `FANDANGO_VPS_SSH_PASSWORD` and use `python scripts/run_vps_cmd.py "hostname"`
 
 ---
 

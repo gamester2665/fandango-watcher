@@ -70,11 +70,20 @@ bash scripts/vps-sync-secrets.sh
 # or: powershell -File scripts/vps-sync-secrets.ps1
 ```
 
-**SSH from this machine:** add your public key on the VPS (`~/.ssh/authorized_keys`), or use password auth once:
+**SSH from this machine:** add your public key on the VPS (`~/.ssh/authorized_keys`), or use password auth:
 
 ```bash
 type $env:USERPROFILE\.ssh\id_ed25519.pub   # PowerShell — paste on VPS
 ssh root@74.48.91.123
+```
+
+Password helper (Paramiko, prompts if env unset):
+
+```bash
+export ROSE_VPS_SSH_PASSWORD='…'   # or FANDANGO_VPS_SSH_PASSWORD
+python scripts/run_vps_cmd.py "docker ps"
+python scripts/run_vps_cmd.py --sync-secrets
+python scripts/run_vps_cmd.py "bash scripts/vps-first-time.sh"
 ```
 
 First deploy on VPS (after clone + secrets):
