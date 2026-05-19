@@ -5,7 +5,6 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
-    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +29,7 @@ build-backend = "uv_build"
 core = [
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
+    "pyyaml>=6.0.3",
 ]
 watcher = [
     "playwright>=1.58.0",
