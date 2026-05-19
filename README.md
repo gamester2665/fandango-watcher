@@ -81,7 +81,7 @@ Deploy the Docker/VPS stack by building the Docker image (or installing with `uv
 
 **Optional — Cloudflare Python Worker:** `wrangler.toml` defines a scheduled Worker. Deploy with `bash scripts/deploy-worker.sh` (or `scripts/deploy-worker.ps1`) after `npx wrangler login`, **or** set `CLOUDFLARE_API_TOKEN` in `.env` / `.env.local` (or `FANDANGO_WATCHER_ENV_FILE`) — see `.env.example`. **CI:** add the same token as a GitHub Actions repository secret `CLOUDFLARE_API_TOKEN`, then run the **Deploy Cloudflare Worker** workflow (or push a change under the paths listed in `.github/workflows/deploy-cloudflare-worker.yml`). Set `account_id` in `wrangler.toml` to your Cloudflare account (from the dashboard URL) if it differs. Bundled defaults live in `worker-config.yaml`; set Twilio/SMTP values with `npx wrangler secret put …` (see comments in `wrangler.toml`). If Wrangler OAuth fails with HTTP 400, run `npx wrangler logout` then `npx wrangler login` again.
 
-**Policy:** do not deploy to a VPS until you have manually confirmed behavior locally. Same rule is spelled out in [`PLAN.md`](./PLAN.md) (local sign-off gate). When ready, use [`docs/VPS_DEPLOY.md`](./docs/VPS_DEPLOY.md) and [`docs/VPS_COLOCATION_HANDOFF.md`](./docs/VPS_COLOCATION_HANDOFF.md) for the shared RackNerd host.
+**Policy:** do not deploy to a VPS until you have manually confirmed behavior locally. Same rule is spelled out in [`PLAN.md`](./PLAN.md) (local sign-off gate). When ready, use [`vps/README.md`](./vps/README.md) (reusable kit), [`docs/VPS_DEPLOY.md`](./docs/VPS_DEPLOY.md), and [`docs/VPS_COLOCATION_HANDOFF.md`](./docs/VPS_COLOCATION_HANDOFF.md) for the shared RackNerd host.
 
 ---
 

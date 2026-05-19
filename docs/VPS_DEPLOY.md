@@ -2,11 +2,13 @@
 
 Deploy the **same Docker stack** validated locally onto the shared RackNerd VPS (`74.48.91.123`) **without** breaking Rose Astrology or the mail stack.
 
-**Gate:** Complete [docker_implementation.md](./docker_implementation.md) Phase 5 (24h local soak) before production cutover. This doc is prep work and the operator runbook.
+**Shared VPS kit:** [vps/README.md](../vps/README.md) — scripts, SSH helper, and neighbor safety checks live under `vps/`. This project uses `vps/projects/fandango-watcher.env`; `scripts/vps-*.sh` are thin wrappers.
 
-**Host constraints:** See [VPS_COLOCATION_HANDOFF.md](./VPS_COLOCATION_HANDOFF.md) for ports, RAM (2.4 GiB), disk, and Tunnel patterns.
+**Host constraints:** [vps/docs/COLOCATION.md](../vps/docs/COLOCATION.md)
 
-**Step-by-step checklist:** [VPS_DEPLOY_PLAN.md](./VPS_DEPLOY_PLAN.md)
+**Generic runbook:** [vps/docs/DEPLOY.md](../vps/docs/DEPLOY.md)
+
+**Step-by-step checklist:** [VPS_DEPLOY_PLAN.md](./VPS_DEPLOY_PLAN.md) · **Completed cutover playbook:** [vps/docs/CHECKLIST-fandango-watcher.md](../vps/docs/CHECKLIST-fandango-watcher.md)
 
 ---
 
@@ -77,17 +79,12 @@ type $env:USERPROFILE\.ssh\id_ed25519.pub   # PowerShell — paste on VPS
 ssh root@74.48.91.123
 ```
 
-Password helper (Paramiko; reads Rose `secrets.vps.md` automatically if present):
+Password helper (Paramiko; reads `vps/host.env` + Rose `secrets.vps.md`):
 
 ```bash
-# Same VPS password as Rose — pick one:
-#   G:/_backup/Code/_mom/rose_astrology/secrets.vps.md  (SSH password: line)
-#   export ROSE_VPS_SSH_PASSWORD='…'
-#   export ROSE_SECRETS_VPS_MD='G:/path/to/secrets.vps.md'
-
-python scripts/run_vps_cmd.py "docker ps"
-python scripts/run_vps_cmd.py --sync-secrets
-python scripts/run_vps_cmd.py "bash scripts/vps-preflight.sh"
+python vps/run_vps_cmd.py --project fandango-watcher "docker ps"
+python scripts/run_vps_cmd.py --sync-secrets    # wrapper → same thing
+python scripts/run_vps_cmd.py "bash vps/scripts/preflight.sh"
 ```
 
 Or use Rose's helper from its monorepo root (identical host):
@@ -143,11 +140,21 @@ curl -fsS http://127.0.0.1:8787/healthz
 
 ## 4. Cloudflare Tunnel (optional dashboard)
 
-If you want HTTPS access without opening VPS :443:
+**Public URL:** `https://fandango.geobregon.com` → `http://127.0.0.1:8787`
 
-1. Zero Trust → Tunnels → token-managed tunnel (`cloudflared.service`) or a **second** tunnel unit.
-2. Public hostname, e.g. `watcher.example.com` → `http://127.0.0.1:8787`.
-3. Restrict access (Cloudflare Access) — dashboard is read-only but exposes state.
+**Recommended:** add a hostname to the existing **`rose-astrology`** tunnel (same VPS `cloudflared.service` connector). Do **not** create a second tunnel unless you need isolation.
+
+Add `CLOUDFLARE_API_TOKEN` to `.env` (Account **Cloudflare Tunnel Edit** + Zone **DNS Edit**), then:
+
+```bash
+bash scripts/cloudflare-publish-fandango.sh
+curl -fsS https://fandango.geobregon.com/healthz
+```
+
+Script: `vps/scripts/cloudflare-publish-hostname.py` (`--dry-run` to preview ingress).  
+Dedicated tunnel: `--strategy dedicated` (second systemd unit — usually unnecessary).
+
+Manual dashboard path (no API token): Zero Trust → Networks → Tunnels → **rose-astrology** → Public Hostname → `fandango.geobregon.com` → `http://127.0.0.1:8787`.
 
 Do **not** repoint `rose.geobregon.com` rules.
 
@@ -208,6 +215,6 @@ Re-enable local `uv run watch` or Cloudflare Worker only after intentional cutov
 
 ## Related
 
+- **Shared VPS kit:** [vps/README.md](../vps/README.md)
 - Local Docker runbook: [docker_implementation.md](./docker_implementation.md)
-- Shared VPS inventory: [VPS_COLOCATION_HANDOFF.md](./VPS_COLOCATION_HANDOFF.md)
-- Rose SSH helper (reuse pattern): `run_vps_cmd.py` in `rose_astrology` monorepo
+- Shared VPS inventory: [vps/docs/COLOCATION.md](../vps/docs/COLOCATION.md)

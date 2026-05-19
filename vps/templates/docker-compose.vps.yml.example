@@ -1,0 +1,16 @@
+# VPS production overlay — copy/adapt per project.
+#   docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+#
+# Bind app ports to 127.0.0.1 only; expose via Cloudflare Tunnel if needed.
+# See vps/docs/COLOCATION.md and vps/docs/DEPLOY.md.
+
+name: my-app
+
+services:
+  app:
+    env_file:
+      - path: .env.production
+        required: false
+    ports:
+      - "127.0.0.1:7170:7170"   # pick unused port — document in vps/projects/<name>.env
+    restart: always

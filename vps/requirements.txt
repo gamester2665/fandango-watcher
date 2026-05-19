@@ -1,0 +1,2 @@
+# Optional — for vps/run_vps_cmd.py only (or use project venv if paramiko already installed)
+paramiko>=3.0

@@ -1,6 +1,7 @@
 # Secrets & local overrides
 .env
 config.yaml
+vps/host.env
 
 # Runtime artifacts (volume-mounted in Docker; local-only otherwise)
 artifacts/
@@ -26,6 +27,7 @@ dist/
 
 # IDE / OS
 .cursor/
+.playwright-cli/
 .vscode/
 .idea/
 .DS_Store

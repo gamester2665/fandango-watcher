@@ -1,8 +1,8 @@
 # VPS deploy plan (fandango_watcher co-location)
 
-Deploy **fandango_watcher** on `root@74.48.91.123` next to Rose Astrology and the mail stack, using [VPS_COLOCATION_HANDOFF.md](./VPS_COLOCATION_HANDOFF.md) collision rules and repo scripts in [VPS_DEPLOY.md](./VPS_DEPLOY.md).
+Deploy **fandango_watcher** on `root@74.48.91.123` next to Rose Astrology and the mail stack, using [VPS_COLOCATION_HANDOFF.md](./VPS_COLOCATION_HANDOFF.md) collision rules and the reusable [vps/](../vps/README.md) kit ([VPS_DEPLOY.md](./VPS_DEPLOY.md)).
 
-**Gate:** Complete [docker_implementation.md](./docker_implementation.md) Phase 5 (24h local Docker soak) before VPS production cutover.
+**Production cutover (done):** [vps/docs/CHECKLIST-fandango-watcher.md](../vps/docs/CHECKLIST-fandango-watcher.md) — includes Cloudflare API publish to `https://fandango.geobregon.com`.
 
 ---
 

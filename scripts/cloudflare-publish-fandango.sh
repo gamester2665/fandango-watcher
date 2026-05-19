@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
+# fandango_watcher → vps/scripts/cloudflare-publish.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export VPS_PROJECT_ENV="$ROOT/vps/projects/fandango-watcher.env"
 export VPS_PROJECT_NAME=fandango-watcher
-exec bash "$ROOT/vps/scripts/first-time.sh" "$@"
+exec bash "$ROOT/vps/scripts/cloudflare-publish.sh" "$@"
