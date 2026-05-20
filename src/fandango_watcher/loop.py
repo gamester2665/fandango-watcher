@@ -763,7 +763,12 @@ def run_watch(
                 last_config_check = time.monotonic()
                 try:
                     from .config import merge_watchlist
-                    from .config_api_client import fetch_revision_http, fetch_watchlist_http, write_watchlist_cache
+                    from .config_api_client import (
+                        fetch_revision_http,
+                        fetch_watchlist_http,
+                        watchlist_config_source,
+                        write_watchlist_cache,
+                    )
 
                     rev = fetch_revision_http(api_url)
                     if rev != cached_revision:
@@ -784,7 +789,9 @@ def run_watch(
                             dashboard_data.cfg = cfg
                             dashboard_data.paths = DashboardPaths.from_config(cfg)
                             dashboard_data.config_revision = rev
-                            dashboard_data.config_source = "d1"
+                            dashboard_data.config_source = str(
+                                runtime_meta.get("config_source") or watchlist_config_source(settings)
+                            )
                             dashboard_data.config_cache_age_seconds = 0
                         logger.info(
                             "config reload revision=%s targets=%d movies=%d",

@@ -687,7 +687,7 @@ def add_movie_from_fandango_search_result(
 
     active_settings = settings or data.settings
     if active_settings is not None and active_settings.config_api_url.strip():
-        from .config_api_client import config_writes_enabled, reload_merged_config, remote_add_movie
+        from .config_api_client import config_writes_enabled, reload_merged_config, remote_add_movie, watchlist_config_source
 
         if not config_writes_enabled(active_settings):
             raise ValueError(
@@ -709,11 +709,16 @@ def add_movie_from_fandango_search_result(
                 remote = fetch_watchlist_http(active_settings.config_api_url)
                 merged = merge_watchlist(policy, remote.targets, remote.movies)
                 revision = remote.revision
-                meta = {"config_source": "d1", "config_revision": revision}
+                meta = {
+                    "config_source": watchlist_config_source(active_settings),
+                    "config_revision": revision,
+                }
             data.cfg = merged
             data.paths = DashboardPaths.from_config(data.cfg)
             data.config_revision = revision
-            data.config_source = str(meta.get("config_source") or "d1")
+            data.config_source = str(
+                meta.get("config_source") or watchlist_config_source(active_settings)
+            )
             data.config_cache_age_seconds = meta.get("config_cache_age_seconds")
         movie = result.get("movie") or {}
         targets = result.get("targets") or []
@@ -822,7 +827,12 @@ def delete_movie_from_watchlist(
     active_settings = settings or data.settings
     if active_settings is None or not active_settings.config_api_url.strip():
         raise ValueError("remote watchlist is not configured")
-    from .config_api_client import config_writes_enabled, reload_merged_config, remote_delete_movie
+    from .config_api_client import (
+        config_writes_enabled,
+        reload_merged_config,
+        remote_delete_movie,
+        watchlist_config_source,
+    )
 
     if not config_writes_enabled(active_settings):
         raise ValueError(
@@ -848,11 +858,14 @@ def delete_movie_from_watchlist(
             remote = fetch_watchlist_http(active_settings.config_api_url)
             merged = merge_watchlist(policy, remote.targets, remote.movies)
             revision = remote.revision
-            meta = {"config_source": "d1", "config_revision": revision}
+            meta = {
+                "config_source": watchlist_config_source(active_settings),
+                "config_revision": revision,
+            }
         data.cfg = merged
         data.paths = DashboardPaths.from_config(data.cfg)
         data.config_revision = revision
-        data.config_source = str(meta.get("config_source") or "d1")
+        data.config_source = str(meta.get("config_source") or watchlist_config_source(active_settings))
         data.config_cache_age_seconds = meta.get("config_cache_age_seconds")
     return {
         "deleted_key": key,
@@ -872,7 +885,12 @@ def patch_movie_in_watchlist(
     active_settings = settings or data.settings
     if active_settings is None or not active_settings.config_api_url.strip():
         raise ValueError("remote watchlist is not configured")
-    from .config_api_client import config_writes_enabled, reload_merged_config, remote_patch_movie
+    from .config_api_client import (
+        config_writes_enabled,
+        reload_merged_config,
+        remote_patch_movie,
+        watchlist_config_source,
+    )
 
     if not config_writes_enabled(active_settings):
         raise ValueError(
@@ -899,11 +917,14 @@ def patch_movie_in_watchlist(
             remote = fetch_watchlist_http(active_settings.config_api_url)
             merged = merge_watchlist(policy, remote.targets, remote.movies)
             revision = remote.revision
-            meta = {"config_source": "d1", "config_revision": revision}
+            meta = {
+                "config_source": watchlist_config_source(active_settings),
+                "config_revision": revision,
+            }
         data.cfg = merged
         data.paths = DashboardPaths.from_config(data.cfg)
         data.config_revision = revision
-        data.config_source = str(meta.get("config_source") or "d1")
+        data.config_source = str(meta.get("config_source") or watchlist_config_source(active_settings))
         data.config_cache_age_seconds = meta.get("config_cache_age_seconds")
     return {
         "movie_key": key,
@@ -1025,6 +1046,131 @@ def _social_state_for_handle(
             continue
         return value if isinstance(value, dict) else None
     return None
+
+
+def _effective_recent_tweets(hst: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return cached tweet history, falling back to the legacy single-tweet fields."""
+    recent = hst.get("recent_tweets")
+    if isinstance(recent, list):
+        out: list[dict[str, Any]] = []
+        for item in recent:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("tweet_id") or item.get("id") or "").strip()
+            text = item.get("text")
+            if not tid or not isinstance(text, str) or not text.strip():
+                continue
+            out.append(item)
+        if out:
+            return out
+    tid = hst.get("last_seen_tweet_id")
+    text = hst.get("last_seen_tweet_text")
+    if tid and isinstance(text, str) and text.strip():
+        return [
+            {
+                "tweet_id": str(tid),
+                "text": text,
+                "created_at": hst.get("last_seen_tweet_created_at"),
+                "ticket_analysis": hst.get("last_seen_ticket_analysis"),
+            }
+        ]
+    return []
+
+
+def _tweet_sort_key(tweet: dict[str, Any]) -> tuple[int, str]:
+    tid = str(tweet.get("tweet_id") or tweet.get("id") or "0")
+    try:
+        return (int(tid), tid)
+    except ValueError:
+        return (0, tid)
+
+
+def _tweet_announces_tickets(tweet: dict[str, Any]) -> bool:
+    analysis = tweet.get("ticket_analysis")
+    return isinstance(analysis, dict) and bool(analysis.get("announces_tickets"))
+
+
+def _render_tweet_filter_controls(*, total: int, ticket_count: int) -> str:
+    buttons = "".join(
+        f'<button type="button" class="target-filter-btn tweet-filter-btn{" is-active" if key == "all" else ""}" '
+        f'data-tweet-filter="{html.escape(key, quote=True)}" aria-pressed="{"true" if key == "all" else "false"}">'
+        f"{html.escape(label)}</button>"
+        for key, label in (
+            ("all", "All"),
+            ("ticket", "Ticket related"),
+        )
+    )
+    return f"""
+  <div class="tweet-filter-row" role="group" aria-label="Tweet filters">
+    {buttons}
+  </div>
+  <p class="tweet-filter-count" aria-live="polite">{html.escape(str(total))} tweet{"s" if total != 1 else ""} · {html.escape(str(ticket_count))} ticket related</p>
+"""
+
+
+def _render_tweet_timeline_card(
+    handle: str,
+    tweet: dict[str, Any],
+    *,
+    handle_state: str,
+    handle_badge: str,
+    now: datetime,
+    polled: object | None = None,
+) -> str:
+    handle_e = html.escape(handle)
+    tid = str(tweet.get("tweet_id") or tweet.get("id") or "")
+    text_raw = str(tweet.get("text") or "")
+    tw_at = tweet.get("created_at")
+    profile_url = f"https://x.com/{handle}"
+    tweet_url = f"https://x.com/{handle}/status/{tid}" if tid else profile_url
+    card_classes = ["tweet-embed", "tweet-timeline-item"]
+    filter_tier = "ticket" if _tweet_announces_tickets(tweet) else "all"
+    if handle_state != _SX_STATE_OK:
+        card_classes.append("tweet-empty-card")
+
+    analysis = tweet.get("ticket_analysis")
+    analysis_html = ""
+    if isinstance(analysis, dict):
+        status = str(analysis.get("status") or "unknown").replace("_", " ")
+        status_raw = str(analysis.get("status") or "unknown")
+        announces = bool(analysis.get("announces_tickets"))
+        if announces:
+            slug = re.sub(r"[^a-z0-9_-]", "", status_raw.lower()) or "unknown"
+            card_classes.extend(["sx-ticket-signal", f"sx-status-{slug}"])
+        variants = ("pill-ok",) if announces else ("pill-muted",)
+        if announces and status_raw == "soon":
+            variants = ("pill-warn",)
+        analysis_html = (
+            '<p class="tweet-analysis">'
+            + render_status_pill(html.escape(status), variants=variants)
+            + "</p>"
+        )
+
+    meta_bits = []
+    if tw_at:
+        meta_bits.append(
+            f'posted <span class="sx-ts">{_fmt_timestamp_html(str(tw_at), now=now)}</span>'
+        )
+    if polled:
+        meta_bits.append(
+            f'polled <span class="sx-ts">{_fmt_timestamp_html(str(polled), now=now)}</span>'
+        )
+    meta = " · ".join(meta_bits) or "cached tweet"
+    body = _format_sx_tweet_body_html(
+        text_raw if handle_state == _SX_STATE_OK else None,
+        empty_message=_sx_empty_message(handle_state),
+    ).replace('class="sx-tweet-body"', 'class="tweet-body"', 1)
+    card_cls = html.escape(" ".join(card_classes), quote=True)
+    tier_attr = html.escape(filter_tier, quote=True)
+    return (
+        f'<article class="{card_cls}" data-tweet-tier="{tier_attr}">'
+        f'<p class="tweet-handle">@{handle_e} {handle_badge}</p>'
+        f"{body}"
+        f"{analysis_html}"
+        f'<p class="tweet-meta">{meta}</p>'
+        f'<p class="tweet-actions"><a href="{html.escape(tweet_url, quote=True)}" target="_blank" rel="noopener">Open on X</a></p>'
+        "</article>"
+    )
 
 
 def _format_sx_tweet_body_html(
@@ -1167,11 +1313,11 @@ def _render_movie_tweet_embeds(
     *,
     social_handles: dict[str, Any],
     now: datetime,
-    max_items: int = 3,
 ) -> str:
-    """Embed-style last-tweet previews for the movie's configured X handles."""
+    """Embed-style tweet previews for all configured movie X handles."""
     raw_handles = movie.get("x_handles")
     handles = [str(x).lstrip("@") for x in raw_handles if str(x).strip()] if isinstance(raw_handles, list) else []
+    movie_key = str(movie.get("key") or "movie")
     if not handles:
         return """
 <div class="movie-twitter-panel">
@@ -1180,8 +1326,9 @@ def _render_movie_tweet_embeds(
 </div>
 """
 
-    cards: list[str] = []
-    for handle in handles[:max_items]:
+    timeline: list[tuple[str, dict[str, Any], dict[str, Any] | None, str, str]] = []
+    empty_handle_cards: list[str] = []
+    for handle in handles:
         hst = _social_state_for_handle(social_handles, handle)
         handle_e = html.escape(handle)
         profile_url = f"https://x.com/{handle}"
@@ -1191,8 +1338,8 @@ def _render_movie_tweet_embeds(
                 None,
                 empty_message=_sx_empty_message(_SX_STATE_NOT_POLLED),
             ).replace('class="sx-tweet-body"', 'class="tweet-body"', 1)
-            cards.append(
-                '<article class="tweet-embed tweet-empty-card">'
+            empty_handle_cards.append(
+                '<article class="tweet-embed tweet-empty-card tweet-timeline-item" data-tweet-tier="all">'
                 f'<p class="tweet-handle">@{handle_e} {badge}</p>'
                 f"{body}"
                 f'<p class="tweet-actions"><a href="{html.escape(profile_url, quote=True)}" target="_blank" rel="noopener">Open profile</a></p>'
@@ -1202,69 +1349,49 @@ def _render_movie_tweet_embeds(
 
         state = _classify_sx_handle_state(hst)
         badge = _sx_handle_status_badge(state)
-        card_classes = ["tweet-embed"]
-        if state != _SX_STATE_OK:
-            card_classes.append("tweet-empty-card")
+        tweets = _effective_recent_tweets(hst)
+        if not tweets:
+            body = _format_sx_tweet_body_html(
+                None,
+                empty_message=_sx_empty_message(state),
+            ).replace('class="sx-tweet-body"', 'class="tweet-body"', 1)
+            empty_handle_cards.append(
+                f'<article class="tweet-embed tweet-empty-card tweet-timeline-item" data-tweet-tier="all">'
+                f'<p class="tweet-handle">@{handle_e} {badge}</p>'
+                f"{body}"
+                f'<p class="tweet-actions"><a href="{html.escape(profile_url, quote=True)}" target="_blank" rel="noopener">Open profile</a></p>'
+                "</article>"
+            )
+            continue
 
-        text_raw = hst.get("last_seen_tweet_text") if state == _SX_STATE_OK else None
-        tid = hst.get("last_seen_tweet_id")
-        tw_at = hst.get("last_seen_tweet_created_at")
-        polled = hst.get("last_polled_at")
-        tweet_url = (
-            f"https://x.com/{handle}/status/{tid}"
-            if tid
-            else profile_url
-        )
-        meta_bits = []
-        if tw_at:
-            meta_bits.append(
-                f'posted <span class="sx-ts">{_fmt_timestamp_html(str(tw_at), now=now)}</span>'
-            )
-        if polled:
-            meta_bits.append(
-                f'polled <span class="sx-ts">{_fmt_timestamp_html(str(polled), now=now)}</span>'
-            )
-        meta = " · ".join(meta_bits) or "latest saved post"
-        analysis = hst.get("last_seen_ticket_analysis")
-        analysis_html = ""
-        if isinstance(analysis, dict):
-            status = str(analysis.get("status") or "unknown").replace("_", " ")
-            status_raw = str(analysis.get("status") or "unknown")
-            announces = bool(analysis.get("announces_tickets"))
-            if announces:
-                slug = re.sub(r"[^a-z0-9_-]", "", status_raw.lower()) or "unknown"
-                card_classes.extend(["sx-ticket-signal", f"sx-status-{slug}"])
-            variants = ("pill-ok",) if announces else ("pill-muted",)
-            if announces and status_raw == "soon":
-                variants = ("pill-warn",)
-            analysis_html = (
-                '<p class="tweet-analysis">'
-                + render_status_pill(html.escape(status), variants=variants)
-                + "</p>"
-            )
-        body = _format_sx_tweet_body_html(
-            text_raw,
-            empty_message=_sx_empty_message(state),
-        ).replace('class="sx-tweet-body"', 'class="tweet-body"', 1)
-        card_cls = html.escape(" ".join(card_classes), quote=True)
+        for tweet in tweets:
+            timeline.append((handle, tweet, hst, state, badge))
+
+    timeline.sort(key=lambda item: _tweet_sort_key(item[1]), reverse=True)
+    cards: list[str] = []
+    ticket_count = 0
+    for handle, tweet, hst, state, badge in timeline:
+        if _tweet_announces_tickets(tweet):
+            ticket_count += 1
         cards.append(
-            f'<article class="{card_cls}">'
-            f'<p class="tweet-handle">@{handle_e} {badge}</p>'
-            f"{body}"
-            f"{analysis_html}"
-            f'<p class="tweet-meta">{meta}</p>'
-            f'<p class="tweet-actions"><a href="{html.escape(tweet_url, quote=True)}" target="_blank" rel="noopener">Open on X</a></p>'
-            "</article>"
+            _render_tweet_timeline_card(
+                handle,
+                tweet,
+                handle_state=state,
+                handle_badge=badge,
+                now=now,
+                polled=hst.get("last_polled_at") if hst else None,
+            )
         )
-
-    more = ""
-    if len(handles) > max_items:
-        more = f'<p class="tweet-more">+{len(handles) - max_items} more handle(s) in Advanced details.</p>'
+    cards.extend(empty_handle_cards)
+    total = len(cards)
+    filter_controls = _render_tweet_filter_controls(total=total, ticket_count=ticket_count)
+    panel_key = html.escape(movie_key, quote=True)
     return (
-        '<div class="movie-twitter-panel">'
-        '<p class="movie-twitter-label">X / Twitter latest</p>'
+        f'<div class="movie-twitter-panel" data-tweet-filter-panel data-movie-key="{panel_key}">'
+        '<p class="movie-twitter-label">X / Twitter</p>'
+        f"{filter_controls}"
         f'<div class="tweet-embed-list">{"".join(cards)}</div>'
-        f"{more}"
         "</div>"
     )
 
@@ -1795,6 +1922,44 @@ def _dashboard_ui_script() -> str:
         });
     });
   });
+  var tweetPanels = Array.prototype.slice.call(document.querySelectorAll("[data-tweet-filter-panel]"));
+  function applyTweetFilters() {
+    var filter = state.tweetFilter || "all";
+    tweetPanels.forEach(function (panel) {
+      var items = Array.prototype.slice.call(panel.querySelectorAll(".tweet-timeline-item"));
+      var buttons = Array.prototype.slice.call(panel.querySelectorAll("[data-tweet-filter]"));
+      var shown = 0;
+      items.forEach(function (item) {
+        var tier = item.getAttribute("data-tweet-tier") || "all";
+        var visible = filter === "all" || tier === "ticket";
+        item.classList.toggle("is-hidden", !visible);
+        if (visible) shown += 1;
+      });
+      buttons.forEach(function (btn) {
+        var active = btn.getAttribute("data-tweet-filter") === filter;
+        btn.classList.toggle("is-active", active);
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+      var count = panel.querySelector(".tweet-filter-count");
+      if (count) {
+        var total = items.length;
+        var ticketCount = items.filter(function (item) {
+          return item.getAttribute("data-tweet-tier") === "ticket";
+        }).length;
+        count.textContent = shown + " of " + total + " tweet" + (total === 1 ? "" : "s") + " shown · " + ticketCount + " ticket related";
+      }
+    });
+  }
+  tweetPanels.forEach(function (panel) {
+    Array.prototype.slice.call(panel.querySelectorAll("[data-tweet-filter]")).forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.tweetFilter = btn.getAttribute("data-tweet-filter") || "all";
+        save();
+        applyTweetFilters();
+      });
+    });
+  });
+  applyTweetFilters();
   apply();
 })();
   </script>
@@ -2727,6 +2892,18 @@ def dashboard_css() -> str:
       display: grid;
       gap: 0.55rem;
     }
+    .tweet-filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin: 0 0 0.45rem;
+    }
+    .tweet-filter-count {
+      margin: 0 0 0.55rem;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+    .tweet-timeline-item.is-hidden { display: none; }
     .tweet-embed {
       padding: 0.72rem 0.78rem;
       border: 1px solid var(--border);

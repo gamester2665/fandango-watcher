@@ -432,6 +432,52 @@ def _serve_artifact_file(
     return True
 
 
+def _local_config_settings(dashboard_data: Any | None) -> tuple[str, str] | None:
+    if dashboard_data is None:
+        return None
+    settings = getattr(dashboard_data, "settings", None)
+    if settings is None:
+        return None
+    db_path = settings.config_local_db_path.strip()
+    if not db_path:
+        return None
+    return db_path, plain_secret(settings.config_admin_token)
+
+
+def _try_handle_local_config_api(
+    handler: BaseHTTPRequestHandler,
+    *,
+    method: str,
+    path_only: str,
+    body: bytes,
+    dashboard_data: Any | None,
+    send_body: bool = True,
+) -> bool:
+    local = _local_config_settings(dashboard_data)
+    if local is None:
+        return False
+    db_path, admin_token = local
+    if not (
+        path_only.startswith("/api/watchlist")
+        or (path_only.startswith("/api/movies") and path_only != "/api/movies/add")
+        or (method == "POST" and path_only == "/api/movies")
+    ):
+        return False
+
+    from .config_api_local import handle_local_config_request
+
+    status, payload = handle_local_config_request(
+        method,
+        path_only,
+        body,
+        admin_token=admin_token,
+        db_path=db_path,
+        auth_header=handler.headers.get("Authorization"),
+    )
+    _send_json(handler, payload, status=HTTPStatus(status), send_body=send_body)
+    return True
+
+
 def _make_handler_cls(
     heartbeat: Heartbeat,
     *,
@@ -452,6 +498,16 @@ def _make_handler_cls(
 
             parsed = urlparse(self.path)
             path_only = unquote(parsed.path) or "/"
+
+            if _try_handle_local_config_api(
+                self,
+                method="GET",
+                path_only=path_only,
+                body=b"",
+                dashboard_data=dashboard_data,
+                send_body=send_body,
+            ):
+                return
 
             if path_only in ("/healthz", "/health"):
                 _send_json(self, heartbeat.snapshot(), send_body=send_body)
@@ -706,18 +762,6 @@ def _make_handler_cls(
                 self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
                 return
 
-            add_path = path_only == "/api/movies/add"
-            patch_match = path_only.startswith("/api/movies/") and path_only != "/api/movies/add"
-            if method == "POST" and not add_path:
-                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
-                return
-            if method in ("PATCH", "DELETE") and not patch_match:
-                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
-                return
-            if method == "POST" and not add_path:
-                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
-                return
-
             try:
                 n = int(self.headers.get("Content-Length") or "0")
             except ValueError:
@@ -732,6 +776,24 @@ def _make_handler_cls(
                     )
                     return
                 body = self.rfile.read(n)
+
+            if _try_handle_local_config_api(
+                self,
+                method=method,
+                path_only=path_only,
+                body=body,
+                dashboard_data=dashboard_data,
+            ):
+                return
+
+            add_path = path_only == "/api/movies/add"
+            patch_match = path_only.startswith("/api/movies/") and path_only != "/api/movies/add"
+            if method == "POST" and not add_path:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+                return
+            if method in ("PATCH", "DELETE") and not patch_match:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+                return
 
             payload: dict[str, Any] = {}
             if body:

@@ -597,6 +597,11 @@ class Settings(BaseSettings):
         default="./state/watchlist-cache.json",
         validation_alias=AliasChoices("CONFIG_CACHE_PATH", "config_cache_path"),
     )
+    # Local SQLite watchlist (VPS fallback when Cloudflare Worker is not deployed).
+    config_local_db_path: str = Field(
+        default="",
+        validation_alias=AliasChoices("CONFIG_LOCAL_DB_PATH", "config_local_db_path"),
+    )
 
     # Twilio
     twilio_account_sid: str = ""

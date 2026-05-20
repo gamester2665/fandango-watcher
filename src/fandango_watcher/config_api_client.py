@@ -34,6 +34,10 @@ def config_writes_enabled(settings: Settings) -> bool:
     return bool(settings.config_api_url.strip() and plain_secret(settings.config_admin_token).strip())
 
 
+def watchlist_config_source(settings: Settings) -> str:
+    return "sqlite" if settings.config_local_db_path.strip() else "d1"
+
+
 def fetch_watchlist_http(base_url: str, *, timeout: float = 15.0) -> RemoteWatchlist:
     url = f"{base_url.rstrip('/')}/api/watchlist"
     with httpx.Client(timeout=timeout) as client:
@@ -154,6 +158,7 @@ def load_config_merged(path: str | Path, settings: Settings) -> tuple[WatcherCon
     if not api_url:
         return base, None, meta
 
+    source = "sqlite" if settings.config_local_db_path.strip() else "d1"
     cache_path = Path(settings.config_cache_path)
     try:
         remote = fetch_watchlist_http(api_url)
@@ -161,7 +166,7 @@ def load_config_merged(path: str | Path, settings: Settings) -> tuple[WatcherCon
         merged = merge_watchlist(base, remote.targets, remote.movies)
         meta.update(
             {
-                "config_source": "d1",
+                "config_source": source,
                 "config_revision": remote.revision,
                 "config_cache_age_seconds": 0,
             }
@@ -179,7 +184,7 @@ def load_config_merged(path: str | Path, settings: Settings) -> tuple[WatcherCon
             merged = merge_watchlist(base, remote.targets, remote.movies)
             meta.update(
                 {
-                    "config_source": "d1-cache",
+                    "config_source": f"{source}-cache",
                     "config_revision": remote.revision,
                     "config_cache_age_seconds": cache_age_seconds(cache_meta),
                 }
@@ -203,7 +208,7 @@ def reload_merged_config(
     write_watchlist_cache(settings.config_cache_path, remote, source=api_url)
     merged = merge_watchlist(policy, remote.targets, remote.movies)
     meta = {
-        "config_source": "d1",
+        "config_source": watchlist_config_source(settings),
         "config_revision": remote.revision,
         "config_cache_age_seconds": 0,
     }
