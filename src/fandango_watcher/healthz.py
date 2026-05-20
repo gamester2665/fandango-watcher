@@ -433,6 +433,8 @@ def _serve_artifact_file(
 
 
 def _local_config_settings(dashboard_data: Any | None) -> tuple[str, str] | None:
+    from .config import plain_secret
+
     if dashboard_data is None:
         return None
     settings = getattr(dashboard_data, "settings", None)
@@ -441,6 +443,8 @@ def _local_config_settings(dashboard_data: Any | None) -> tuple[str, str] | None
     db_path = settings.config_local_db_path.strip()
     if not db_path:
         return None
+    from .config import plain_secret
+
     return db_path, plain_secret(settings.config_admin_token)
 
 
