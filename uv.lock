@@ -505,8 +505,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -541,8 +539,6 @@ requires-dist = [
     { name = "browser-use", marker = "extra == 'agent'", specifier = ">=0.1.40" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain-openai", marker = "extra == 'agent'", specifier = ">=0.3.0" },
-    { name = "pydantic", specifier = "==2.12.5" },
-    { name = "pyyaml", specifier = "==6.0.2" },
 ]
 provides-extras = ["agent"]
 

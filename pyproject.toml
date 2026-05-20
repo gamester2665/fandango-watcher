@@ -5,9 +5,6 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
-    # Pin to Pyodide-built versions for pywrangler deploy (see pyodide.org packages list).
-    "pydantic==2.12.5",
-    "pyyaml==6.0.2",
 ]
 
 [project.optional-dependencies]
