@@ -8,9 +8,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from cloudflare_config import ConfigConflictError, D1WatchlistProvider, MoviePatch
-from config import MovieConfig, TargetConfig
-from watchlist_ops import build_movie_add_plan
+from worker_d1_config import ConfigConflictError, D1WatchlistProvider
+from worker_watchlist_ops import build_movie_add_plan
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +60,47 @@ def _expected_revision(payload: dict[str, Any]) -> int | None:
     return int(value)
 
 
+def _normalize_target_dict(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("target must be an object")
+    name = raw.get("name")
+    url = raw.get("url")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("target.name is required")
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("target.url is required")
+    return {"name": name.strip(), "url": url.strip(), **raw}
+
+
+def _normalize_movie_dict(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("movie must be an object")
+    key = raw.get("key")
+    title = raw.get("title")
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("movie.key is required")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("movie.title is required")
+    return {"key": key.strip(), "title": title.strip(), **raw}
+
+
+def _normalize_patch_dict(raw: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "title",
+        "release_date",
+        "poster_url",
+        "preferred_formats",
+        "x_handles",
+        "x_keywords",
+        "distributor",
+        "reference_page_key",
+    }
+    unknown = set(raw) - allowed - {"expected_revision"}
+    if unknown:
+        raise ValueError(f"unsupported patch fields: {sorted(unknown)}")
+    return {k: v for k, v in raw.items() if k in allowed}
+
+
 async def handle_config_fetch(request, env) -> Any:
     url = urlparse(str(request.url))
     path = url.path.rstrip("/") or "/"
@@ -85,8 +125,8 @@ async def handle_config_fetch(request, env) -> Any:
             return error_response("unauthorized", "missing or invalid admin token", status=401)
         try:
             payload = await _read_json_body(request)
-            targets = [TargetConfig.model_validate(t) for t in payload.get("targets") or []]
-            movies = [MovieConfig.model_validate(m) for m in payload.get("movies") or []]
+            targets = [_normalize_target_dict(t) for t in payload.get("targets") or []]
+            movies = [_normalize_movie_dict(m) for m in payload.get("movies") or []]
             result = await provider.replace_watchlist(
                 targets,
                 movies,
@@ -133,8 +173,8 @@ async def _handle_movies_crud(request, env, provider: D1WatchlistProvider, path:
         return json_response(
             {
                 "ok": True,
-                "movie": movie.model_dump(mode="json"),
-                "targets": [{"name": t.name, "url": t.url} for t in targets],
+                "movie": movie,
+                "targets": [{"name": t["name"], "url": t["url"]} for t in targets],
                 "restart_watch_required": False,
                 **result,
             }
@@ -150,7 +190,7 @@ async def _handle_movies_crud(request, env, provider: D1WatchlistProvider, path:
             return error_response("unauthorized", "missing or invalid admin token", status=401)
         try:
             payload = await _read_json_body(request)
-            patch = MoviePatch.model_validate(payload)
+            patch = _normalize_patch_dict(payload)
             result = await provider.patch_movie(
                 key,
                 patch,
