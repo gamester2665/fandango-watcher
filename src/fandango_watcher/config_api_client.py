@@ -31,11 +31,44 @@ class ConfigApiError(Exception):
 
 
 def config_writes_enabled(settings: Settings) -> bool:
-    return bool(settings.config_api_url.strip() and plain_secret(settings.config_admin_token).strip())
+    has_store = bool(
+        settings.config_api_url.strip() or settings.config_local_db_path.strip()
+    )
+    return has_store and bool(plain_secret(settings.config_admin_token).strip())
 
 
 def watchlist_config_source(settings: Settings) -> str:
     return "sqlite" if settings.config_local_db_path.strip() else "d1"
+
+
+def fetch_watchlist_local(db_path: str) -> RemoteWatchlist:
+    from .sqlite_watchlist import SqliteWatchlistProvider
+
+    provider = SqliteWatchlistProvider(db_path)
+    provider.init_schema()
+    return RemoteWatchlist.model_validate(provider.get_watchlist())
+
+
+def fetch_revision_local(db_path: str) -> int:
+    from .sqlite_watchlist import SqliteWatchlistProvider
+
+    provider = SqliteWatchlistProvider(db_path)
+    provider.init_schema()
+    return provider.get_revision()
+
+
+def fetch_watchlist_for_settings(settings: Settings) -> RemoteWatchlist:
+    db_path = settings.config_local_db_path.strip()
+    if db_path:
+        return fetch_watchlist_local(db_path)
+    return fetch_watchlist_http(settings.config_api_url)
+
+
+def fetch_revision_for_settings(settings: Settings) -> int:
+    db_path = settings.config_local_db_path.strip()
+    if db_path:
+        return fetch_revision_local(db_path)
+    return fetch_revision_http(settings.config_api_url)
 
 
 def fetch_watchlist_http(base_url: str, *, timeout: float = 15.0) -> RemoteWatchlist:
@@ -155,14 +188,22 @@ def load_config_merged(path: str | Path, settings: Settings) -> tuple[WatcherCon
         "config_cache_age_seconds": None,
     }
     api_url = settings.config_api_url.strip()
-    if not api_url:
+    if not api_url and not settings.config_local_db_path.strip():
         return base, None, meta
 
-    source = "sqlite" if settings.config_local_db_path.strip() else "d1"
+    source = watchlist_config_source(settings)
     cache_path = Path(settings.config_cache_path)
     try:
-        remote = fetch_watchlist_http(api_url)
-        write_watchlist_cache(cache_path, remote, source=api_url)
+        remote = fetch_watchlist_for_settings(settings)
+        if (
+            settings.config_local_db_path.strip()
+            and remote.revision == 0
+            and not remote.targets
+            and not remote.movies
+        ):
+            meta["config_source"] = "yaml"
+            return base, None, meta
+        write_watchlist_cache(cache_path, remote, source=api_url or "local-sqlite")
         merged = merge_watchlist(base, remote.targets, remote.movies)
         meta.update(
             {
@@ -202,10 +243,10 @@ def reload_merged_config(
 ) -> tuple[WatcherConfig, int | None, dict[str, Any]]:
     policy = policy_cfg if policy_cfg is not None else load_config(policy_path)
     api_url = settings.config_api_url.strip()
-    if not api_url:
+    if not api_url and not settings.config_local_db_path.strip():
         return policy, None, {"config_source": "yaml", "config_revision": None}
-    remote = fetch_watchlist_http(api_url)
-    write_watchlist_cache(settings.config_cache_path, remote, source=api_url)
+    remote = fetch_watchlist_for_settings(settings)
+    write_watchlist_cache(settings.config_cache_path, remote, source=api_url or "local-sqlite")
     merged = merge_watchlist(policy, remote.targets, remote.movies)
     meta = {
         "config_source": watchlist_config_source(settings),
@@ -216,10 +257,16 @@ def reload_merged_config(
 
 
 def remote_add_movie(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+    db_path = settings.config_local_db_path.strip()
+    if db_path:
+        return _local_add_movie(db_path, payload)
     return admin_json_request("POST", "/api/movies", payload, settings)
 
 
 def remote_patch_movie(settings: Settings, key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    db_path = settings.config_local_db_path.strip()
+    if db_path:
+        return _local_patch_movie(db_path, key, payload)
     return admin_json_request("PATCH", f"/api/movies/{key}", payload, settings)
 
 
@@ -227,6 +274,9 @@ def remote_delete_movie(settings: Settings, key: str, *, expected_revision: int 
     payload: dict[str, Any] = {}
     if expected_revision is not None:
         payload["expected_revision"] = expected_revision
+    db_path = settings.config_local_db_path.strip()
+    if db_path:
+        return _local_delete_movie(db_path, key, payload)
     return admin_json_request("DELETE", f"/api/movies/{key}", payload or None, settings)
 
 
@@ -245,7 +295,83 @@ def remote_replace_watchlist(
     }
     if expected_revision is not None:
         payload["expected_revision"] = expected_revision
+    db_path = settings.config_local_db_path.strip()
+    if db_path:
+        from .sqlite_watchlist import SqliteWatchlistProvider
+
+        provider = SqliteWatchlistProvider(db_path)
+        provider.init_schema()
+        result = provider.replace_watchlist(
+            targets,
+            movies,
+            force=force,
+            expected_revision=expected_revision,
+        )
+        return {"ok": True, **result}
     return admin_json_request("POST", "/api/watchlist/replace", payload, settings)
+
+
+def _expected_revision(payload: dict[str, Any]) -> int | None:
+    value = payload.get("expected_revision")
+    if value is None:
+        return None
+    return int(value)
+
+
+def _local_add_movie(db_path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from .sqlite_watchlist import SqliteWatchlistProvider
+    from .watchlist_ops import build_movie_add_plan
+
+    provider = SqliteWatchlistProvider(db_path)
+    provider.init_schema()
+    watchlist = provider.get_watchlist()
+    existing_targets = {t["name"] for t in watchlist.get("targets") or []}
+    existing_movies = {m["key"] for m in watchlist.get("movies") or []}
+    movie, targets = build_movie_add_plan(
+        payload,
+        existing_target_names=existing_targets,
+        existing_movie_keys=existing_movies,
+    )
+    result = provider.upsert_movie_with_targets(
+        movie,
+        targets,
+        expected_revision=_expected_revision(payload),
+    )
+    return {
+        "ok": True,
+        "movie": movie.model_dump(mode="json"),
+        "targets": [{"name": t.name, "url": t.url} for t in targets],
+        "restart_watch_required": False,
+        **result,
+    }
+
+
+def _local_patch_movie(db_path: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from .cloudflare_config import MoviePatch
+    from .sqlite_watchlist import SqliteWatchlistProvider
+
+    provider = SqliteWatchlistProvider(db_path)
+    provider.init_schema()
+    patch = MoviePatch.model_validate(payload)
+    result = provider.patch_movie(
+        key,
+        patch,
+        expected_revision=_expected_revision(payload),
+    )
+    return {"ok": True, **result}
+
+
+def _local_delete_movie(db_path: str, key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from .sqlite_watchlist import SqliteWatchlistProvider
+
+    provider = SqliteWatchlistProvider(db_path)
+    provider.init_schema()
+    result = provider.delete_movie(
+        key,
+        delete_owned_targets=bool(payload.get("delete_owned_targets", True)),
+        expected_revision=_expected_revision(payload),
+    )
+    return {"ok": True, **result}
 
 
 def export_watchlist_yaml(targets: list[TargetConfig], movies: list[MovieConfig]) -> str:

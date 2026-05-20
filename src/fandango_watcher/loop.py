@@ -758,25 +758,27 @@ def run_watch(
     tick = 0
     try:
         while not local_stop.is_set():
-            api_url = settings.config_api_url.strip()
-            if api_url and time.monotonic() - last_config_check >= settings.config_poll_seconds:
+            has_remote_watchlist = bool(
+                settings.config_api_url.strip() or settings.config_local_db_path.strip()
+            )
+            if has_remote_watchlist and time.monotonic() - last_config_check >= settings.config_poll_seconds:
                 last_config_check = time.monotonic()
                 try:
                     from .config import merge_watchlist
                     from .config_api_client import (
-                        fetch_revision_http,
-                        fetch_watchlist_http,
+                        fetch_revision_for_settings,
+                        fetch_watchlist_for_settings,
                         watchlist_config_source,
                         write_watchlist_cache,
                     )
 
-                    rev = fetch_revision_http(api_url)
+                    rev = fetch_revision_for_settings(settings)
                     if rev != cached_revision:
-                        remote = fetch_watchlist_http(api_url)
+                        remote = fetch_watchlist_for_settings(settings)
                         write_watchlist_cache(
                             settings.config_cache_path,
                             remote,
-                            source=api_url,
+                            source=settings.config_api_url.strip() or "local-sqlite",
                         )
                         cfg = merge_watchlist(policy, remote.targets, remote.movies)
                         cached_revision = rev

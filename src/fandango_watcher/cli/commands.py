@@ -1129,8 +1129,8 @@ def _run_config_seed(args: argparse.Namespace) -> int:
         return 0
 
     settings = Settings()
-    if not settings.config_api_url.strip():
-        print("error: CONFIG_API_URL is required for --apply", file=sys.stderr)
+    if not settings.config_api_url.strip() and not settings.config_local_db_path.strip():
+        print("error: CONFIG_API_URL or CONFIG_LOCAL_DB_PATH is required for --apply", file=sys.stderr)
         return 1
     if not plain_secret(settings.config_admin_token).strip():
         print("error: CONFIG_ADMIN_TOKEN is required for --apply", file=sys.stderr)
