@@ -170,6 +170,129 @@ movies: []
     assert cfg.targets[0].name == "cached"
 
 
+def test_load_config_merged_uses_yaml_when_remote_watchlist_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+targets:
+  - name: yaml-only
+    url: https://example.com/yaml
+theater:
+  display_name: CW
+  fandango_theater_anchor: AMC Universal CityWalk
+formats:
+  require: []
+  include: []
+poll:
+  min_seconds: 30
+  max_seconds: 35
+notify:
+  channels: []
+  on_events: []
+screenshots:
+  dir: artifacts/screenshots
+state:
+  dir: state
+purchase:
+  enabled: true
+  mode: notify_only
+movies: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    empty = RemoteWatchlist(revision=0, targets=[], movies=[])
+
+    monkeypatch.setattr(
+        "fandango_watcher.config_api_client.fetch_watchlist_http",
+        lambda _url, *, timeout=15.0: empty,
+    )
+
+    settings = Settings(
+        config_api_url="https://worker.example",
+        config_cache_path=str(tmp_path / "cache.json"),
+    )
+    cfg, revision, meta = load_config_merged(config_path, settings)
+    assert revision is None
+    assert meta["config_source"] == "yaml"
+    assert cfg.targets[0].name == "yaml-only"
+
+
+def test_load_config_merged_prefers_worker_url_over_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+targets:
+  - name: yaml-only
+    url: https://example.com/yaml
+theater:
+  display_name: CW
+  fandango_theater_anchor: AMC Universal CityWalk
+formats:
+  require: []
+  include: []
+poll:
+  min_seconds: 30
+  max_seconds: 35
+notify:
+  channels: []
+  on_events: []
+screenshots:
+  dir: artifacts/screenshots
+state:
+  dir: state
+purchase:
+  enabled: true
+  mode: notify_only
+movies: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    remote = RemoteWatchlist(
+        revision=11,
+        targets=[TargetConfig(name="remote", url="https://example.com/remote")],
+        movies=[
+            MovieConfig(
+                key="remote",
+                title="Remote Movie",
+                fandango_targets=["remote"],
+            )
+        ],
+    )
+    local_called = False
+
+    def _fake_http(_url: str, *, timeout: float = 15.0) -> RemoteWatchlist:
+        return remote
+
+    def _fake_local(_db_path: str) -> RemoteWatchlist:
+        nonlocal local_called
+        local_called = True
+        raise AssertionError("sqlite fetch should not run when worker URL is set")
+
+    monkeypatch.setattr(
+        "fandango_watcher.config_api_client.fetch_watchlist_http",
+        _fake_http,
+    )
+    monkeypatch.setattr(
+        "fandango_watcher.config_api_client.fetch_watchlist_local",
+        _fake_local,
+    )
+
+    settings = Settings(
+        config_api_url="https://worker.example",
+        config_local_db_path=str(tmp_path / "watchlist.db"),
+        config_cache_path=str(tmp_path / "cache.json"),
+    )
+    cfg, revision, meta = load_config_merged(config_path, settings)
+    assert revision == 11
+    assert meta["config_source"] == "d1"
+    assert cfg.targets[0].name == "remote"
+    assert local_called is False
+
+
 def test_read_watchlist_cache_round_trip(tmp_path: Path) -> None:
     cache_path = tmp_path / "cache.json"
     remote = RemoteWatchlist(

@@ -30,15 +30,30 @@ class ConfigApiError(Exception):
     """Raised when the remote config API returns an error response."""
 
 
+def _remote_config_api_url(settings: Settings) -> str:
+    return settings.config_api_url.strip()
+
+
+def _local_config_db_path(settings: Settings) -> str:
+    return settings.config_local_db_path.strip()
+
+
+def watchlist_backend_configured(settings: Settings) -> bool:
+    return bool(_remote_config_api_url(settings) or _local_config_db_path(settings))
+
+
 def config_writes_enabled(settings: Settings) -> bool:
-    has_store = bool(
-        settings.config_api_url.strip() or settings.config_local_db_path.strip()
+    return watchlist_backend_configured(settings) and bool(
+        plain_secret(settings.config_admin_token).strip()
     )
-    return has_store and bool(plain_secret(settings.config_admin_token).strip())
 
 
 def watchlist_config_source(settings: Settings) -> str:
-    return "sqlite" if settings.config_local_db_path.strip() else "d1"
+    if _remote_config_api_url(settings):
+        return "d1"
+    if _local_config_db_path(settings):
+        return "sqlite"
+    return "yaml"
 
 
 def fetch_watchlist_local(db_path: str) -> RemoteWatchlist:
@@ -58,17 +73,23 @@ def fetch_revision_local(db_path: str) -> int:
 
 
 def fetch_watchlist_for_settings(settings: Settings) -> RemoteWatchlist:
-    db_path = settings.config_local_db_path.strip()
+    api_url = _remote_config_api_url(settings)
+    if api_url:
+        return fetch_watchlist_http(api_url)
+    db_path = _local_config_db_path(settings)
     if db_path:
         return fetch_watchlist_local(db_path)
-    return fetch_watchlist_http(settings.config_api_url)
+    raise ConfigApiError("CONFIG_API_URL or CONFIG_LOCAL_DB_PATH is required")
 
 
 def fetch_revision_for_settings(settings: Settings) -> int:
-    db_path = settings.config_local_db_path.strip()
+    api_url = _remote_config_api_url(settings)
+    if api_url:
+        return fetch_revision_http(api_url)
+    db_path = _local_config_db_path(settings)
     if db_path:
         return fetch_revision_local(db_path)
-    return fetch_revision_http(settings.config_api_url)
+    raise ConfigApiError("CONFIG_API_URL or CONFIG_LOCAL_DB_PATH is required")
 
 
 def fetch_watchlist_http(base_url: str, *, timeout: float = 15.0) -> RemoteWatchlist:
@@ -187,17 +208,16 @@ def load_config_merged(path: str | Path, settings: Settings) -> tuple[WatcherCon
         "config_revision": None,
         "config_cache_age_seconds": None,
     }
-    api_url = settings.config_api_url.strip()
-    if not api_url and not settings.config_local_db_path.strip():
+    if not watchlist_backend_configured(settings):
         return base, None, meta
 
+    api_url = _remote_config_api_url(settings)
     source = watchlist_config_source(settings)
     cache_path = Path(settings.config_cache_path)
     try:
         remote = fetch_watchlist_for_settings(settings)
         if (
-            settings.config_local_db_path.strip()
-            and remote.revision == 0
+            remote.revision == 0
             and not remote.targets
             and not remote.movies
         ):
@@ -242,9 +262,9 @@ def reload_merged_config(
     policy_cfg: WatcherConfig | None = None,
 ) -> tuple[WatcherConfig, int | None, dict[str, Any]]:
     policy = policy_cfg if policy_cfg is not None else load_config(policy_path)
-    api_url = settings.config_api_url.strip()
-    if not api_url and not settings.config_local_db_path.strip():
+    if not watchlist_backend_configured(settings):
         return policy, None, {"config_source": "yaml", "config_revision": None}
+    api_url = _remote_config_api_url(settings)
     remote = fetch_watchlist_for_settings(settings)
     write_watchlist_cache(settings.config_cache_path, remote, source=api_url or "local-sqlite")
     merged = merge_watchlist(policy, remote.targets, remote.movies)
@@ -257,27 +277,36 @@ def reload_merged_config(
 
 
 def remote_add_movie(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
-    db_path = settings.config_local_db_path.strip()
+    api_url = _remote_config_api_url(settings)
+    if api_url:
+        return admin_json_request("POST", "/api/movies", payload, settings)
+    db_path = _local_config_db_path(settings)
     if db_path:
         return _local_add_movie(db_path, payload)
-    return admin_json_request("POST", "/api/movies", payload, settings)
+    raise ConfigApiError("CONFIG_API_URL or CONFIG_LOCAL_DB_PATH is required for movie add")
 
 
 def remote_patch_movie(settings: Settings, key: str, payload: dict[str, Any]) -> dict[str, Any]:
-    db_path = settings.config_local_db_path.strip()
+    api_url = _remote_config_api_url(settings)
+    if api_url:
+        return admin_json_request("PATCH", f"/api/movies/{key}", payload, settings)
+    db_path = _local_config_db_path(settings)
     if db_path:
         return _local_patch_movie(db_path, key, payload)
-    return admin_json_request("PATCH", f"/api/movies/{key}", payload, settings)
+    raise ConfigApiError("CONFIG_API_URL or CONFIG_LOCAL_DB_PATH is required for movie patch")
 
 
 def remote_delete_movie(settings: Settings, key: str, *, expected_revision: int | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if expected_revision is not None:
         payload["expected_revision"] = expected_revision
-    db_path = settings.config_local_db_path.strip()
+    api_url = _remote_config_api_url(settings)
+    if api_url:
+        return admin_json_request("DELETE", f"/api/movies/{key}", payload or None, settings)
+    db_path = _local_config_db_path(settings)
     if db_path:
         return _local_delete_movie(db_path, key, payload)
-    return admin_json_request("DELETE", f"/api/movies/{key}", payload or None, settings)
+    raise ConfigApiError("CONFIG_API_URL or CONFIG_LOCAL_DB_PATH is required for movie delete")
 
 
 def remote_replace_watchlist(
@@ -295,7 +324,10 @@ def remote_replace_watchlist(
     }
     if expected_revision is not None:
         payload["expected_revision"] = expected_revision
-    db_path = settings.config_local_db_path.strip()
+    api_url = _remote_config_api_url(settings)
+    if api_url:
+        return admin_json_request("POST", "/api/watchlist/replace", payload, settings)
+    db_path = _local_config_db_path(settings)
     if db_path:
         from .sqlite_watchlist import SqliteWatchlistProvider
 
@@ -308,7 +340,7 @@ def remote_replace_watchlist(
             expected_revision=expected_revision,
         )
         return {"ok": True, **result}
-    return admin_json_request("POST", "/api/watchlist/replace", payload, settings)
+    raise ConfigApiError("CONFIG_API_URL or CONFIG_LOCAL_DB_PATH is required for watchlist replace")
 
 
 def _expected_revision(payload: dict[str, Any]) -> int | None:

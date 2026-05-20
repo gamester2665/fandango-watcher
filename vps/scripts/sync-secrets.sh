@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 # Sync local secret files to VPS (never commit these files).
+#
+# Prefer vps/run_vps_cmd.py (paramiko + password from vps/host.env or secrets file)
+# so Windows/Git Bash does not pop an SSH key passphrase dialog for scp/ssh.
 set -euo pipefail
 
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="${VPS_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+if [[ "${VPS_SYNC_USE_SCP:-}" != "1" ]]; then
+  project="${VPS_PROJECT_NAME:-}"
+  if [[ -z "$project" ]]; then
+    # shellcheck source=scripts/lib.sh
+    source "$KIT/scripts/lib.sh"
+    vps_load_project_env 2>/dev/null || true
+    project="${VPS_PROJECT_NAME:-fandango-watcher}"
+  fi
+  exec python "$KIT/run_vps_cmd.py" --project "$project" --sync-secrets
+fi
+
 # shellcheck source=scripts/lib.sh
 source "$KIT/scripts/lib.sh"
 vps_load_env
-
-REPO_ROOT="${VPS_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 echo "Uploading ${VPS_PROJECT_NAME} secrets to ${VPS_SSH_USER}@${VPS_HOST}:${VPS_REMOTE_DIR}/"
 

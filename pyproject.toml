@@ -5,6 +5,9 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
+    # Bundled into the Cloudflare Python Worker by pywrangler (config API + D1).
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
