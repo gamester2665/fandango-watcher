@@ -19,12 +19,12 @@ from .cloudflare_config import (
 )
 from .config import MovieConfig, TargetConfig
 
-_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS: dict[str, threading.RLock] = {}
 
 
-def _lock_for(path: Path) -> threading.Lock:
+def _lock_for(path: Path) -> threading.RLock:
     key = str(path.resolve())
-    return _LOCKS.setdefault(key, threading.Lock())
+    return _LOCKS.setdefault(key, threading.RLock())
 
 
 class SqliteWatchlistProvider:
