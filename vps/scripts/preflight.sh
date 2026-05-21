@@ -52,15 +52,18 @@ for port in ${VPS_RESERVED_PORTS}; do
 done
 
 holder_pattern="${VPS_PORT_HOLDER_PATTERN:-docker}"
-if ss -tlnp 2>/dev/null | grep ":${VPS_HEALTHZ_PORT} " | grep -vqE "$holder_pattern"; then
-  if ss -tlnp 2>/dev/null | grep ":${VPS_HEALTHZ_PORT} " | grep -q '127.0.0.1'; then
-    holder="$(ss -tlnp 2>/dev/null | grep ":${VPS_HEALTHZ_PORT} " || true)"
-    if [[ -n "$holder" ]]; then
-      fail "port ${VPS_HEALTHZ_PORT} already bound by another process: $holder"
-    fi
+healthz_holder="$(ss -tlnp 2>/dev/null | grep ":${VPS_HEALTHZ_PORT} " || true)"
+if [[ -n "$healthz_holder" ]]; then
+  if echo "$healthz_holder" | grep -qE "${holder_pattern}|docker-proxy"; then
+    echo "  :${VPS_HEALTHZ_PORT} held by ${VPS_PROJECT_NAME} stack (OK for redeploy)"
+  elif echo "$healthz_holder" | grep -q '127.0.0.1'; then
+    fail "port ${VPS_HEALTHZ_PORT} already bound by another process: $healthz_holder"
+  else
+    echo "  :${VPS_HEALTHZ_PORT} in use"
   fi
+else
+  echo "  :${VPS_HEALTHZ_PORT} available for ${VPS_PROJECT_NAME} (127.0.0.1 bind)"
 fi
-echo "  :${VPS_HEALTHZ_PORT} available for ${VPS_PROJECT_NAME} (127.0.0.1 bind)"
 
 echo "-- disk (avoid starving mail/Rose during build) --"
 free_gib="$(df -BG / | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"

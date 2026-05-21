@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # From laptop: SSH to VPS and run pull-and-restart (does not upload secrets).
+#
+# Prefer vps/run_vps_cmd.py (paramiko + password from vps/host.env or secrets file)
+# so Windows/Git Bash does not pop an SSH key passphrase dialog.
 set -euo pipefail
 
 KIT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,6 +14,12 @@ echo "Target: ${VPS_SSH_USER}@${VPS_HOST}:${VPS_REMOTE_DIR}"
 echo "Project: ${VPS_PROJECT_NAME}"
 echo "This script runs remote commands only; it does not upload secrets."
 echo ""
+
+if [[ "${VPS_DEPLOY_USE_SSH:-}" != "1" ]]; then
+  project="${VPS_PROJECT_NAME:-fandango-watcher}"
+  remote_cmd="set -euo pipefail; export VPS_PROJECT_ENV='${VPS_PROJECT_ENV}'; export VPS_PROJECT_NAME='${VPS_PROJECT_NAME}'; cd '${VPS_REMOTE_DIR}'; if [[ ! -f docker-compose.yml ]]; then echo \"missing ${VPS_REMOTE_DIR}/docker-compose.yml — clone the repo first\" >&2; exit 1; fi; docker builder prune -f >/dev/null 2>&1 || true; bash vps/scripts/pull-and-restart.sh"
+  exec python "$KIT/run_vps_cmd.py" --project "$project" "$remote_cmd"
+fi
 
 ssh "${VPS_SSH_USER}@${VPS_HOST}" bash -s <<EOF
 set -euo pipefail
