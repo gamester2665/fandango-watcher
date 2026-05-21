@@ -15,6 +15,7 @@ from fandango_watcher.fandango_api import (
     FandangoApiClient,
     FandangoApiError,
     build_calendar_url,
+    build_fandango_poster_url,
     build_nearby_theaters_url,
     build_search_url,
     build_showtimes_url,
@@ -22,11 +23,16 @@ from fandango_watcher.fandango_api import (
     drift_check,
     format_records_by_date,
     get_available_formats,
+    is_usable_fandango_poster_url,
+    normalize_tmdb_poster_url,
     matching_records,
     parse_calendar_dates,
     parse_search_results,
+    poster_url_from_overview_html,
     parse_showtime_records,
     parse_theater_info,
+    resolve_movie_poster_url,
+    resolve_poster_from_tmdb,
     theater_id_from_slug,
 )
 from fandango_watcher.models import FormatTag
@@ -85,6 +91,92 @@ def test_parse_search_results_normalizes_movie_cards() -> None:
     assert results[0].poster_url == "https://images.fandango.com/poster.jpg"
     assert results[0].release_date_text == "Friday, Dec 18, 2026"
     assert results[0].rating == "Not Rated"
+
+
+def test_is_usable_fandango_poster_url() -> None:
+    assert is_usable_fandango_poster_url(
+        build_fandango_poster_url(243393, "TS5_Payoff.jpg")
+    )
+    assert not is_usable_fandango_poster_url(
+        "https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/default_poster.png/0/"
+    )
+    assert not is_usable_fandango_poster_url(None)
+
+
+def test_poster_url_from_overview_html() -> None:
+    html = (
+        '<img src="https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/'
+        "default_poster--dark-mode.png/0/images/masterrepository/Fandango/243393/"
+        'TS5_Payoff_Unboxing_1s_v80_Mech6.jpg">'
+    )
+    poster = poster_url_from_overview_html(html, movie_id=243393)
+    assert poster == build_fandango_poster_url(243393, "TS5_Payoff_Unboxing_1s_v80_Mech6.jpg")
+
+
+def test_resolve_movie_poster_url_prefers_search_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    overview = "https://www.fandango.com/toy-story-5-2026-243393/movie-overview"
+    poster = build_fandango_poster_url(243393, "TS5_Payoff.jpg")
+
+    class _FakeClient:
+        headers: dict[str, str] = {}
+
+        def search_movies(self, query: str):
+            assert query == "Toy Story 5"
+            from fandango_watcher.fandango_api import FandangoMovieSearchResult
+
+            return [
+                FandangoMovieSearchResult(
+                    movie_id=243393,
+                    title="Toy Story 5 (2026)",
+                    url=overview,
+                    poster_url=poster,
+                )
+            ]
+
+        def close(self) -> None:
+            return None
+
+    resolved = resolve_movie_poster_url("Toy Story 5", overview, client=_FakeClient())  # type: ignore[arg-type]
+    assert resolved == poster
+
+
+def test_normalize_tmdb_poster_url() -> None:
+    assert normalize_tmdb_poster_url(
+        "https://media.themoviedb.org/t/p/w500/bZhYdECsSuCrmbfYhKAc2bgsNz.jpg"
+    ) == "https://image.tmdb.org/t/p/w500/bZhYdECsSuCrmbfYhKAc2bgsNz.jpg"
+    assert normalize_tmdb_poster_url("https://example.com/poster.jpg") is None
+
+
+def test_resolve_poster_from_tmdb_parses_search_result() -> None:
+    search_html = '<a href="/movie/1400336-focker-in-law">Focker-In-Law</a>'
+    movie_html = (
+        '<meta property="og:image" content="'
+        'https://media.themoviedb.org/t/p/w500/bZhYdECsSuCrmbfYhKAc2bgsNz.jpg" />'
+    )
+
+    class _Routes:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get(self, url: str, **kwargs: object):
+            self.calls.append(url)
+
+            class _Resp:
+                def raise_for_status(self) -> None:
+                    return None
+
+                @property
+                def text(self) -> str:
+                    if "search/movie" in url:
+                        return search_html
+                    return movie_html
+
+            return _Resp()
+
+    routes = _Routes()
+    poster = resolve_poster_from_tmdb("Focker-In-Law (2026)", http_client=routes)  # type: ignore[arg-type]
+    assert poster == "https://image.tmdb.org/t/p/w500/bZhYdECsSuCrmbfYhKAc2bgsNz.jpg"
+    assert routes.calls[1].endswith("/movie/1400336-focker-in-law")
 
 
 def test_parse_theater_info_reads_slug_suffix_and_page_metadata() -> None:

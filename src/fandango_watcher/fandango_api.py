@@ -285,6 +285,134 @@ def parse_search_results(
     return [FandangoMovieSearchResult.model_validate(item) for item in parser.results]
 
 
+_POSTER_RENDERER_PREFIX = (
+    "https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/"
+    "default_poster--dark-mode.png/0/images/"
+)
+
+
+def is_usable_fandango_poster_url(url: str | None) -> bool:
+    """Return True when ``url`` looks like a real Fandango-hosted poster image."""
+
+    if not isinstance(url, str):
+        return False
+    cleaned = url.strip()
+    if not cleaned:
+        return False
+    lower = cleaned.lower()
+    if lower.endswith("/0/") or lower.endswith("/0"):
+        return False
+    return "masterrepository" in lower or "/fandango/" in lower
+
+
+def build_fandango_poster_url(movie_id: int | str, filename: str) -> str:
+    """Build the standard ImageRenderer URL for a Fandango poster asset."""
+
+    return f"{_POSTER_RENDERER_PREFIX}masterrepository/Fandango/{movie_id}/{filename}"
+
+
+def poster_url_from_overview_html(html: str, *, movie_id: int | str) -> str | None:
+    """Extract the first poster asset for ``movie_id`` from a movie-overview page."""
+
+    pattern = rf"masterrepository/Fandango/{movie_id}/([A-Za-z0-9_%./-]+)"
+    match = re.search(pattern, html, re.I)
+    if not match:
+        return None
+    return build_fandango_poster_url(movie_id, match.group(1))
+
+
+def _title_for_external_poster_search(title: str) -> str:
+    return re.sub(r"\s*\(\d{4}\)\s*$", "", title).strip() or title
+
+
+def normalize_tmdb_poster_url(url: str | None) -> str | None:
+    """Normalize TMDB poster URLs to the canonical ``image.tmdb.org`` host."""
+
+    if not isinstance(url, str) or not url.strip():
+        return None
+    cleaned = url.strip().replace(
+        "https://media.themoviedb.org/",
+        "https://image.tmdb.org/",
+    )
+    if "image.tmdb.org/t/p/" not in cleaned:
+        return None
+    return cleaned
+
+
+def resolve_poster_from_tmdb(
+    title: str,
+    *,
+    http_client: httpx.Client | None = None,
+) -> str | None:
+    """Resolve a poster URL from TMDB when Fandango has not published art yet."""
+
+    query = _title_for_external_poster_search(title)
+    if not query:
+        return None
+
+    owns_client = http_client is None
+    client = http_client or httpx.Client(
+        headers={"User-Agent": DEFAULT_USER_AGENT},
+        follow_redirects=True,
+        timeout=30.0,
+    )
+    try:
+        search_resp = client.get(
+            "https://www.themoviedb.org/search/movie",
+            params={"query": query},
+        )
+        search_resp.raise_for_status()
+        links = re.findall(r'href="(/movie/\d+-[^"]+)"', search_resp.text)
+        if not links:
+            return None
+        movie_resp = client.get(f"https://www.themoviedb.org{links[0]}")
+        movie_resp.raise_for_status()
+        og = re.search(r'property="og:image" content="([^"]+)"', movie_resp.text)
+        return normalize_tmdb_poster_url(og.group(1) if og else None)
+    except Exception:
+        return None
+    finally:
+        if owns_client:
+            client.close()
+
+
+def resolve_movie_poster_url(
+    title: str,
+    overview_url: str,
+    *,
+    client: FandangoApiClient | None = None,
+) -> str | None:
+    """Resolve a poster URL from Fandango, then TMDB as a fallback."""
+
+    overview = overview_url.split("?", 1)[0].strip()
+    if not overview:
+        return None
+    match = re.search(r"-(\d+)/movie-overview(?:$|[/?#])", overview)
+    movie_id = int(match.group(1)) if match else None
+
+    owns_client = client is None
+    api = client or FandangoApiClient()
+    try:
+        for result in api.search_movies(title):
+            if result.url.split("?", 1)[0] != overview:
+                continue
+            if is_usable_fandango_poster_url(result.poster_url):
+                return result.poster_url.strip()
+            break
+        if movie_id is not None:
+            response = api._client.get(overview, headers=api.headers)
+            response.raise_for_status()
+            poster = poster_url_from_overview_html(response.text, movie_id=movie_id)
+            if poster:
+                return poster
+        return resolve_poster_from_tmdb(title, http_client=api._client)
+    except Exception:
+        return resolve_poster_from_tmdb(title, http_client=api._client)
+    finally:
+        if owns_client:
+            api.close()
+
+
 def theater_id_from_slug(theater_slug: str) -> str | None:
     """Return the Fandango theater id suffix from a public theater slug."""
 

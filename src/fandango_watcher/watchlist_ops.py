@@ -77,12 +77,18 @@ def build_movie_add_plan(
         else [FormatTag.IMAX]
     )
 
+    poster_url = _first_nonempty_str(payload.get("poster_url"))
+    if not poster_url:
+        from .fandango_api import resolve_movie_poster_url
+
+        poster_url = resolve_movie_poster_url(title, overview_url)
+
     movie = MovieConfig(
         key=key,
         title=title,
         fandango_movie_id=movie_id,
         release_date=_first_nonempty_str(payload.get("release_date_text")),
-        poster_url=_first_nonempty_str(payload.get("poster_url")),
+        poster_url=poster_url,
         fandango_targets=[t.name for t in new_targets],
         preferred_formats=preferred_formats,
         x_handles=[],

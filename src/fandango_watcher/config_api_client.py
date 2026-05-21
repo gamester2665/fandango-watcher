@@ -276,7 +276,26 @@ def reload_merged_config(
     return merged, remote.revision, meta
 
 
+def _ensure_poster_in_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    title = payload.get("title")
+    url = payload.get("url")
+    if not isinstance(title, str) or not isinstance(url, str):
+        return payload
+    poster = payload.get("poster_url")
+    if isinstance(poster, str) and poster.strip():
+        return payload
+    from .fandango_api import resolve_movie_poster_url
+
+    poster_url = resolve_movie_poster_url(title, url)
+    if not poster_url:
+        return payload
+    enriched = dict(payload)
+    enriched["poster_url"] = poster_url
+    return enriched
+
+
 def remote_add_movie(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+    payload = _ensure_poster_in_payload(payload)
     api_url = _remote_config_api_url(settings)
     if api_url:
         return admin_json_request("POST", "/api/movies", payload, settings)
