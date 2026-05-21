@@ -18,10 +18,7 @@ binding = "DB"
 database_name = "fandango_watcher_db"
 database_id = "a194825e-917f-45fb-bc9b-53e610aa5335"
 
-[browser]
-binding = "BROWSER"
-
-# Secrets (Twilio/SMTP): set with `npx wrangler secret put TWILIO_AUTH_TOKEN` etc.
+# Browser binding removed for config-only deploy; re-add when worker.py poll loop ships.
 # Required for notify.channels: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM,
 # NOTIFY_TO_E164, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, NOTIFY_TO_EMAIL
 [vars]

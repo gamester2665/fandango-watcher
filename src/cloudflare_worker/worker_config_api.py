@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 def json_response(payload: dict[str, Any], *, status: int = 200):
-    from js import Response
+    from workers import Response
 
-    return Response.new(
+    return Response(
         json.dumps(payload),
         status=status,
         headers={
