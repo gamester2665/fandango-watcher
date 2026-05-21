@@ -14,7 +14,7 @@ from direct_api_detect import detect_target_direct_api
 from loop import ERROR_STREAK_THRESHOLD, _apply_direct_api_meta, _emit_events
 from notify import build_notifier
 from pydantic import SecretStr
-from worker_config_api import handle_config_fetch
+from cloudflare_worker.worker_config_api import handle_config_fetch
 
 from state import record_error, transition
 

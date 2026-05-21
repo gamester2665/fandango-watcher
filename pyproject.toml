@@ -49,7 +49,7 @@ dev = [
 ]
 
 [tool.pywrangler]
-main = "src/fandango_watcher/worker_api.py"
+main = "src/cloudflare_worker/worker_api.py"
 
 [tool.uv]
 default-groups = ["core", "watcher"]
