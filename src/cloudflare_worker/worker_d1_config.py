@@ -7,6 +7,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 
+def _sql_param(value: Any) -> Any:
+    """Coerce optional values for D1 bind (Pyodide rejects undefined)."""
+    if value is None:
+        from js import null
+
+        return null
+    return value
+
+
 class ConfigConflictError(Exception):
     """Raised when an optimistic revision check fails."""
 
@@ -257,17 +266,17 @@ class D1WatchlistProvider:
             "direct_api_formats_json, sort_order) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).bind(
-            row["name"],
-            row["url"],
-            row["wait_until"],
-            row["timeout_ms"],
-            row["format_filter_click_selector"],
-            row["format_filter_click_label"],
-            row["format_filter_click_timeout_ms"],
-            row["direct_api_movie_id"],
-            row["direct_api_movie_title"],
-            row["direct_api_formats_json"],
-            row["sort_order"],
+            _sql_param(row["name"]),
+            _sql_param(row["url"]),
+            _sql_param(row["wait_until"]),
+            _sql_param(row["timeout_ms"]),
+            _sql_param(row["format_filter_click_selector"]),
+            _sql_param(row["format_filter_click_label"]),
+            _sql_param(row["format_filter_click_timeout_ms"]),
+            _sql_param(row["direct_api_movie_id"]),
+            _sql_param(row["direct_api_movie_title"]),
+            _sql_param(row["direct_api_formats_json"]),
+            _sql_param(row["sort_order"]),
         ).run()
 
     async def _insert_movie(self, row: dict[str, Any]) -> None:
@@ -277,18 +286,18 @@ class D1WatchlistProvider:
             "x_keywords_json, reference_page_key, sort_order) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).bind(
-            row["key"],
-            row["title"],
-            row["fandango_movie_id"],
-            row["distributor"],
-            row["release_date"],
-            row["poster_url"],
-            row["fandango_targets_json"],
-            row["preferred_formats_json"],
-            row["x_handles_json"],
-            row["x_keywords_json"],
-            row["reference_page_key"],
-            row["sort_order"],
+            _sql_param(row["key"]),
+            _sql_param(row["title"]),
+            _sql_param(row["fandango_movie_id"]),
+            _sql_param(row["distributor"]),
+            _sql_param(row["release_date"]),
+            _sql_param(row["poster_url"]),
+            _sql_param(row["fandango_targets_json"]),
+            _sql_param(row["preferred_formats_json"]),
+            _sql_param(row["x_handles_json"]),
+            _sql_param(row["x_keywords_json"]),
+            _sql_param(row["reference_page_key"]),
+            _sql_param(row["sort_order"]),
         ).run()
 
     async def replace_watchlist(
@@ -357,17 +366,17 @@ class D1WatchlistProvider:
                 "direct_api_formats_json = excluded.direct_api_formats_json, "
                 "sort_order = excluded.sort_order"
             ).bind(
-                row["name"],
-                row["url"],
-                row["wait_until"],
-                row["timeout_ms"],
-                row["format_filter_click_selector"],
-                row["format_filter_click_label"],
-                row["format_filter_click_timeout_ms"],
-                row["direct_api_movie_id"],
-                row["direct_api_movie_title"],
-                row["direct_api_formats_json"],
-                row["sort_order"],
+                _sql_param(row["name"]),
+                _sql_param(row["url"]),
+                _sql_param(row["wait_until"]),
+                _sql_param(row["timeout_ms"]),
+                _sql_param(row["format_filter_click_selector"]),
+                _sql_param(row["format_filter_click_label"]),
+                _sql_param(row["format_filter_click_timeout_ms"]),
+                _sql_param(row["direct_api_movie_id"]),
+                _sql_param(row["direct_api_movie_title"]),
+                _sql_param(row["direct_api_formats_json"]),
+                _sql_param(row["sort_order"]),
             ).run()
 
         movie_count = await self.db.prepare("SELECT COUNT(*) AS n FROM movies").first()
@@ -399,17 +408,17 @@ class D1WatchlistProvider:
             "x_handles_json = ?, x_keywords_json = ?, reference_page_key = ? "
             "WHERE key = ?"
         ).bind(
-            out_row["title"],
-            out_row["fandango_movie_id"],
-            out_row["distributor"],
-            out_row["release_date"],
-            out_row["poster_url"],
-            out_row["fandango_targets_json"],
-            out_row["preferred_formats_json"],
-            out_row["x_handles_json"],
-            out_row["x_keywords_json"],
-            out_row["reference_page_key"],
-            key,
+            _sql_param(out_row["title"]),
+            _sql_param(out_row["fandango_movie_id"]),
+            _sql_param(out_row["distributor"]),
+            _sql_param(out_row["release_date"]),
+            _sql_param(out_row["poster_url"]),
+            _sql_param(out_row["fandango_targets_json"]),
+            _sql_param(out_row["preferred_formats_json"]),
+            _sql_param(out_row["x_handles_json"]),
+            _sql_param(out_row["x_keywords_json"]),
+            _sql_param(out_row["reference_page_key"]),
+            _sql_param(key),
         ).run()
         revision = await self._bump_revision()
         return {"revision": revision, **(await self.get_watchlist())}
