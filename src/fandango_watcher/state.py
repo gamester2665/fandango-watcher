@@ -67,6 +67,8 @@ class TargetState(BaseModel):
     target_name: str
     current_state: WatcherState = WatcherState.IDLE
     last_release_schema: ReleaseSchema | None = None
+    last_showtime_count: int | None = Field(default=None, ge=0)
+    last_buyable_showtime_count: int | None = Field(default=None, ge=0)
     last_release_date_text: str | None = None
     last_poster_url: str | None = None
     last_tick_at: datetime | None = None
@@ -116,7 +118,28 @@ def _is_bad_or_unknown(schema: ReleaseSchema | str | None) -> bool:
     if schema is None:
         return True
     value = schema.value if isinstance(schema, ReleaseSchema) else schema
-    return value == ReleaseSchema.NOT_ON_SALE.value
+    return value in {
+        ReleaseSchema.NOT_ON_SALE.value,
+        ReleaseSchema.SHOWTIMES_DISCLOSED.value,
+    }
+
+
+def _fires_bad_to_good(
+    prev_schema: ReleaseSchema | str | None,
+    new_schema: ReleaseSchema | str,
+) -> bool:
+    """True when tickets become buyable after a non-purchasable baseline."""
+    if not _is_good(new_schema):
+        return False
+    if prev_schema is None:
+        return True
+    prev_value = (
+        prev_schema.value if isinstance(prev_schema, ReleaseSchema) else prev_schema
+    )
+    return prev_value in {
+        ReleaseSchema.NOT_ON_SALE.value,
+        ReleaseSchema.SHOWTIMES_DISCLOSED.value,
+    }
 
 
 def transition(
@@ -129,15 +152,16 @@ def transition(
 
     Fired events (by name, matching ``notify.on_events``):
 
-    * ``release_transition_bad_to_good`` — previous schema was None or
-      ``not_on_sale`` and current is ``partial_release``/``full_release``.
-      This is the core "tickets just dropped" alert.
+    * ``release_transition_bad_to_good`` — previous schema was None,
+      ``not_on_sale``, or ``showtimes_disclosed`` and current is
+      ``partial_release``/``full_release``. This is the core "tickets just
+      dropped" alert.
     """
     effective_now = now if now is not None else datetime.now(UTC)
     new_schema = parsed.release_schema
 
     events: list[str] = []
-    if _is_bad_or_unknown(prev.last_release_schema) and _is_good(new_schema):
+    if _fires_bad_to_good(prev.last_release_schema, new_schema):
         events.append(Event.RELEASE_TRANSITION_BAD_TO_GOOD)
 
     if _is_good(new_schema):
@@ -149,6 +173,8 @@ def transition(
         update={
             "current_state": new_watcher_state,
             "last_release_schema": new_schema,
+            "last_showtime_count": parsed.showtime_count,
+            "last_buyable_showtime_count": parsed.buyable_showtime_count,
             "last_release_date_text": parsed.release_date_text or prev.last_release_date_text,
             "last_poster_url": parsed.poster_url or prev.last_poster_url,
             "last_tick_at": effective_now,

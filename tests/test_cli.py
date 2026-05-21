@@ -929,9 +929,12 @@ class TestTestPurchaseFromFixture:
             "schema_evidence": ["fixture"],
             "theater_count": 1,
             "showtime_count": 1,
+            "buyable_showtime_count": 1,
+            "buyable_theater_count": 1,
             "formats_seen": ["IMAX_70MM"],
             "citywalk_present": True,
             "citywalk_showtime_count": 1,
+            "buyable_citywalk_showtime_count": 1,
             "citywalk_formats_seen": ["IMAX_70MM"],
             "theaters": [
                 {
@@ -1075,9 +1078,12 @@ class TestTestPurchaseFromFixture:
             "schema_evidence": ["fixture"],
             "theater_count": 1,
             "showtime_count": 1,
+            "buyable_showtime_count": 1,
+            "buyable_theater_count": 1,
             "formats_seen": ["IMAX_70MM"],
             "citywalk_present": True,
             "citywalk_showtime_count": 1,
+            "buyable_citywalk_showtime_count": 1,
             "citywalk_formats_seen": ["IMAX_70MM"],
             "theaters": [
                 {

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 
 class ReleaseSchema(StrEnum):
     NOT_ON_SALE = "not_on_sale"
+    SHOWTIMES_DISCLOSED = "showtimes_disclosed"
     PARTIAL_RELEASE = "partial_release"
     FULL_RELEASE = "full_release"
 
@@ -105,15 +106,30 @@ class CrawlContext(ModelBase):
 class ParsedCounts(ModelBase):
     theater_count: int = Field(ge=0)
     showtime_count: int = Field(ge=0)
+    buyable_showtime_count: int = Field(default=0, ge=0)
+    buyable_theater_count: int = Field(default=0, ge=0)
     formats_seen: list[FormatTag] = Field(default_factory=list)
     citywalk_present: bool = False
     citywalk_showtime_count: int = Field(default=0, ge=0)
+    buyable_citywalk_showtime_count: int = Field(default=0, ge=0)
     citywalk_formats_seen: list[FormatTag] = Field(default_factory=list)
 
     @field_validator("formats_seen", "citywalk_formats_seen")
     @classmethod
     def dedupe_formats(cls, values: list[FormatTag]) -> list[FormatTag]:
         return _dedupe_preserve_order(values)
+
+    @model_validator(mode="after")
+    def validate_buyable_counts(self) -> ParsedCounts:
+        if self.buyable_showtime_count > self.showtime_count:
+            raise ValueError("buyable_showtime_count cannot exceed showtime_count")
+        if self.buyable_theater_count > self.theater_count:
+            raise ValueError("buyable_theater_count cannot exceed theater_count")
+        if self.buyable_citywalk_showtime_count > self.citywalk_showtime_count:
+            raise ValueError(
+                "buyable_citywalk_showtime_count cannot exceed citywalk_showtime_count"
+            )
+        return self
 
 
 class PageDataBase(CrawlContext, ParsedCounts):
@@ -142,6 +158,25 @@ class NotOnSalePageData(PageDataBase):
             raise ValueError("not_on_sale pages should not include real showtimes")
         if self.citywalk_showtime_count != 0:
             raise ValueError("not_on_sale pages cannot include CityWalk showtimes")
+        if self.buyable_showtime_count != 0:
+            raise ValueError("not_on_sale pages cannot include buyable showtimes")
+        return self
+
+
+class ShowtimesDisclosedPageData(PageDataBase):
+    release_schema: Literal[ReleaseSchema.SHOWTIMES_DISCLOSED] = (
+        ReleaseSchema.SHOWTIMES_DISCLOSED
+    )
+    watch_status: Literal[WatchStatus.WATCHABLE] = WatchStatus.WATCHABLE
+
+    @model_validator(mode="after")
+    def validate_showtimes_disclosed(self) -> ShowtimesDisclosedPageData:
+        if self.showtime_count <= 0:
+            raise ValueError("showtimes_disclosed pages must include visible showtimes")
+        if self.buyable_showtime_count != 0:
+            raise ValueError(
+                "showtimes_disclosed pages must not include buyable showtimes"
+            )
         return self
 
 
@@ -151,10 +186,14 @@ class PartialReleasePageData(PageDataBase):
 
     @model_validator(mode="after")
     def validate_partial_release(self) -> PartialReleasePageData:
-        if self.theater_count <= 0:
-            raise ValueError("partial_release pages must include at least one theater")
-        if self.showtime_count <= 0:
-            raise ValueError("partial_release pages must include at least one showtime")
+        if self.buyable_theater_count <= 0:
+            raise ValueError(
+                "partial_release pages must include at least one theater with buyable showtimes"
+            )
+        if self.buyable_showtime_count <= 0:
+            raise ValueError(
+                "partial_release pages must include at least one buyable showtime"
+            )
         return self
 
 
@@ -164,15 +203,22 @@ class FullReleasePageData(PageDataBase):
 
     @model_validator(mode="after")
     def validate_full_release(self) -> FullReleasePageData:
-        if self.theater_count <= 0:
-            raise ValueError("full_release pages must include at least one theater")
-        if self.showtime_count <= 0:
-            raise ValueError("full_release pages must include at least one showtime")
+        if self.buyable_theater_count <= 0:
+            raise ValueError(
+                "full_release pages must include at least one theater with buyable showtimes"
+            )
+        if self.buyable_showtime_count <= 0:
+            raise ValueError(
+                "full_release pages must include at least one buyable showtime"
+            )
         return self
 
 
 ParsedPageData = Annotated[
-    NotOnSalePageData | PartialReleasePageData | FullReleasePageData,
+    NotOnSalePageData
+    | ShowtimesDisclosedPageData
+    | PartialReleasePageData
+    | FullReleasePageData,
     Field(discriminator="release_schema"),
 ]
 

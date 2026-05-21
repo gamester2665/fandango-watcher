@@ -130,7 +130,7 @@ def build_notification(
             f"Target: {target_name}",
             f"URL: {target_url}",
             f"Release schema: {_schema_value(parsed)}",
-            f"Theaters: {parsed.theater_count}  Showtimes: {parsed.showtime_count}",
+            f"Theaters: {parsed.theater_count}  Showtimes: {parsed.showtime_count}  Buyable: {parsed.buyable_showtime_count}",
             (
                 f"CityWalk: present={parsed.citywalk_present} "
                 f"showtimes={parsed.citywalk_showtime_count} "

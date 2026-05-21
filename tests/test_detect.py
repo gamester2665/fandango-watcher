@@ -31,6 +31,7 @@ from fandango_watcher.models import (
     NotOnSalePageData,
     PartialReleasePageData,
     ReleaseSchema,
+    ShowtimesDisclosedPageData,
     WatchStatus,
 )
 
@@ -104,6 +105,7 @@ def _imax_70mm_section(
     *,
     n_showtimes: int = 2,
     with_urls: bool = True,
+    buyable: bool = True,
 ) -> ExtractedFormatSection:
     showtimes = [
         ExtractedShowtime(
@@ -113,6 +115,7 @@ def _imax_70mm_section(
                 if with_urls
                 else None
             ),
+            is_buyable=buyable,
         )
         for i in range(n_showtimes)
     ]
@@ -204,6 +207,7 @@ class TestPartialReleaseClassification:
         assert result.watch_status == WatchStatus.WATCHABLE
         assert result.theater_count == 1
         assert result.showtime_count == 2
+        assert result.buyable_showtime_count == 2
         assert result.citywalk_present is True
         assert result.citywalk_showtime_count == 2
         assert result.formats_seen == ["IMAX_70MM"]
@@ -250,6 +254,51 @@ class TestPartialReleaseClassification:
         )
         result = classify(snapshot, citywalk_anchor=CITYWALK_ANCHOR)
         assert result.ticket_url == "https://www.fandango.com/explicit-cta"
+
+
+# -----------------------------------------------------------------------------
+# Schema D: showtimes_disclosed
+# -----------------------------------------------------------------------------
+
+
+class TestShowtimesDisclosedClassification:
+    def test_visible_non_buyable_showtimes_are_disclosed(self) -> None:
+        snapshot = _empty_snapshot(
+            theaters=[
+                _citywalk_theater(
+                    sections=[_imax_70mm_section(buyable=False, with_urls=True)]
+                )
+            ],
+        )
+        result = classify(snapshot, citywalk_anchor=CITYWALK_ANCHOR)
+        assert isinstance(result, ShowtimesDisclosedPageData)
+        assert result.release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+        assert result.watch_status == WatchStatus.WATCHABLE
+        assert result.showtime_count == 2
+        assert result.buyable_showtime_count == 0
+        assert result.citywalk_showtime_count == 2
+        assert result.buyable_citywalk_showtime_count == 0
+        assert result.ticket_url is None
+
+    def test_many_non_buyable_showtimes_stay_disclosed_not_full(self) -> None:
+        big_section = ExtractedFormatSection(
+            label="Standard",
+            showtimes=[
+                ExtractedShowtime(label=f"{6 + i % 6}:00p", is_buyable=False)
+                for i in range(FULL_RELEASE_MIN_SHOWTIMES)
+            ],
+        )
+        snapshot = _empty_snapshot(
+            theaters=[
+                ExtractedTheater(
+                    name="AMC Universal CityWalk 19 + IMAX",
+                    format_sections=[big_section],
+                )
+            ]
+        )
+        result = classify(snapshot, citywalk_anchor=CITYWALK_ANCHOR)
+        assert isinstance(result, ShowtimesDisclosedPageData)
+        assert result.showtime_count == FULL_RELEASE_MIN_SHOWTIMES
 
 
 # -----------------------------------------------------------------------------
@@ -365,4 +414,5 @@ class TestSchemaEvidence:
         result = classify(snapshot, citywalk_anchor=CITYWALK_ANCHOR)
         assert "theater_count=1" in result.schema_evidence
         assert "showtime_count=2" in result.schema_evidence
+        assert "buyable_showtime_count=2" in result.schema_evidence
         assert any("citywalk_showtime_count" in e for e in result.schema_evidence)

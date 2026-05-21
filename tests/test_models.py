@@ -27,6 +27,7 @@ from fandango_watcher.models import (
     PartialReleasePageData,
     ReleaseSchema,
     Showtime,
+    ShowtimesDisclosedPageData,
     TheaterListing,
     WatchStatus,
     validate_page_data,
@@ -199,25 +200,65 @@ class TestPartialReleasePageData:
             **_base_fields(
                 theater_count=1,
                 showtime_count=2,
+                buyable_showtime_count=2,
+                buyable_theater_count=1,
                 formats_seen=[FormatTag.IMAX_70MM],
                 citywalk_present=True,
                 citywalk_showtime_count=2,
+                buyable_citywalk_showtime_count=2,
             )
         )
         assert page.release_schema == "partial_release"
         assert page.watch_status == "watchable"
         assert page.formats_seen == ["IMAX_70MM"]
 
-    def test_requires_at_least_one_theater(self) -> None:
-        with pytest.raises(ValidationError, match="at least one theater"):
+    def test_requires_at_least_one_buyable_theater(self) -> None:
+        with pytest.raises(ValidationError, match="buyable showtimes"):
             PartialReleasePageData(
-                **_base_fields(theater_count=0, showtime_count=1)
+                **_base_fields(
+                    theater_count=1,
+                    showtime_count=1,
+                    buyable_showtime_count=1,
+                    buyable_theater_count=0,
+                )
             )
 
-    def test_requires_at_least_one_showtime(self) -> None:
-        with pytest.raises(ValidationError, match="at least one showtime"):
+    def test_requires_at_least_one_buyable_showtime(self) -> None:
+        with pytest.raises(ValidationError, match="buyable showtime"):
             PartialReleasePageData(
-                **_base_fields(theater_count=1, showtime_count=0)
+                **_base_fields(
+                    theater_count=1,
+                    showtime_count=1,
+                    buyable_showtime_count=0,
+                    buyable_theater_count=0,
+                )
+            )
+
+
+class TestShowtimesDisclosedPageData:
+    def test_happy_path(self) -> None:
+        page = ShowtimesDisclosedPageData(
+            **_base_fields(
+                theater_count=1,
+                showtime_count=3,
+                buyable_showtime_count=0,
+                buyable_theater_count=0,
+                citywalk_present=True,
+                citywalk_showtime_count=3,
+                buyable_citywalk_showtime_count=0,
+            )
+        )
+        assert page.release_schema == "showtimes_disclosed"
+        assert page.watch_status == "watchable"
+
+    def test_rejects_buyable_showtimes(self) -> None:
+        with pytest.raises(ValidationError, match="must not include buyable"):
+            ShowtimesDisclosedPageData(
+                **_base_fields(
+                    theater_count=1,
+                    showtime_count=2,
+                    buyable_showtime_count=1,
+                )
             )
 
 
@@ -227,6 +268,8 @@ class TestFullReleasePageData:
             **_base_fields(
                 theater_count=12,
                 showtime_count=88,
+                buyable_showtime_count=88,
+                buyable_theater_count=12,
                 formats_seen=[FormatTag.IMAX, FormatTag.STANDARD],
             )
         )
@@ -289,11 +332,27 @@ class TestDiscriminatedUnion:
                 "release_schema": "partial_release",
                 "theater_count": 1,
                 "showtime_count": 3,
+                "buyable_showtime_count": 3,
+                "buyable_theater_count": 1,
                 "formats_seen": ["IMAX_70MM"],
             }
         )
         assert isinstance(result, PartialReleasePageData)
         assert result.watch_status == WatchStatus.WATCHABLE
+
+    def test_dispatches_to_showtimes_disclosed(self) -> None:
+        result = validate_page_data(
+            {
+                "url": "https://fandango.com/x",
+                "page_title": "X",
+                "release_schema": "showtimes_disclosed",
+                "theater_count": 1,
+                "showtime_count": 3,
+                "buyable_showtime_count": 0,
+                "buyable_theater_count": 0,
+            }
+        )
+        assert isinstance(result, ShowtimesDisclosedPageData)
 
     def test_dispatches_to_full_release(self) -> None:
         result = validate_page_data(
@@ -303,6 +362,8 @@ class TestDiscriminatedUnion:
                 "release_schema": "full_release",
                 "theater_count": 20,
                 "showtime_count": 120,
+                "buyable_showtime_count": 120,
+                "buyable_theater_count": 20,
             }
         )
         assert isinstance(result, FullReleasePageData)
@@ -329,6 +390,7 @@ class TestSchemaEnums:
     def test_release_schema_values(self) -> None:
         assert {s.value for s in ReleaseSchema} == {
             "not_on_sale",
+            "showtimes_disclosed",
             "partial_release",
             "full_release",
         }

@@ -137,6 +137,14 @@ def _partial_release(theaters: list[TheaterListing]) -> PartialReleasePageData:
         len(fs.showtimes) for t in theaters if t.is_citywalk
         for fs in t.format_sections
     )
+    buyable_citywalk_st = sum(
+        1
+        for t in theaters
+        if t.is_citywalk
+        for fs in t.format_sections
+        for st in fs.showtimes
+        if st.is_buyable
+    )
     citywalk_fmts = list({
         fs.normalized_format
         for t in theaters if t.is_citywalk
@@ -146,13 +154,28 @@ def _partial_release(theaters: list[TheaterListing]) -> PartialReleasePageData:
         fs.normalized_format for t in theaters for fs in t.format_sections
     })
     total_st = sum(len(fs.showtimes) for t in theaters for fs in t.format_sections)
+    buyable_st = sum(
+        1
+        for t in theaters
+        for fs in t.format_sections
+        for st in fs.showtimes
+        if st.is_buyable
+    )
+    buyable_theaters = sum(
+        1
+        for t in theaters
+        if any(st.is_buyable for fs in t.format_sections for st in fs.showtimes)
+    )
     return PartialReleasePageData(
         **_make_crawl_ctx(),
         theater_count=len(theaters),
         showtime_count=total_st,
+        buyable_showtime_count=buyable_st,
+        buyable_theater_count=buyable_theaters,
         formats_seen=all_fmts,
         citywalk_present=any(t.is_citywalk for t in theaters),
         citywalk_showtime_count=citywalk_st,
+        buyable_citywalk_showtime_count=buyable_citywalk_st,
         citywalk_formats_seen=citywalk_fmts,
         theaters=theaters,
     )

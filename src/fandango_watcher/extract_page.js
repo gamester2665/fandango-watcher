@@ -1,5 +1,34 @@
 () => {
   const text = (el) => (el && el.textContent ? el.textContent.trim() : "");
+  const isShowtimeBuyable = (el, label) => {
+    if (!el) return false;
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+    const labelText = label || text(el);
+    const hint = (
+      labelText +
+      " " +
+      (el.getAttribute("aria-label") || "") +
+      " " +
+      (el.getAttribute("title") || "")
+    ).toLowerCase();
+    if (
+      hint.includes("coming soon") ||
+      hint.includes("not available") ||
+      hint.includes("notify me") ||
+      hint.includes("get notified")
+    ) {
+      return false;
+    }
+    const href = el.href || el.getAttribute("href") || "";
+    if (
+      href &&
+      !/ticketing|\/buy/i.test(href) &&
+      /\d{1,2}:\d{2}/.test(labelText)
+    ) {
+      return false;
+    }
+    return true;
+  };
   const bodyText = (document.body && document.body.innerText) || "";
   const metaContent = (selector) => {
     const el = document.querySelector(selector);
@@ -143,7 +172,7 @@
           showtimes.push({
             label,
             ticket_url: el.href || null,
-            is_buyable: !el.disabled && el.getAttribute("aria-disabled") !== "true",
+            is_buyable: isShowtimeBuyable(el, label),
             date_label: null,
           });
         });
@@ -189,8 +218,7 @@
           showtimes.push({
             label: lbl,
             ticket_url: el.href || null,
-            is_buyable:
-              !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+            is_buyable: isShowtimeBuyable(el, lbl),
             date_label: null,
           });
         });

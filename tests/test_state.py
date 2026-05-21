@@ -22,6 +22,7 @@ from fandango_watcher.models import (
     NotOnSalePageData,
     PartialReleasePageData,
     ReleaseSchema,
+    ShowtimesDisclosedPageData,
 )
 from fandango_watcher.state import (
     Event,
@@ -59,8 +60,11 @@ def _partial_release() -> PartialReleasePageData:
         poster_url="https://www.fandango.com/poster.jpg",
         theater_count=1,
         showtime_count=2,
+        buyable_showtime_count=2,
+        buyable_theater_count=1,
         citywalk_present=True,
         citywalk_showtime_count=2,
+        buyable_citywalk_showtime_count=2,
     )
 
 
@@ -70,6 +74,22 @@ def _full_release() -> FullReleasePageData:
         page_title="X",
         theater_count=12,
         showtime_count=60,
+        buyable_showtime_count=60,
+        buyable_theater_count=12,
+    )
+
+
+def _showtimes_disclosed() -> ShowtimesDisclosedPageData:
+    return ShowtimesDisclosedPageData(
+        url="https://fandango.com/x",
+        page_title="X",
+        theater_count=1,
+        showtime_count=4,
+        buyable_showtime_count=0,
+        buyable_theater_count=0,
+        citywalk_present=True,
+        citywalk_showtime_count=4,
+        buyable_citywalk_showtime_count=0,
     )
 
 
@@ -146,6 +166,29 @@ class TestTransitionBadToGood:
         assert result.state.consecutive_errors == 0
         assert result.state.last_error_message is None
         assert result.state.consecutive_successes == 1
+
+    def test_not_on_sale_to_disclosed_does_not_fire(self) -> None:
+        prev = TargetState(
+            target_name="odyssey",
+            last_release_schema=ReleaseSchema.NOT_ON_SALE,
+            current_state=WatcherState.WATCHING,
+        )
+        result = transition(prev, _showtimes_disclosed(), now=NOW)
+        assert Event.RELEASE_TRANSITION_BAD_TO_GOOD not in result.events
+        assert result.state.current_state == WatcherState.WATCHING
+        assert result.state.last_release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+        assert result.state.last_showtime_count == 4
+        assert result.state.last_buyable_showtime_count == 0
+
+    def test_disclosed_to_partial_fires_event(self) -> None:
+        prev = TargetState(
+            target_name="odyssey",
+            last_release_schema=ReleaseSchema.SHOWTIMES_DISCLOSED,
+            current_state=WatcherState.WATCHING,
+        )
+        result = transition(prev, _partial_release(), now=NOW)
+        assert Event.RELEASE_TRANSITION_BAD_TO_GOOD in result.events
+        assert result.state.current_state == WatcherState.ALERTED
 
     def test_counters_increment_monotonically(self) -> None:
         prev = TargetState(

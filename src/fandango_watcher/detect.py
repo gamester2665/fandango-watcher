@@ -26,6 +26,7 @@ from .models import (
     PartialReleasePageData,
     ReleaseSchema,
     Showtime,
+    ShowtimesDisclosedPageData,
     TheaterListing,
 )
 
@@ -207,6 +208,8 @@ def _pick_release_schema(
     *,
     theater_count: int,
     showtime_count: int,
+    buyable_theater_count: int,
+    buyable_showtime_count: int,
 ) -> ReleaseSchema:
     """Positive-evidence-only schema selector.
 
@@ -216,17 +219,42 @@ def _pick_release_schema(
 
     Theater DOM nodes without any parsed showtime rows (format-filtered or
     slow-render pages) must not become ``partial_release`` — that schema
-    requires at least one showtime. Treat ``showtime_count == 0`` as
+    requires at least one buyable showtime. Treat ``showtime_count == 0`` as
     ``not_on_sale`` even when ``theater_count > 0``.
+
+    Visible but non-buyable showtimes (disclosure day / "Coming soon") map to
+    ``showtimes_disclosed`` so alerts and purchase do not treat them as live.
     """
     if showtime_count == 0:
         return ReleaseSchema.NOT_ON_SALE
+    if buyable_showtime_count == 0:
+        return ReleaseSchema.SHOWTIMES_DISCLOSED
     if (
-        theater_count >= FULL_RELEASE_MIN_THEATERS
-        or showtime_count >= FULL_RELEASE_MIN_SHOWTIMES
+        buyable_theater_count >= FULL_RELEASE_MIN_THEATERS
+        or buyable_showtime_count >= FULL_RELEASE_MIN_SHOWTIMES
     ):
         return ReleaseSchema.FULL_RELEASE
     return ReleaseSchema.PARTIAL_RELEASE
+
+
+def _count_showtimes(
+    theaters: list[TheaterListing],
+) -> tuple[int, int, int]:
+    """Return total showtimes, buyable showtimes, and buyable theater count."""
+    showtime_count = 0
+    buyable_showtime_count = 0
+    buyable_theater_count = 0
+    for theater in theaters:
+        theater_buyable = 0
+        for fs in theater.format_sections:
+            for st in fs.showtimes:
+                showtime_count += 1
+                if st.is_buyable:
+                    buyable_showtime_count += 1
+                    theater_buyable += 1
+        if theater_buyable > 0:
+            buyable_theater_count += 1
+    return showtime_count, buyable_showtime_count, buyable_theater_count
 
 
 def classify(
@@ -239,29 +267,31 @@ def classify(
     ``citywalk_anchor`` is a substring matched (case-insensitive) against
     each theater name — e.g. ``"AMC Universal CityWalk"``.
     """
-    theater_count = len(snapshot.theaters)
-    showtime_count = sum(
-        len(fs.showtimes)
-        for theater in snapshot.theaters
-        for fs in theater.format_sections
+    theaters = _theater_listings(snapshot, citywalk_anchor=citywalk_anchor)
+    theater_count = len(theaters)
+    showtime_count, buyable_showtime_count, buyable_theater_count = _count_showtimes(
+        theaters
     )
 
     all_sections = [
-        fs for theater in snapshot.theaters for fs in theater.format_sections
+        fs for theater in theaters for fs in theater.format_sections
     ]
     formats_seen = _dedupe_preserve_order(
         normalize_format_label(fs.label) for fs in all_sections
     )
 
-    citywalk_theaters = [
-        theater
-        for theater in snapshot.theaters
-        if _is_citywalk(theater.name, citywalk_anchor)
-    ]
+    citywalk_theaters = [theater for theater in theaters if theater.is_citywalk]
     citywalk_showtime_count = sum(
         len(fs.showtimes)
         for theater in citywalk_theaters
         for fs in theater.format_sections
+    )
+    buyable_citywalk_showtime_count = sum(
+        1
+        for theater in citywalk_theaters
+        for fs in theater.format_sections
+        for st in fs.showtimes
+        if st.is_buyable
     )
     citywalk_formats_seen = _dedupe_preserve_order(
         normalize_format_label(fs.label)
@@ -282,11 +312,15 @@ def classify(
     release_schema = _pick_release_schema(
         theater_count=theater_count,
         showtime_count=showtime_count,
+        buyable_theater_count=buyable_theater_count,
+        buyable_showtime_count=buyable_showtime_count,
     )
 
     evidence: list[str] = [
         f"theater_count={theater_count}",
         f"showtime_count={showtime_count}",
+        f"buyable_showtime_count={buyable_showtime_count}",
+        f"buyable_theater_count={buyable_theater_count}",
     ]
     if snapshot.fanalert_present:
         evidence.append("fanalert_present")
@@ -301,16 +335,19 @@ def classify(
     # extractor didn't surface an explicit top-level link.
     ticket_url = snapshot.ticket_url
     if ticket_url is None:
-        for theater in snapshot.theaters:
+        for theater in theaters:
             for fs in theater.format_sections:
                 for s in fs.showtimes:
-                    if s.ticket_url:
+                    if s.ticket_url and s.is_buyable:
                         ticket_url = s.ticket_url
                         break
                 if ticket_url:
                     break
             if ticket_url:
                 break
+
+    if release_schema is ReleaseSchema.SHOWTIMES_DISCLOSED:
+        ticket_url = None
 
     payload: dict[str, object] = {
         "release_schema": release_schema.value,
@@ -329,21 +366,20 @@ def classify(
         "schema_evidence": evidence,
         "theater_count": theater_count,
         "showtime_count": showtime_count,
+        "buyable_showtime_count": buyable_showtime_count,
+        "buyable_theater_count": buyable_theater_count,
         "formats_seen": formats_seen,
         "citywalk_present": citywalk_present,
         "citywalk_showtime_count": citywalk_showtime_count,
+        "buyable_citywalk_showtime_count": buyable_citywalk_showtime_count,
         "citywalk_formats_seen": citywalk_formats_seen,
-        "theaters": [t.model_dump() for t in _theater_listings(
-            snapshot, citywalk_anchor=citywalk_anchor
-        )],
+        "theaters": [t.model_dump() for t in theaters],
     }
 
-    # Dispatch to the correct concrete model. We don't go through
-    # ``validate_page_data`` because that adapter re-validates all three
-    # union members; picking the concrete class by release_schema is clearer
-    # and gives better error messages on field-mismatch bugs.
     if release_schema is ReleaseSchema.NOT_ON_SALE:
         return NotOnSalePageData.model_validate(payload)
+    if release_schema is ReleaseSchema.SHOWTIMES_DISCLOSED:
+        return ShowtimesDisclosedPageData.model_validate(payload)
     if release_schema is ReleaseSchema.PARTIAL_RELEASE:
         return PartialReleasePageData.model_validate(payload)
     return FullReleasePageData.model_validate(payload)

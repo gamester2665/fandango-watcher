@@ -88,6 +88,32 @@ def test_direct_api_adapter_returns_parsed_page_data_for_matching_buyable_record
     assert result.meta.unknown_formats == ["MYSTERY FORMAT"]
 
 
+def test_direct_api_adapter_returns_showtimes_disclosed_for_visible_non_buyable_matches() -> None:
+    cfg = _cfg()
+
+    class _DisclosedClient(_FakeClient):
+        def get_json(self, url: str) -> dict[str, Any]:
+            payload = _fixture("showtimes_citywalk_mixed.json")
+            for movie in payload["viewModel"]["movies"]:
+                if movie.get("title") == "Michael (2026)":
+                    for variant in movie.get("variants", []):
+                        for group in variant.get("amenityGroups", []):
+                            for showtime in group.get("showtimes", []):
+                                showtime["expired"] = True
+            return payload
+
+    result = detect_target_direct_api(
+        cfg.targets[0],
+        cfg,
+        client=_DisclosedClient(),  # type: ignore[arg-type]
+    )
+
+    assert result.parsed.release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+    assert result.parsed.showtime_count >= 1
+    assert result.parsed.buyable_showtime_count == 0
+    assert result.parsed.citywalk_showtime_count >= 1
+
+
 def test_direct_api_adapter_returns_not_on_sale_when_movie_filter_misses() -> None:
     cfg = _cfg()
     cfg.movies[0].title = "Not In Fixture"

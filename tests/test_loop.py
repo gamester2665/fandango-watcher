@@ -29,6 +29,7 @@ import pytest
 
 from fandango_watcher.config import (
     BrowserConfig,
+    DirectApiConfig,
     NotifyConfig,
     PollConfig,
     PurchaseConfig,
@@ -104,8 +105,11 @@ def _parsed_partial() -> PartialReleasePageData:
         page_title="X",
         theater_count=1,
         showtime_count=2,
+        buyable_showtime_count=2,
+        buyable_theater_count=1,
         citywalk_present=True,
         citywalk_showtime_count=2,
+        buyable_citywalk_showtime_count=2,
         ticket_url="https://fandango.com/ticketing/abc",
     )
 
@@ -147,6 +151,7 @@ def _minimal_cfg(tmp_path: Path) -> WatcherConfig:
             user_data_dir=str(tmp_path / "profile"),
             viewport=ViewportConfig(),
         ),
+        direct_api={"enabled": False},
     )
 
 
@@ -155,6 +160,8 @@ def _settings() -> Settings:
         tz="America/Los_Angeles",
         watcher_mode="watch",
         watcher_config="config.yaml",
+        config_api_url="",
+        config_local_db_path="",
         twilio_account_sid="",
         twilio_auth_token="",
         twilio_from="",
@@ -222,7 +229,11 @@ class TestRunWatchHappyPath:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        cfg = _minimal_cfg(tmp_path)
+        cfg = _minimal_cfg(tmp_path).model_copy(
+            update={
+                "direct_api": DirectApiConfig(enabled=True, fallback_to_browser=True)
+            }
+        )
         settings = _settings()
         state_dir = tmp_path / "state"
 
@@ -258,7 +269,11 @@ class TestRunWatchHappyPath:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        cfg = _minimal_cfg(tmp_path)
+        cfg = _minimal_cfg(tmp_path).model_copy(
+            update={
+                "direct_api": DirectApiConfig(enabled=True, fallback_to_browser=True)
+            }
+        )
         settings = _settings()
         state_dir = tmp_path / "state"
         save_target_state(
@@ -623,9 +638,12 @@ class TestBuildNotification:
             page_title="The Odyssey",
             theater_count=1,
             showtime_count=1,
+            buyable_showtime_count=1,
+            buyable_theater_count=1,
             formats_seen=[FormatTag.IMAX_70MM],
             citywalk_present=True,
             citywalk_showtime_count=1,
+            buyable_citywalk_showtime_count=1,
             citywalk_formats_seen=[FormatTag.IMAX_70MM],
             theaters=[
                 TheaterListing(
@@ -723,9 +741,12 @@ def _parsed_citywalk_imax_buyable() -> PartialReleasePageData:
         page_title="Odyssey",
         theater_count=1,
         showtime_count=1,
+        buyable_showtime_count=1,
+        buyable_theater_count=1,
         formats_seen=[FormatTag.IMAX_70MM],
         citywalk_present=True,
         citywalk_showtime_count=1,
+        buyable_citywalk_showtime_count=1,
         citywalk_formats_seen=[FormatTag.IMAX_70MM],
         theaters=[
             TheaterListing(

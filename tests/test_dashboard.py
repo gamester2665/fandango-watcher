@@ -575,6 +575,77 @@ def test_watchlist_poster_shelf_status_outline() -> None:
     assert 'data-movie-jump="' in html_out
 
 
+def test_watchlist_controls_and_movie_schema_sort_attributes() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "not-sale",
+                "url": "https://example.com/a",
+                "state": {"current_state": "watching", "last_release_schema": "not_on_sale"},
+            },
+            {
+                "name": "disclosed",
+                "url": "https://example.com/b",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "showtimes_disclosed",
+                    "last_showtime_count": 4,
+                    "last_buyable_showtime_count": 0,
+                },
+            },
+            {
+                "name": "live",
+                "url": "https://example.com/c",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "partial_release",
+                    "last_showtime_count": 8,
+                    "last_buyable_showtime_count": 3,
+                },
+            },
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [
+            {
+                "key": "later-movie",
+                "title": "Later Movie",
+                "release_date": "2026-12-01",
+                "fandango_targets": ["not-sale"],
+            },
+            {
+                "key": "soon-movie",
+                "title": "Soon Movie",
+                "release_date": "2026-05-01",
+                "fandango_targets": ["disclosed"],
+            },
+            {
+                "key": "live-movie",
+                "title": "Live Movie",
+                "release_date": "2026-06-15",
+                "fandango_targets": ["live"],
+            },
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+
+    assert 'id="movie-search"' in html_out
+    assert 'id="movie-sort"' in html_out
+    assert 'data-movie-filter="showtimes_disclosed"' in html_out
+    assert 'data-movie-filter="live"' in html_out
+    assert 'data-movie-group' in html_out
+    assert 'data-movie-schema="showtimes_disclosed"' in html_out
+    assert 'data-movie-schema-rank="2"' in html_out
+    assert 'data-movie-release-sort="2026-05-01"' in html_out
+    assert 'movie-group--schema-showtimes_disclosed' in html_out
+    assert 'poster-shelf-tile--schema-partial_release' in html_out
+    assert "applyMovies()" in html_out
+    assert 'data-filter="disclosed"' in html_out
+    assert 'data-tier="disclosed"' in html_out
+
+
 def test_render_index_html_operator_controls_and_persistence_script() -> None:
     snap = {
         "healthz": {
@@ -676,6 +747,16 @@ def test_render_index_html_color_codes_release_schemas_with_operator_hints() -> 
                 "state": {"current_state": "watching", "last_release_schema": "partial_release"},
             },
             {
+                "name": "disclosed",
+                "url": "https://example.com/e",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "showtimes_disclosed",
+                    "last_showtime_count": 6,
+                    "last_buyable_showtime_count": 0,
+                },
+            },
+            {
                 "name": "full",
                 "url": "https://example.com/c",
                 "state": {"current_state": "watching", "last_release_schema": "full_release"},
@@ -700,6 +781,9 @@ def test_render_index_html_color_codes_release_schemas_with_operator_hints() -> 
     assert "schema-partial-release" in html_out
     assert "Schema B - partial release" in html_out
     assert "Early ticket signal" in html_out
+    assert "schema-showtimes-disclosed" in html_out
+    assert "Schema D - showtimes disclosed" in html_out
+    assert "none are buyable yet" in html_out
     assert "schema-full-release" in html_out
     assert "Schema C - full release" in html_out
     assert "Broad ticket signal" in html_out

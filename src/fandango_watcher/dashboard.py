@@ -567,6 +567,11 @@ def _target_filter_tier(
 ) -> str:
     """Filter bucket used by the dashboard's client-side target controls."""
     tier = _triage_tier(st, now=now, stale_threshold_sec=stale_threshold_sec)
+    if tier == 2:
+        schema = str(st.get("last_release_schema") or "").lower()
+        if "disclosed" in schema:
+            return "disclosed"
+        return "signal"
     return ("error", "stale", "signal", "routine")[min(max(tier, 0), 3)]
 
 
@@ -941,11 +946,17 @@ def _schema_badge_parts(value: Any) -> tuple[str, str, str]:
             "Schema A - not on sale",
             "Baseline watch state: Fandango has not exposed usable showtimes yet.",
         )
+    if schema == "showtimes_disclosed":
+        return (
+            "showtimes-disclosed",
+            "Schema D - showtimes disclosed",
+            "Showtimes are visible on Fandango but none are buyable yet; watch for the on-sale flip.",
+        )
     if schema == "partial_release":
         return (
             "partial-release",
             "Schema B - partial release",
-            "Early ticket signal: some showtimes are visible, so watch target formats and theaters closely.",
+            "Early ticket signal: buyable showtimes are live — verify target format and theater before purchase.",
         )
     if schema == "full_release":
         return (
@@ -958,6 +969,20 @@ def _schema_badge_parts(value: Any) -> tuple[str, str, str]:
         "Schema unknown",
         "No successful crawl schema yet; check freshness, errors, and latest artifacts.",
     )
+
+
+def _showtime_fact_entries(st: dict[str, Any]) -> list[tuple[str, str]]:
+    """Optional showtime / buyable counts for target cards."""
+    visible = st.get("last_showtime_count")
+    buyable = st.get("last_buyable_showtime_count")
+    if visible is None and buyable is None:
+        return []
+    visible_s = html.escape(str(visible if visible is not None else "—"))
+    buyable_s = html.escape(str(buyable if buyable is not None else "—"))
+    return [
+        (html.escape("Showtimes"), visible_s),
+        (html.escape("Buyable"), buyable_s),
+    ]
 
 
 def _schema_badge_html(
@@ -1023,6 +1048,87 @@ def _release_date_for_movie(
                 if release_date:
                     return release_date
     return None
+
+
+_SCHEMA_RANK: dict[str, int] = {
+    "unknown": 0,
+    "not_on_sale": 1,
+    "showtimes_disclosed": 2,
+    "partial_release": 3,
+    "full_release": 4,
+}
+
+
+def _schema_rank(value: Any) -> int:
+    return _SCHEMA_RANK.get(str(value or "").strip().lower(), 0)
+
+
+def _schema_filter_key(value: Any) -> str:
+    schema = str(value or "").strip().lower() or "unknown"
+    if schema in _SCHEMA_RANK:
+        return schema
+    return "unknown"
+
+
+def _best_schema_for_targets(
+    target_names: Iterable[str],
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+) -> str:
+    best = "unknown"
+    best_rank = -1
+    for name in target_names:
+        t = target_by_name.get(str(name))
+        if not isinstance(t, dict):
+            continue
+        st = t.get("state") if isinstance(t.get("state"), dict) else {}
+        schema = str(st.get("last_release_schema") or "unknown").lower()
+        rank = _schema_rank(schema)
+        if rank > best_rank:
+            best_rank = rank
+            best = schema
+    return best
+
+
+def _release_date_sort_value(
+    movie: dict[str, Any],
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+) -> str:
+    raw = _release_date_for_movie(movie, target_by_name=target_by_name)
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.date().isoformat()
+    except ValueError:
+        return raw.strip().lower()
+
+
+def _movie_showtime_totals(
+    target_names: Iterable[str],
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+) -> tuple[int | None, int | None]:
+    visible = 0
+    buyable = 0
+    saw = False
+    for name in target_names:
+        t = target_by_name.get(str(name))
+        if not isinstance(t, dict):
+            continue
+        st = t.get("state") if isinstance(t.get("state"), dict) else {}
+        if (
+            st.get("last_showtime_count") is None
+            and st.get("last_buyable_showtime_count") is None
+        ):
+            continue
+        saw = True
+        visible += int(st.get("last_showtime_count") or 0)
+        buyable += int(st.get("last_buyable_showtime_count") or 0)
+    if not saw:
+        return None, None
+    return visible, buyable
 
 
 _MediaVariant = Literal["poster", "thumb", "screenshot", "video", "lightbox"]
@@ -1138,8 +1244,10 @@ def _render_poster_shelf_tile(
     title: str,
     poster_url: str | None,
     status: str,
+    schema: str = "unknown",
 ) -> str:
     status_key = status if status in ("error", "stale", "signal", "routine") else "routine"
+    schema_key = _schema_filter_key(schema)
     status_labels = {
         "error": "Needs attention",
         "stale": "Stale crawl",
@@ -1155,11 +1263,18 @@ def _render_poster_shelf_tile(
     )
     label = html.escape(title)
     mid = html.escape(movie_id, quote=True)
-    cls = html.escape(f"poster-shelf-tile poster-shelf-tile--{status_key}", quote=True)
+    schema_esc = html.escape(schema_key, quote=True)
+    cls = html.escape(
+        f"poster-shelf-tile poster-shelf-tile--{status_key} poster-shelf-tile--schema-{schema_key}",
+        quote=True,
+    )
     hint = html.escape(f"{title} · {status_labels[status_key]}", quote=True)
+    schema_badge = _schema_badge_html(schema_key, compact=True)
     return (
-        f'<a class="{cls}" href="#movie-{mid}" data-movie-jump="{mid}" title="{hint}">'
-        f"{poster}<span class=\"poster-shelf-label\">{label}</span></a>"
+        f'<a class="{cls}" href="#movie-{mid}" data-movie-jump="{mid}" '
+        f'data-poster-schema="{schema_esc}" title="{hint}">'
+        f"{poster}<span class=\"poster-shelf-label\">{label}</span>"
+        f'<span class="poster-shelf-schema">{schema_badge}</span></a>'
     )
 
 
@@ -1172,6 +1287,9 @@ def _render_poster_shelf(tiles: list[str]) -> str:
         '<span class="poster-shelf-key poster-shelf-key--stale">Stale</span>'
         '<span class="poster-shelf-key poster-shelf-key--signal">Signal</span>'
         '<span class="poster-shelf-key poster-shelf-key--routine">Routine</span>'
+        '<span class="poster-shelf-key poster-shelf-key--schema-not-on-sale">Not on sale</span>'
+        '<span class="poster-shelf-key poster-shelf-key--schema-disclosed">Disclosed</span>'
+        '<span class="poster-shelf-key poster-shelf-key--schema-live">Live</span>'
         "</p>"
     )
     return (
@@ -1188,6 +1306,39 @@ def _render_shelf_view_toggle(*, visible: bool) -> str:
   <button type="button" class="shelf-view-btn is-active" id="movie-view-cards" aria-pressed="true">Cards</button>
   <button type="button" class="shelf-view-btn" id="movie-view-posters" aria-pressed="false">Posters</button>
 </div>"""
+
+
+def _render_watchlist_controls(*, movie_count: int) -> str:
+    if movie_count <= 0:
+        return ""
+    return f"""
+<div class="watchlist-controls" data-watchlist-controls>
+  <label class="target-search-label">
+    <span class="visually-hidden">Search movies</span>
+    <input type="search" id="movie-search" placeholder="Search movies, schema, distributor..." autocomplete="off" />
+  </label>
+  <div class="watchlist-controls-row">
+    <label class="watchlist-sort-label">
+      <span class="watchlist-sort-text">Sort</span>
+      <select id="movie-sort" aria-label="Sort movies">
+        <option value="release-asc">Release date (soonest)</option>
+        <option value="release-desc">Release date (latest)</option>
+        <option value="title-asc">Title (A–Z)</option>
+        <option value="title-desc">Title (Z–A)</option>
+        <option value="schema-desc">Schema (most live first)</option>
+        <option value="schema-asc">Schema (least live first)</option>
+      </select>
+    </label>
+    <div class="target-filter-row" role="group" aria-label="Movie schema filters">
+      <button type="button" class="target-filter-btn is-active" data-movie-filter="all">All</button>
+      <button type="button" class="target-filter-btn" data-movie-filter="not_on_sale">Not on sale</button>
+      <button type="button" class="target-filter-btn" data-movie-filter="showtimes_disclosed">Disclosed</button>
+      <button type="button" class="target-filter-btn" data-movie-filter="live">Live</button>
+    </div>
+  </div>
+  <p class="target-filter-count" id="movie-filter-count" aria-live="polite">{html.escape(str(movie_count))} movies shown</p>
+</div>
+"""
 
 
 def _render_card_media_preview(
@@ -1604,7 +1755,8 @@ def _render_target_controls(target_count: int) -> str:
             ("all", "All"),
             ("error", "Errors"),
             ("stale", "Stale"),
-            ("signal", "Signals"),
+            ("disclosed", "Disclosed"),
+            ("signal", "Live"),
             ("routine", "Routine"),
         )
     )
@@ -1839,7 +1991,7 @@ def _render_operator_status_strip(
 ) -> str:
     target_dicts = [x for x in targets if isinstance(x, dict)]
     threshold = _stale_threshold_seconds(fandango_poll)
-    counts = {"error": 0, "stale": 0, "signal": 0, "routine": 0}
+    counts = {"error": 0, "stale": 0, "disclosed": 0, "signal": 0, "routine": 0}
     for t in target_dicts:
         st = t.get("state") or {}
         if not isinstance(st, dict):
@@ -2214,6 +2366,122 @@ def _dashboard_ui_script() -> str:
     });
   });
   applyTweetFilters();
+  var movieGroups = Array.prototype.slice.call(document.querySelectorAll("[data-movie-group]"));
+  var movieSearch = document.getElementById("movie-search");
+  var movieSort = document.getElementById("movie-sort");
+  var movieFilterButtons = Array.prototype.slice.call(document.querySelectorAll("[data-movie-filter]"));
+  var movieFilterCount = document.getElementById("movie-filter-count");
+  var movieStack = document.querySelector(".movie-stack");
+  var posterTrack = document.querySelector(".poster-shelf-track");
+  function movieMatchesFilter(group, filter) {
+    if (!filter || filter === "all") return true;
+    var schema = (group.getAttribute("data-movie-schema") || "").toLowerCase();
+    if (filter === "live") {
+      return schema === "partial_release" || schema === "full_release";
+    }
+    return schema === filter;
+  }
+  function compareMovieGroups(a, b, sortKey) {
+    if (sortKey === "title-asc" || sortKey === "title-desc") {
+      var ta = (a.getAttribute("data-movie-title") || "").toLowerCase();
+      var tb = (b.getAttribute("data-movie-title") || "").toLowerCase();
+      var cmp = ta.localeCompare(tb);
+      return sortKey === "title-desc" ? -cmp : cmp;
+    }
+    if (sortKey === "schema-desc" || sortKey === "schema-asc") {
+      var ra = parseInt(a.getAttribute("data-movie-schema-rank") || "0", 10);
+      var rb = parseInt(b.getAttribute("data-movie-schema-rank") || "0", 10);
+      var sr = rb - ra;
+      if (sr !== 0) return sortKey === "schema-asc" ? -sr : sr;
+      return (a.getAttribute("data-movie-title") || "").localeCompare(b.getAttribute("data-movie-title") || "");
+    }
+    var da = a.getAttribute("data-movie-release-sort") || "9999-12-31";
+    var db = b.getAttribute("data-movie-release-sort") || "9999-12-31";
+    if (da !== db) {
+      return sortKey === "release-desc" ? (db < da ? -1 : 1) : (da < db ? -1 : 1);
+    }
+    return (a.getAttribute("data-movie-title") || "").localeCompare(b.getAttribute("data-movie-title") || "");
+  }
+  function setMovieFilterButtons(filter) {
+    movieFilterButtons.forEach(function (btn) {
+      var active = btn.getAttribute("data-movie-filter") === filter;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+  function applyMovies() {
+    if (!movieGroups.length) return;
+    var q = (movieSearch && movieSearch.value || "").toLowerCase().trim();
+    var filter = state.movieFilter || "all";
+    var sortKey = state.movieSort || "release-asc";
+    var filtered = movieGroups.filter(function (group) {
+      var hay = (group.getAttribute("data-movie-search") || "").toLowerCase();
+      return (!q || hay.indexOf(q) !== -1) && movieMatchesFilter(group, filter);
+    });
+    var sorted = filtered.slice().sort(function (a, b) {
+      return compareMovieGroups(a, b, sortKey);
+    });
+    movieGroups.forEach(function (group) {
+      group.classList.add("is-hidden");
+    });
+    sorted.forEach(function (group) {
+      group.classList.remove("is-hidden");
+    });
+    if (movieStack) {
+      sorted.forEach(function (group) {
+        movieStack.appendChild(group);
+      });
+    }
+    if (posterTrack) {
+      var tiles = Array.prototype.slice.call(posterTrack.querySelectorAll("[data-movie-jump]"));
+      var tileByJump = {};
+      tiles.forEach(function (tile) {
+        var jump = tile.getAttribute("data-movie-jump");
+        if (jump) tileByJump[jump] = tile;
+      });
+      sorted.forEach(function (group) {
+        var id = (group.id || "").replace(/^movie-/, "");
+        var tile = tileByJump[id];
+        if (tile) posterTrack.appendChild(tile);
+      });
+      tiles.forEach(function (tile) {
+        var jump = tile.getAttribute("data-movie-jump") || "";
+        var visible = sorted.some(function (group) {
+          return (group.id || "") === "movie-" + jump;
+        });
+        tile.classList.toggle("is-hidden", !visible);
+      });
+    }
+    setMovieFilterButtons(filter);
+    if (movieFilterCount) {
+      movieFilterCount.textContent = sorted.length + " of " + movieGroups.length + " movies shown";
+    }
+  }
+  if (movieSearch) {
+    movieSearch.value = state.movieQuery || "";
+    movieSearch.addEventListener("input", function () {
+      state.movieQuery = movieSearch.value;
+      save();
+      applyMovies();
+    });
+  }
+  if (movieSort) {
+    movieSort.value = state.movieSort || "release-asc";
+    movieSort.addEventListener("change", function () {
+      state.movieSort = movieSort.value || "release-asc";
+      save();
+      applyMovies();
+    });
+  }
+  movieFilterButtons.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      state.movieFilter = btn.getAttribute("data-movie-filter") || "all";
+      save();
+      applyMovies();
+      if (movieSearch) movieSearch.focus();
+    });
+  });
+  applyMovies();
   apply();
 })();
   </script>
@@ -2438,6 +2706,40 @@ def dashboard_css() -> str:
       box-shadow: var(--shadow-sm);
     }
     .watchlist-view { display: flex; flex-direction: column; gap: 0.72rem; }
+    .watchlist-controls {
+      display: grid;
+      gap: 0.65rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .watchlist-controls-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.65rem;
+    }
+    .watchlist-sort-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 650;
+    }
+    .watchlist-sort-label select {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface2);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.76rem;
+      padding: 0.36rem 0.62rem;
+    }
+    .movie-group.is-hidden { display: none; }
     html:not(.movie-view-posters) .poster-shelf { display: none; }
     html.movie-view-posters .movie-stack { display: none; }
     .poster-shelf-track {
@@ -2477,6 +2779,9 @@ def dashboard_css() -> str:
     .poster-shelf-key--stale { color: var(--warn); }
     .poster-shelf-key--signal { color: var(--ok); }
     .poster-shelf-key--routine { color: var(--muted); }
+    .poster-shelf-key--schema-not-on-sale { color: var(--muted); }
+    .poster-shelf-key--schema-disclosed { color: #b8860b; }
+    .poster-shelf-key--schema-live { color: var(--ok); }
     .poster-shelf-tile {
       flex: 0 0 92px;
       scroll-snap-align: start;
@@ -2500,6 +2805,18 @@ def dashboard_css() -> str:
     .poster-shelf-tile--stale .media-frame--poster { outline-color: var(--warn); }
     .poster-shelf-tile--signal .media-frame--poster { outline-color: var(--ok); }
     .poster-shelf-tile--routine .media-frame--poster { outline-color: rgba(142, 142, 147, 0.55); }
+    .poster-shelf-tile--schema-not-on-sale .media-frame--poster { outline-color: rgba(142, 142, 147, 0.55); }
+    .poster-shelf-tile--schema-showtimes_disclosed .media-frame--poster { outline-color: rgba(255, 204, 0, 0.85); }
+    .poster-shelf-tile--schema-partial_release .media-frame--poster,
+    .poster-shelf-tile--schema-full_release .media-frame--poster { outline-color: var(--ok); }
+    .poster-shelf-schema {
+      display: block;
+      text-align: center;
+      transform: scale(0.82);
+      transform-origin: top center;
+    }
+    .poster-shelf-schema .schema-label { display: none; }
+    .poster-shelf-tile.is-hidden { display: none; }
     .poster-shelf-label {
       display: block;
       color: var(--text);
@@ -2690,6 +3007,11 @@ def dashboard_css() -> str:
       background: rgba(142, 142, 147, 0.14);
       color: var(--muted);
       border-color: rgba(142, 142, 147, 0.2);
+    }
+    .schema-showtimes-disclosed {
+      background: rgba(255, 204, 0, 0.2);
+      color: #b8860b;
+      border-color: rgba(255, 204, 0, 0.38);
     }
     .schema-partial-release {
       background: rgba(255, 159, 10, 0.18);
@@ -3048,6 +3370,18 @@ def dashboard_css() -> str:
       object-fit: cover;
     }
     .movie-group-meta { min-width: 0; }
+    .movie-group-title-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .movie-group-title-row .schema-badge { font-size: 0.68rem; }
+    .movie-group--schema-not_on_sale { border-left: 3px solid rgba(142, 142, 147, 0.45); }
+    .movie-group--schema-showtimes_disclosed { border-left: 3px solid rgba(255, 204, 0, 0.85); }
+    .movie-group--schema-partial_release { border-left: 3px solid rgba(255, 159, 10, 0.75); }
+    .movie-group--schema-full_release { border-left: 3px solid rgba(52, 199, 89, 0.75); }
+    .movie-group-counts { color: var(--text); font-weight: 650; }
     .movie-group-title {
       margin: 0;
       color: var(--text);
@@ -4271,6 +4605,8 @@ def _render_target_card(
         pill_variants = ("pill-ok",)
     elif "partial" in schema_l or "full" in schema_l:
         pill_variants = ("pill-ok",)
+    elif "disclosed" in schema_l:
+        pill_variants = ("pill-warn",)
     state_pill = render_status_pill(cur, variants=pill_variants)
 
     route_lbl = html.escape(_target_route_label(raw_name))
@@ -4399,6 +4735,7 @@ def _render_target_card(
     facts = render_fact_grid(
         [
             (html.escape("Schema"), schema_fact),
+            *_showtime_fact_entries(st),
             (html.escape("Last OK"), f"{su}{rel_html}"),
             (html.escape("Ticks"), tticks),
             (html.escape("Direct API"), f"<code>{html.escape(api_status)}</code>"),
@@ -4419,6 +4756,7 @@ def _render_target_card(
     data_search = html.escape(search_blob, quote=True)
     state_attr = html.escape(cur_l or "unknown", quote=True)
     tier_attr = html.escape(tier, quote=True)
+    schema_attr = html.escape(schema_l or "unknown", quote=True)
     has_media_attr = "true" if (su_url or vu) else "false"
 
     media_preview_html = _render_card_media_preview(
@@ -4479,7 +4817,7 @@ def _render_target_card(
 """
 
     return f"""
-<section class="card" data-target-card data-target="{name_attr}" data-state="{state_attr}" data-tier="{tier_attr}" data-search="{data_search}" data-has-media="{has_media_attr}">
+<section class="card" data-target-card data-target="{name_attr}" data-state="{state_attr}" data-tier="{tier_attr}" data-schema="{schema_attr}" data-search="{data_search}" data-has-media="{has_media_attr}">
   <div class="card-topline">
     {route_pill}
     {state_pill}
@@ -4514,6 +4852,8 @@ def _triage_tier(st: dict[str, Any], *, now: datetime, stale_threshold_sec: int)
             return 1
     sch = str(st.get("last_release_schema") or "").lower()
     if "partial" in sch or "full" in sch:
+        return 2
+    if "disclosed" in sch:
         return 2
     if "alert" in cur_l or "purchas" in cur_l:
         return 2
@@ -5155,8 +5495,7 @@ def render_index_html(
     )
 
     assigned: set[str] = set()
-    crawl_blocks: list[str] = []
-    poster_tiles: list[str] = []
+    movie_groups: list[dict[str, Any]] = []
     for m in movies:
         if not isinstance(m, dict):
             continue
@@ -5164,18 +5503,10 @@ def render_index_html(
         if not isinstance(ft, list):
             continue
         mtitle_raw = str(m.get("title") or m.get("key") or "Movie")
-        mtitle = html.escape(mtitle_raw)
         mkey = str(m.get("key") or "movie")
         mkey_slug = _html_id_slug(mkey)
-        poster = _poster_url_for_movie(m, target_by_name=target_by_name)
-        poster_html = _poster_html(poster, mtitle_raw, css_class="movie-group-poster")
-        release_date = html.escape(
-            _fmt_release_date(_release_date_for_movie(m, target_by_name=target_by_name))
-        )
-        distributor = html.escape(_first_nonempty_str(m.get("distributor")) or "Distributor not set")
-        tweet_embeds = _render_movie_tweet_embeds(m, social_handles=sx_handles, now=now)
-        subcards: list[str] = []
         movie_target_names: list[str] = []
+        subcards: list[str] = []
         for tn in ft:
             tname = str(tn)
             if tname in target_by_name and tname not in assigned:
@@ -5188,35 +5519,116 @@ def render_index_html(
                 )
                 assigned.add(tname)
                 movie_target_names.append(tname)
-        if subcards:
-            movie_status = _summarize_targets_status(
-                movie_target_names,
-                target_by_name=target_by_name,
-                fandango_poll=fandango_poll,
-                now=now,
+        if not subcards:
+            continue
+        movie_schema = _best_schema_for_targets(
+            movie_target_names,
+            target_by_name=target_by_name,
+        )
+        release_sort = _release_date_sort_value(m, target_by_name=target_by_name)
+        visible_total, buyable_total = _movie_showtime_totals(
+            movie_target_names,
+            target_by_name=target_by_name,
+        )
+        movie_groups.append(
+            {
+                "movie": m,
+                "title_raw": mtitle_raw,
+                "key": mkey,
+                "key_slug": mkey_slug,
+                "subcards": subcards,
+                "target_names": movie_target_names,
+                "schema": movie_schema,
+                "schema_rank": _schema_rank(movie_schema),
+                "release_sort": release_sort,
+                "title_sort": mtitle_raw.lower(),
+                "visible_total": visible_total,
+                "buyable_total": buyable_total,
+            }
+        )
+
+    movie_groups.sort(
+        key=lambda row: (
+            row["release_sort"] or "9999-12-31",
+            row["title_sort"],
+        )
+    )
+
+    crawl_blocks: list[str] = []
+    poster_tiles: list[str] = []
+    for group in movie_groups:
+        m = group["movie"]
+        mtitle_raw = group["title_raw"]
+        mtitle = html.escape(mtitle_raw)
+        mkey_slug = group["key_slug"]
+        movie_schema = group["schema"]
+        poster = _poster_url_for_movie(m, target_by_name=target_by_name)
+        poster_html = _poster_html(poster, mtitle_raw, css_class="movie-group-poster")
+        release_date = html.escape(
+            _fmt_release_date(_release_date_for_movie(m, target_by_name=target_by_name))
+        )
+        distributor = html.escape(_first_nonempty_str(m.get("distributor")) or "Distributor not set")
+        tweet_embeds = _render_movie_tweet_embeds(m, social_handles=sx_handles, now=now)
+        movie_status = _summarize_targets_status(
+            group["target_names"],
+            target_by_name=target_by_name,
+            fandango_poll=fandango_poll,
+            now=now,
+        )
+        schema_badge = _schema_badge_html(movie_schema, compact=True)
+        counts_bits: list[str] = []
+        if group["visible_total"] is not None:
+            counts_bits.append(f"{group['visible_total']} showtime(s)")
+        if group["buyable_total"] is not None:
+            counts_bits.append(f"{group['buyable_total']} buyable")
+        counts_line = html.escape(" · ".join(counts_bits)) if counts_bits else ""
+        counts_html = (
+            f'<span class="movie-group-counts">{counts_line}</span> · '
+            if counts_line
+            else ""
+        )
+        poster_tiles.append(
+            _render_poster_shelf_tile(
+                movie_id=mkey_slug,
+                title=mtitle_raw,
+                poster_url=poster,
+                status=movie_status,
+                schema=movie_schema,
             )
-            poster_tiles.append(
-                _render_poster_shelf_tile(
-                    movie_id=mkey_slug,
-                    title=mtitle_raw,
-                    poster_url=poster,
-                    status=movie_status,
-                )
+        )
+        showing_label = html.escape(f"Showings for {mtitle_raw}")
+        schema_key = _schema_filter_key(movie_schema)
+        search_blob = " ".join(
+            str(x)
+            for x in (
+                mtitle_raw,
+                group["key"],
+                movie_schema,
+                distributor,
+                release_date,
+                counts_line,
             )
-            showing_label = html.escape(f"Showings for {mtitle_raw}")
-            crawl_blocks.append(
-                f'<section class="movie-group" id="movie-{html.escape(mkey_slug, quote=True)}">'
-                '<div class="movie-group-head">'
-                f"{poster_html}"
-                '<div class="movie-group-meta">'
-                f'<h3 class="movie-group-title">{mtitle}</h3>'
-                f'<p class="movie-group-eyebrow"><span class="movie-release-date">{release_date}</span>'
-                f" · {distributor} · {len(subcards)} showing(s)</p>"
-                "</div></div>"
-                f'<div class="showings-rail" aria-label="{showing_label}">{"".join(subcards)}</div>'
-                f"{tweet_embeds}"
-                "</section>"
-            )
+        )
+        crawl_blocks.append(
+            f'<section class="movie-group movie-group--schema-{html.escape(schema_key, quote=True)}" '
+            f'id="movie-{html.escape(mkey_slug, quote=True)}" data-movie-group '
+            f'data-movie-title="{html.escape(mtitle_raw, quote=True)}" '
+            f'data-movie-schema="{html.escape(schema_key, quote=True)}" '
+            f'data-movie-schema-rank="{group["schema_rank"]}" '
+            f'data-movie-release-sort="{html.escape(group["release_sort"], quote=True)}" '
+            f'data-movie-search="{html.escape(search_blob, quote=True)}">'
+            '<div class="movie-group-head">'
+            f"{poster_html}"
+            '<div class="movie-group-meta">'
+            f'<div class="movie-group-title-row"><h3 class="movie-group-title">{mtitle}</h3>'
+            f'{schema_badge}</div>'
+            f'<p class="movie-group-eyebrow"><span class="movie-release-date">{release_date}</span>'
+            f" · {distributor} · {counts_html}{len(group['subcards'])} showing(s)</p>"
+            "</div></div>"
+            f'<div class="showings-rail" aria-label="{showing_label}">{"".join(group["subcards"])}</div>'
+            f"{tweet_embeds}"
+            "</section>"
+        )
 
     rest: list[dict[str, Any]] = []
     for t in targets:
@@ -5274,9 +5686,12 @@ def render_index_html(
     crawl_body_inner = "\n".join(crawl_blocks)
     poster_shelf = _render_poster_shelf(poster_tiles)
     shelf_view_toggle = _render_shelf_view_toggle(visible=bool(poster_tiles))
+    watchlist_controls = _render_watchlist_controls(movie_count=len(movie_groups))
     if targets:
         crawl_body = (
             '<div class="watchlist-view" data-watchlist-view>'
+            f"{watchlist_controls}"
+            f"{shelf_view_toggle}"
             f"{poster_shelf}"
             f'<div class="movie-stack" aria-label="Movie watchlist">{crawl_body_inner}</div>'
             "</div>"

@@ -29,6 +29,7 @@ from .models import (
     PartialReleasePageData,
     ReleaseSchema,
     Showtime,
+    ShowtimesDisclosedPageData,
     TheaterListing,
 )
 
@@ -98,8 +99,9 @@ def _record_matches_target(
     movie_id: int | None,
     movie_title: str | None,
     wanted_formats: set[str],
+    require_buyable: bool = True,
 ) -> bool:
-    if not record.is_buyable:
+    if require_buyable and not record.is_buyable:
         return False
     if movie_id is not None and record.movie_id != movie_id:
         return False
@@ -154,19 +156,21 @@ def _parsed_from_matches(
     target: TargetConfig,
     cfg: WatcherConfig,
     matches: list[FandangoShowtimeRecord],
+    visible_matches: list[FandangoShowtimeRecord],
     meta: DirectApiDetectionMeta,
 ) -> ParsedPageData:
     movie = cfg.movie_for_target(target.name)
+    display_matches = matches if matches else visible_matches
     movie_title = (
-        matches[0].movie_title
-        if matches and matches[0].movie_title
+        display_matches[0].movie_title
+        if display_matches and display_matches[0].movie_title
         else movie.title if movie is not None else target.direct_api_movie_title
     )
     format_filters = [
         FormatFilter(label=fmt, normalized_format=FormatTag.OTHER)
         for fmt in meta.formats_seen
     ]
-    if not matches:
+    if not visible_matches:
         return NotOnSalePageData(
             url=target.url,
             page_title=movie_title or target.name,
@@ -175,16 +179,65 @@ def _parsed_from_matches(
             format_filters_present=format_filters,
             schema_evidence=[
                 "direct_api",
-                "direct_api_no_matching_buyable_showtimes",
+                "direct_api_no_matching_showtimes",
                 f"direct_api_dates={len(meta.inspected_dates)}",
             ],
             theater_count=0,
             showtime_count=0,
+            buyable_showtime_count=0,
+            buyable_theater_count=0,
             formats_seen=[],
             citywalk_present=False,
             citywalk_showtime_count=0,
+            buyable_citywalk_showtime_count=0,
             citywalk_formats_seen=[],
         )
+
+    if not matches:
+        by_format: dict[str, list[FandangoShowtimeRecord]] = {}
+        for record in visible_matches:
+            key = record.format_names[0] if record.format_names else "STANDARD"
+            by_format.setdefault(key, []).append(record)
+        sections = [
+            _section_for_format(format_name, records)
+            for format_name, records in by_format.items()
+        ]
+        formats_seen = _dedupe(section.normalized_format for section in sections)
+        payload: dict[str, Any] = {
+            "release_schema": ReleaseSchema.SHOWTIMES_DISCLOSED.value,
+            "url": target.url,
+            "page_title": movie_title or target.name,
+            "movie_title": movie_title,
+            "poster_url": movie.poster_url if movie is not None else None,
+            "format_filters_present": [
+                ff.model_dump(mode="json") for ff in format_filters
+            ],
+            "ticket_url": None,
+            "schema_evidence": [
+                "direct_api",
+                "direct_api_showtimes_disclosed",
+                f"direct_api_dates={len(meta.inspected_dates)}",
+                f"direct_api_visible_matches={len(visible_matches)}",
+                *[f"direct_api_format={fmt}" for fmt in by_format],
+            ],
+            "theater_count": 1,
+            "showtime_count": len(visible_matches),
+            "buyable_showtime_count": 0,
+            "buyable_theater_count": 0,
+            "formats_seen": formats_seen,
+            "citywalk_present": True,
+            "citywalk_showtime_count": len(visible_matches),
+            "buyable_citywalk_showtime_count": 0,
+            "citywalk_formats_seen": formats_seen,
+            "theaters": [
+                TheaterListing(
+                    name=cfg.theater.display_name,
+                    is_citywalk=True,
+                    format_sections=sections,
+                ).model_dump(mode="json")
+            ],
+        }
+        return ShowtimesDisclosedPageData.model_validate(payload)
 
     by_format: dict[str, list[FandangoShowtimeRecord]] = {}
     for record in matches:
@@ -201,7 +254,7 @@ def _parsed_from_matches(
         if len(matches) >= 20
         else ReleaseSchema.PARTIAL_RELEASE
     )
-    payload: dict[str, Any] = {
+    payload = {
         "release_schema": release_schema.value,
         "url": target.url,
         "page_title": movie_title or target.name,
@@ -216,16 +269,19 @@ def _parsed_from_matches(
             f"direct_api_dates={len(meta.inspected_dates)}",
             f"direct_api_matches={len(matches)}",
             *[f"direct_api_format={fmt}" for fmt in by_format],
-                *[
-                    f"direct_api_unknown_format={fmt}"
-                    for fmt in meta.unknown_formats
-                ],
+            *[
+                f"direct_api_unknown_format={fmt}"
+                for fmt in meta.unknown_formats
+            ],
         ],
         "theater_count": 1,
-        "showtime_count": len(matches),
+        "showtime_count": len(visible_matches),
+        "buyable_showtime_count": len(matches),
+        "buyable_theater_count": 1,
         "formats_seen": formats_seen,
         "citywalk_present": True,
-        "citywalk_showtime_count": len(matches),
+        "citywalk_showtime_count": len(visible_matches),
+        "buyable_citywalk_showtime_count": len(matches),
         "citywalk_formats_seen": formats_seen,
         "theaters": [
             TheaterListing(
@@ -262,6 +318,7 @@ def detect_target_direct_api(
         movie_id, movie_title = _movie_matchers(target, cfg)
         wanted_formats = _wanted_formats(target, cfg)
         matches: list[FandangoShowtimeRecord] = []
+        visible_matches: list[FandangoShowtimeRecord] = []
         all_records: list[FandangoShowtimeRecord] = []
 
         for showtime_date in scan_dates:
@@ -278,7 +335,7 @@ def detect_target_direct_api(
                 requested_date=showtime_date,
             )
             all_records.extend(records)
-            date_matches = [
+            date_visible = [
                 record
                 for record in records
                 if _record_matches_target(
@@ -286,8 +343,15 @@ def detect_target_direct_api(
                     movie_id=movie_id,
                     movie_title=movie_title,
                     wanted_formats=wanted_formats,
+                    require_buyable=False,
                 )
             ]
+            date_matches = [
+                record
+                for record in date_visible
+                if record.is_buyable
+            ]
+            visible_matches.extend(date_visible)
             matches.extend(date_matches)
             if date_matches and cfg.direct_api.stop_on_first_match:
                 break
@@ -308,6 +372,7 @@ def detect_target_direct_api(
             target=target,
             cfg=cfg,
             matches=matches,
+            visible_matches=visible_matches,
             meta=meta,
         )
         return DirectApiDetectionResult(parsed=parsed, meta=meta)

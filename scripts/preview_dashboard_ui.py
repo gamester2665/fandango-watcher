@@ -14,6 +14,7 @@ from fandango_watcher.dashboard import render_index_html  # noqa: E402
 
 POSTER = "https://picsum.photos/seed/alpha-movie/240/360"
 POSTER_BETA = "https://picsum.photos/seed/beta-movie/240/360"
+POSTER_GAMMA = "https://picsum.photos/seed/gamma-movie/240/360"
 SHOT = "https://picsum.photos/seed/crawl-alpha/960/540"
 
 RICH_SNAP = {
@@ -60,6 +61,19 @@ RICH_SNAP = {
             },
             "latest_screenshot_url": SHOT,
         },
+        {
+            "name": "gamma-standard",
+            "url": "https://www.fandango.com/gamma-movie",
+            "state": {
+                "current_state": "watching",
+                "last_release_schema": "showtimes_disclosed",
+                "last_showtime_count": 12,
+                "last_buyable_showtime_count": 0,
+                "total_ticks": 22,
+                "last_success_at": "2026-05-20T15:45:00Z",
+            },
+            "latest_screenshot_url": SHOT,
+        },
     ],
     "social_x": {
         "handles": {
@@ -96,6 +110,15 @@ RICH_SNAP = {
             "release_date": "2026-08-01",
             "poster_url": POSTER_BETA,
             "fandango_targets": ["beta-imax-70mm"],
+            "x_handles": [],
+        },
+        {
+            "key": "gamma-movie",
+            "title": "Gamma Movie",
+            "distributor": "Gamma Pictures",
+            "release_date": "2026-06-01",
+            "poster_url": POSTER_GAMMA,
+            "fandango_targets": ["gamma-standard"],
             "x_handles": [],
         },
     ],
