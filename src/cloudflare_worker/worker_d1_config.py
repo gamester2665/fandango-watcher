@@ -32,6 +32,19 @@ def _db_int_nullable(value: Any) -> int:
     return int(value)
 
 
+def _as_dict(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    to_py = getattr(row, "to_py", None)
+    if callable(to_py):
+        data = to_py()
+        if isinstance(data, dict):
+            return data
+    if isinstance(row, dict):
+        return row
+    return dict(row)
+
+
 class ConfigConflictError(Exception):
     """Raised when an optimistic revision check fails."""
 
@@ -231,7 +244,7 @@ class D1WatchlistProvider:
         ).first()
         if not row:
             return 0
-        return int(row["value"])
+        return int(_as_dict(row)["value"])
 
     async def _assert_revision(self, expected_revision: int | None) -> None:
         if expected_revision is None:
@@ -246,7 +259,7 @@ class D1WatchlistProvider:
         row = await self.db.prepare(
             "SELECT value FROM config_meta WHERE key = 'revision'"
         ).first()
-        rev = int(row["value"]) + 1 if row else 1
+        rev = int(_as_dict(row)["value"]) + 1 if row else 1
         await self.db.prepare(
             "INSERT INTO config_meta (key, value, updated_at) VALUES ('revision', ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
@@ -258,14 +271,14 @@ class D1WatchlistProvider:
             "SELECT * FROM targets ORDER BY sort_order ASC, name ASC"
         ).all()
         rows = result.results if hasattr(result, "results") else result
-        return [_target_row(dict(row)) for row in rows]
+        return [_target_row(_as_dict(row)) for row in rows]
 
     async def _load_movies(self) -> list[dict[str, Any]]:
         result = await self.db.prepare(
             "SELECT * FROM movies ORDER BY sort_order ASC, key ASC"
         ).all()
         rows = result.results if hasattr(result, "results") else result
-        return [_movie_row(dict(row)) for row in rows]
+        return [_movie_row(_as_dict(row)) for row in rows]
 
     async def get_watchlist(self) -> dict[str, Any]:
         return {
@@ -396,7 +409,7 @@ class D1WatchlistProvider:
             ).run()
 
         movie_count = await self.db.prepare("SELECT COUNT(*) AS n FROM movies").first()
-        movie_row["sort_order"] = int(movie_count["n"]) if movie_count else 0
+        movie_row["sort_order"] = int(_as_dict(movie_count).get("n") or 0)
         await self._insert_movie(movie_row)
 
         revision = await self._bump_revision()
@@ -410,11 +423,11 @@ class D1WatchlistProvider:
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
         await self._assert_revision(expected_revision)
-        row = await self.db.prepare("SELECT * FROM movies WHERE key = ?").bind(key).first()
+        row = _as_dict(await self.db.prepare("SELECT * FROM movies WHERE key = ?").bind(key).first())
         if not row:
             raise ValueError(f"movie not found: {key!r}")
 
-        movie = _movie_row(dict(row))
+        movie = _movie_row(row)
         updates = _normalize_patch(patch)
         merged = {**movie, **updates}
         out_row = _movie_to_db(merged, sort_order=int(row.get("sort_order") or 0))
@@ -447,11 +460,11 @@ class D1WatchlistProvider:
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
         await self._assert_revision(expected_revision)
-        row = await self.db.prepare("SELECT * FROM movies WHERE key = ?").bind(key).first()
+        row = _as_dict(await self.db.prepare("SELECT * FROM movies WHERE key = ?").bind(key).first())
         if not row:
             raise ValueError(f"movie not found: {key!r}")
 
-        movie = _movie_row(dict(row))
+        movie = _movie_row(row)
         await self.db.prepare("DELETE FROM movies WHERE key = ?").bind(key).run()
         if delete_owned_targets:
             for target_name in movie["fandango_targets"]:
