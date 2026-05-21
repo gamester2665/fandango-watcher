@@ -1,5 +1,6 @@
 # Secrets & local overrides
 .env
+.env*.bak
 config.yaml
 vps/host.env
 
@@ -8,6 +9,7 @@ artifacts/
 state/
 browser-profile/
 backups/
+screenshots/
 *.log
 
 # Python
