@@ -427,7 +427,152 @@ def test_target_card_folded_diagnostics_when_content_present() -> None:
     html_out = render_index_html(snap)
     assert 'data-target="' in html_out
     assert 'class="card-expand"' in html_out
-    assert "Diagnostics &amp; media" in html_out
+    assert "Details" in html_out
+    assert "card--mini" in html_out
+
+
+def test_target_card_mini_shows_status_at_a_glance() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha-imax",
+                "url": "https://example.com/t",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "partial_release",
+                    "total_ticks": 12,
+                    "last_success_at": "2026-05-20T15:00:00Z",
+                },
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert "card-status-stats" in html_out
+    assert "card-status-row" in html_out
+    assert "card-quick-actions" in html_out
+    card_start = html_out.index('class="card card--mini"')
+    details_idx = html_out.index("Details", card_start)
+    facts_idx = html_out.find('class="card-facts"', card_start)
+    assert facts_idx == -1 or facts_idx > details_idx
+
+
+def test_target_card_shows_media_preview_in_details_for_mini_layout() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha-show",
+                "url": "https://example.com/t",
+                "state": {"current_state": "watching", "total_ticks": 2},
+                "latest_screenshot_url": "/artifacts/screenshots/alpha-1.png",
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert "card-media-preview" in html_out
+    assert "media-frame--screenshot" in html_out
+    assert "media-hit-target" in html_out
+    card_start = html_out.index('class="card card--mini"')
+    details_idx = html_out.index("Details", card_start)
+    media_idx = html_out.index("card-media-preview", card_start)
+    assert media_idx > details_idx
+    assert "card-quick-btn" in html_out
+
+
+def test_target_card_video_preview_has_play_badge() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha-show",
+                "url": "https://example.com/t",
+                "state": {"current_state": "watching", "total_ticks": 2},
+                "latest_video_url": "/artifacts/videos/alpha-1.webm",
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert "media-frame--video" in html_out
+    assert "media-play-badge" in html_out
+    assert 'data-artifact-kind="video"' in html_out
+
+
+def test_watchlist_shelf_section_head() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha",
+                "url": "https://example.com/t",
+                "state": {"current_state": "watching", "total_ticks": 2},
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [
+            {
+                "key": "alpha-movie",
+                "title": "Alpha Movie",
+                "fandango_targets": ["alpha"],
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert "section-head--shelf" in html_out
+    assert "shelf-title" in html_out
+    assert "shelf-meta" in html_out
+    assert "movie-stack" in html_out
+    assert "showings-rail" in html_out
+    assert "movie-view-cards" in html_out
+    assert "poster-shelf" in html_out
+    assert "poster-shelf-tile--" in html_out
+
+
+def test_watchlist_poster_shelf_status_outline() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha",
+                "url": "https://example.com/t",
+                "state": {"current_state": "error", "consecutive_errors": 1, "total_ticks": 2},
+            },
+            {
+                "name": "beta",
+                "url": "https://example.com/u",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "partial_release",
+                    "total_ticks": 4,
+                },
+            },
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [
+            {"key": "alpha-movie", "title": "Alpha Movie", "fandango_targets": ["alpha"]},
+            {"key": "beta-movie", "title": "Beta Movie", "fandango_targets": ["beta"]},
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert "poster-shelf-tile--error" in html_out
+    assert "poster-shelf-tile--signal" in html_out
+    assert 'data-movie-jump="' in html_out
 
 
 def test_render_index_html_operator_controls_and_persistence_script() -> None:
@@ -475,6 +620,7 @@ def test_render_index_html_operator_controls_and_persistence_script() -> None:
     assert 'data-artifact-kind="screenshot"' in html_out
     assert 'data-artifact-kind="video"' in html_out
     assert 'id="artifact-viewer"' in html_out
+    assert "media-frame--lightbox" in html_out
     assert "<bad>" not in html_out
     assert "&lt;bad&gt;" in html_out
 
@@ -604,7 +750,10 @@ def test_render_index_html_simple_watchlist_uses_movie_poster_and_hides_advanced
     }
     html_out = render_index_html(snap, refresh_seconds=0)
     assert "Watchlist" in html_out
-    assert "movie-carousel" in html_out
+    assert "movie-stack" in html_out
+    assert "showings-rail" in html_out
+    assert "movie-group-poster-stack" in html_out
+    assert "media-frame--poster" in html_out
     assert "movie-group-poster" in html_out
     assert "Jul 17, 2026" in html_out
     assert "Alpha Distribution" in html_out
@@ -616,6 +765,156 @@ def test_render_index_html_simple_watchlist_uses_movie_poster_and_hides_advanced
     assert "Advanced details" in html_out
     assert re.search(r'id="advanced"[^>]*>', html_out)
     assert re.search(r'id="advanced"[^>]*open', html_out) is None
+
+
+def test_movie_twitter_feed_shows_recent_tweets_and_filter_tabs() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha",
+                "url": "https://example.com/t",
+                "state": {"current_state": "watching", "total_ticks": 2},
+            }
+        ],
+        "social_x": {
+            "handles": {
+                "AlphaFilm": {
+                    "handle": "AlphaFilm",
+                    "user_id": "42",
+                    "last_seen_tweet_id": "125",
+                    "last_seen_tweet_text": "Alpha tickets are on sale now!",
+                    "last_seen_tweet_created_at": "2026-01-02T00:00:00Z",
+                    "last_polled_at": "2026-01-02T00:05:00Z",
+                    "last_seen_ticket_analysis": {
+                        "announces_tickets": True,
+                        "status": "available",
+                        "confidence": "high",
+                    },
+                    "recent_tweets": [
+                        {
+                            "tweet_id": "125",
+                            "text": "Alpha tickets are on sale now!",
+                            "created_at": "2026-01-02T00:00:00Z",
+                            "ticket_analysis": {
+                                "announces_tickets": True,
+                                "status": "available",
+                            },
+                        },
+                        {
+                            "tweet_id": "124",
+                            "text": "New poster reveal for Alpha Movie.",
+                            "created_at": "2026-01-01T12:00:00Z",
+                            "ticket_analysis": {
+                                "announces_tickets": False,
+                                "status": "not_announcement",
+                            },
+                        },
+                    ],
+                },
+                "StudioFilm": {
+                    "handle": "StudioFilm",
+                    "user_id": "43",
+                    "last_seen_tweet_id": "200",
+                    "last_seen_tweet_text": "Alpha tickets drop this Friday.",
+                    "last_seen_tweet_created_at": "2026-01-01T18:00:00Z",
+                    "last_polled_at": "2026-01-02T00:05:00Z",
+                    "last_seen_ticket_analysis": {
+                        "announces_tickets": True,
+                        "status": "soon",
+                        "confidence": "medium",
+                    },
+                    "recent_tweets": [
+                        {
+                            "tweet_id": "200",
+                            "text": "Alpha tickets drop this Friday.",
+                            "created_at": "2026-01-01T18:00:00Z",
+                            "ticket_analysis": {
+                                "announces_tickets": True,
+                                "status": "soon",
+                            },
+                        }
+                    ],
+                },
+            }
+        },
+        "release_intel": {"status": "disabled", "reason": "test"},
+        "movies": [
+            {
+                "key": "alpha-movie",
+                "title": "Alpha Movie",
+                "fandango_targets": ["alpha"],
+                "x_handles": ["AlphaFilm", "StudioFilm"],
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert 'data-tweet-filter-panel' in html_out
+    assert 'data-tweet-filter="all"' in html_out
+    assert 'data-tweet-filter="ticket"' in html_out
+    assert "Ticket related" in html_out
+    assert "Alpha tickets are on sale now!" in html_out
+    assert "New poster reveal for Alpha Movie." in html_out
+    assert "Alpha tickets drop this Friday." in html_out
+    assert 'data-tweet-tier="ticket"' in html_out
+    assert html_out.count('class="tweet-embed tweet-timeline-item') >= 3
+
+
+def test_effective_recent_tweets_falls_back_to_legacy_last_seen() -> None:
+    from fandango_watcher.dashboard import _effective_recent_tweets
+
+    got = _effective_recent_tweets(
+        {
+            "last_seen_tweet_id": "99",
+            "last_seen_tweet_text": "Legacy tweet body",
+            "last_seen_tweet_created_at": "2026-01-01T00:00:00Z",
+            "last_seen_ticket_analysis": {"announces_tickets": False},
+        }
+    )
+    assert len(got) == 1
+    assert got[0]["tweet_id"] == "99"
+    assert got[0]["text"] == "Legacy tweet body"
+
+
+def test_movie_twitter_feed_shows_cached_text_when_handle_poll_errored() -> None:
+    from datetime import UTC, datetime
+
+    from fandango_watcher.dashboard import _render_movie_tweet_embeds
+
+    html_out = _render_movie_tweet_embeds(
+        {
+            "key": "alpha-movie",
+            "title": "Alpha Movie",
+            "x_handles": ["AlphaFilm"],
+        },
+        social_handles={
+            "AlphaFilm": {
+                "handle": "AlphaFilm",
+                "user_id": "42",
+                "last_seen_tweet_id": "125",
+                "last_seen_tweet_text": "Alpha tickets are on sale now!",
+                "last_polled_at": "2026-01-02T00:05:00Z",
+                "consecutive_errors": 1,
+                "last_error_message": "rate limit",
+                "recent_tweets": [
+                    {
+                        "tweet_id": "125",
+                        "text": "Alpha tickets are on sale now!",
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "ticket_analysis": {
+                            "announces_tickets": True,
+                            "status": "available",
+                        },
+                    }
+                ],
+            }
+        },
+        now=datetime(2026, 1, 2, 1, 0, tzinfo=UTC),
+    )
+    assert "Alpha tickets are on sale now!" in html_out
+    assert "Poll error" in html_out
+    assert "Last poll failed" not in html_out
 
 
 def test_render_index_html_uses_fandango_release_date_when_movie_date_missing() -> None:

@@ -121,6 +121,17 @@ _TICKETLESS_AVAILABLE_PHRASES = frozenset({"available now", "now available"})
 # -----------------------------------------------------------------------------
 
 
+class TweetSnapshot(BaseModel):
+    """One cached tweet body for dashboard history."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tweet_id: str
+    text: str
+    created_at: str | None = None
+    ticket_analysis: dict[str, Any] | None = None
+
+
 class HandleState(BaseModel):
     """Per-handle cache so we (a) only resolve user_id once and (b) only
     fetch tweets newer than the last one we already evaluated.
@@ -135,6 +146,8 @@ class HandleState(BaseModel):
     last_seen_tweet_text: str | None = None
     last_seen_tweet_created_at: str | None = None
     last_seen_ticket_analysis: dict[str, Any] | None = None
+    # Recent tweet history for dashboard feeds (newest first).
+    recent_tweets: list[TweetSnapshot] = Field(default_factory=list)
     last_polled_at: datetime | None = None
     last_error_at: datetime | None = None
     last_error_message: str | None = None
@@ -504,6 +517,39 @@ def _matched_ticket_terms(text_lower: str) -> list[str]:
     ]
 
 
+def _tweet_snapshot_from_api(tweet: dict[str, Any]) -> TweetSnapshot | None:
+    tid = str(tweet.get("id") or "")
+    if not tid:
+        return None
+    text = str(tweet.get("text") or "")
+    txt = text.strip()
+    return TweetSnapshot(
+        tweet_id=tid,
+        text=txt,
+        created_at=str(tweet.get("created_at")) if tweet.get("created_at") else None,
+        ticket_analysis=analyze_ticket_announcement(txt) if txt else None,
+    )
+
+
+def _merge_recent_tweets(
+    handle_state: HandleState,
+    tweets: list[dict[str, Any]],
+    *,
+    max_stored: int,
+) -> None:
+    """Merge fetched tweets into per-handle history, newest first."""
+    by_id: dict[str, TweetSnapshot] = {
+        snap.tweet_id: snap for snap in handle_state.recent_tweets
+    }
+    for tweet in tweets:
+        snap = _tweet_snapshot_from_api(tweet)
+        if snap is not None:
+            by_id[snap.tweet_id] = snap
+    sorted_ids = sorted(by_id.keys(), key=_id_sort_key, reverse=True)
+    cap = max(1, max_stored)
+    handle_state.recent_tweets = [by_id[tid] for tid in sorted_ids[:cap]]
+
+
 def _stamp_tweet_snapshot(
     handle_state: HandleState,
     *,
@@ -526,6 +572,7 @@ def _maybe_backfill_tweet_snapshot(
     x: XClient,
     *,
     norm_handle: str,
+    max_stored: int = 10,
 ) -> None:
     """Ensure dashboard has readable tweet text when a cursor id is known."""
     if str(handle_state.last_seen_tweet_text or "").strip():
@@ -551,6 +598,11 @@ def _maybe_backfill_tweet_snapshot(
             handle_state,
             text=str(one.get("text") or ""),
             created_at=one.get("created_at"),
+        )
+        _merge_recent_tweets(
+            handle_state,
+            [one],
+            max_stored=max_stored,
         )
 
 
@@ -672,6 +724,12 @@ def check_x_signals(
                 since_id=handle_state.last_seen_tweet_id,
                 max_results=cfg.max_results_per_handle,
             )
+            if tweets:
+                _merge_recent_tweets(
+                    handle_state,
+                    tweets,
+                    max_stored=cfg.max_results_per_handle,
+                )
 
             new_max_id = handle_state.last_seen_tweet_id
             for tweet in tweets:
@@ -736,6 +794,7 @@ def check_x_signals(
                 handle_state,
                 x,
                 norm_handle=norm_handle,
+                max_stored=cfg.max_results_per_handle,
             )
         except XApiError as e:
             result.handles_failed += 1
@@ -785,6 +844,14 @@ def check_x_signals(
     return result
 
 
+def _id_sort_key(tweet_id: str) -> tuple[int, str]:
+    """Sort key for snowflake tweet ids (newest first when reversed)."""
+    try:
+        return (int(tweet_id), tweet_id)
+    except ValueError:
+        return (0, tweet_id)
+
+
 def _id_gt(a: str, b: str) -> bool:
     """Compare X tweet ids as integers (they're snowflake ints in string form).
 
@@ -792,10 +859,7 @@ def _id_gt(a: str, b: str) -> bool:
     never happen with real API data but keeps us from crashing on a fixture
     typo.
     """
-    try:
-        return int(a) > int(b)
-    except ValueError:
-        return a > b
+    return _id_sort_key(a) > _id_sort_key(b)
 
 
 # -----------------------------------------------------------------------------
@@ -824,6 +888,7 @@ __all__ = [
     "HandleState",
     "PollResult",
     "SocialXState",
+    "TweetSnapshot",
     "XApiError",
     "XClient",
     "XSignalMatch",

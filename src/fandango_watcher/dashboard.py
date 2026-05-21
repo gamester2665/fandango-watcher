@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -960,7 +960,9 @@ def _schema_badge_parts(value: Any) -> tuple[str, str, str]:
     )
 
 
-def _schema_badge_html(value: Any, *, with_hint: bool = False) -> str:
+def _schema_badge_html(
+    value: Any, *, with_hint: bool = False, compact: bool = False
+) -> str:
     key, label, hint = _schema_badge_parts(value)
     raw = str(value or "unknown").strip() or "unknown"
     cls = html.escape(f"schema-badge schema-{key}", quote=True)
@@ -968,10 +970,11 @@ def _schema_badge_html(value: Any, *, with_hint: bool = False) -> str:
     hint_esc = html.escape(hint)
     raw_esc = html.escape(raw)
     hint_html = f'<span class="schema-hint">{hint_esc}</span>' if with_hint else ""
+    code_html = "" if compact else f"<code>{raw_esc}</code>"
     return (
         f'<span class="{cls}" title="{hint_esc}" aria-label="{label_esc}: {hint_esc}">'
         f'<span class="schema-label">{label_esc}</span>'
-        f'<code>{raw_esc}</code>'
+        f"{code_html}"
         f"</span>{hint_html}"
     )
 
@@ -1022,17 +1025,210 @@ def _release_date_for_movie(
     return None
 
 
-def _poster_html(poster_url: str | None, title: str, *, css_class: str) -> str:
-    if poster_url:
-        return (
-            f'<img class="{html.escape(css_class, quote=True)}" '
-            f'src="{html.escape(poster_url, quote=True)}" '
-            f'alt="Poster for {html.escape(title, quote=True)}" loading="lazy" />'
+_MediaVariant = Literal["poster", "thumb", "screenshot", "video", "lightbox"]
+
+
+def _media_frame_html(
+    *,
+    variant: _MediaVariant,
+    src: str | None = None,
+    alt: str,
+    title: str | None = None,
+    caption: str | None = None,
+    css_class: str = "",
+    interactive: bool = False,
+    artifact_kind: str | None = None,
+    artifact_title: str | None = None,
+    loading: str = "lazy",
+    video_controls: bool = False,
+    video_preload: str = "metadata",
+) -> str:
+    classes = [f"media-frame media-frame--{variant}"]
+    if interactive:
+        classes.append("is-clickable")
+    frame_cls = html.escape(" ".join(classes), quote=True)
+
+    cap_html = ""
+    if caption:
+        cap_html = f'<figcaption class="media-caption">{html.escape(caption)}</figcaption>'
+
+    inner = ""
+    if variant in ("poster", "thumb") and not src:
+        initial = (title or alt or "?").strip()[:1].upper() or "?"
+        fb_cls = html.escape(
+            " ".join(x for x in (css_class, "poster-fallback") if x).strip(),
+            quote=True,
         )
-    initial = (title.strip()[:1] or "?").upper()
+        inner = (
+            f'<div class="{fb_cls}" aria-label="No poster available">'
+            f"{html.escape(initial)}</div>"
+        )
+    elif src and variant == "video":
+        ctrl = " controls" if video_controls else ""
+        inner = (
+            f'<video{ctrl} preload="{html.escape(video_preload, quote=True)}" '
+            f'playsinline muted src="{html.escape(src, quote=True)}" '
+            f'title="{html.escape(alt, quote=True)}"></video>'
+        )
+    elif src:
+        img_cls = html.escape(css_class, quote=True) if css_class else ""
+        cls_attr = f' class="{img_cls}"' if img_cls else ""
+        inner = (
+            f"<img{cls_attr} src=\"{html.escape(src, quote=True)}\" "
+            f'alt="{html.escape(alt, quote=True)}" loading="{html.escape(loading, quote=True)}" />'
+        )
+    else:
+        inner = '<div class="poster-fallback" aria-label="No media available">?</div>'
+
+    badge_html = ""
+    if variant == "video" and interactive:
+        badge_html = '<span class="media-play-badge" aria-hidden="true"></span>'
+
+    btn_html = ""
+    if interactive and artifact_kind and (artifact_src := src):
+        btn_html = (
+            '<button type="button" class="artifact-open media-hit-target" '
+            f'data-artifact-kind="{html.escape(artifact_kind, quote=True)}" '
+            f'data-artifact-src="{html.escape(artifact_src, quote=True)}" '
+            f'data-artifact-title="{html.escape(artifact_title or alt, quote=True)}" '
+            f'aria-label="{html.escape(artifact_title or alt, quote=True)}"></button>'
+        )
+
+    if caption and variant in ("screenshot", "video") and interactive:
+        return f'<figure class="{frame_cls}">{inner}{badge_html}{cap_html}{btn_html}</figure>'
+    return f'<figure class="{frame_cls}">{cap_html}{inner}{badge_html}{btn_html}</figure>'
+
+
+def _poster_html(poster_url: str | None, title: str, *, css_class: str) -> str:
     return (
-        f'<div class="{html.escape(css_class + " poster-fallback", quote=True)}" '
-        f'aria-label="No poster available">{html.escape(initial)}</div>'
+        '<div class="movie-group-poster-stack">'
+        + _media_frame_html(
+            variant="poster",
+            src=poster_url,
+            alt=f"Poster for {title}",
+            title=title,
+            css_class=css_class,
+        )
+        + "</div>"
+    )
+
+
+def _summarize_targets_status(
+    target_names: Iterable[str],
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+    fandango_poll: dict[str, Any],
+    now: datetime,
+) -> str:
+    stale_thr = _stale_threshold_seconds(fandango_poll)
+    rank = 3
+    for name in target_names:
+        t = target_by_name.get(str(name))
+        if not isinstance(t, dict):
+            continue
+        st = t.get("state") if isinstance(t.get("state"), dict) else {}
+        tier = _triage_tier(st, now=now, stale_threshold_sec=stale_thr)
+        rank = min(rank, min(max(tier, 0), 3))
+    return ("error", "stale", "signal", "routine")[rank]
+
+
+def _render_poster_shelf_tile(
+    *,
+    movie_id: str,
+    title: str,
+    poster_url: str | None,
+    status: str,
+) -> str:
+    status_key = status if status in ("error", "stale", "signal", "routine") else "routine"
+    status_labels = {
+        "error": "Needs attention",
+        "stale": "Stale crawl",
+        "signal": "On-sale signal",
+        "routine": "Routine watch",
+    }
+    poster = _media_frame_html(
+        variant="poster",
+        src=poster_url,
+        alt=f"Poster for {title}",
+        title=title,
+        css_class="poster-shelf-poster",
+    )
+    label = html.escape(title)
+    mid = html.escape(movie_id, quote=True)
+    cls = html.escape(f"poster-shelf-tile poster-shelf-tile--{status_key}", quote=True)
+    hint = html.escape(f"{title} · {status_labels[status_key]}", quote=True)
+    return (
+        f'<a class="{cls}" href="#movie-{mid}" data-movie-jump="{mid}" title="{hint}">'
+        f"{poster}<span class=\"poster-shelf-label\">{label}</span></a>"
+    )
+
+
+def _render_poster_shelf(tiles: list[str]) -> str:
+    if not tiles:
+        return ""
+    legend = (
+        '<p class="poster-shelf-legend" aria-hidden="true">'
+        '<span class="poster-shelf-key poster-shelf-key--error">Attention</span>'
+        '<span class="poster-shelf-key poster-shelf-key--stale">Stale</span>'
+        '<span class="poster-shelf-key poster-shelf-key--signal">Signal</span>'
+        '<span class="poster-shelf-key poster-shelf-key--routine">Routine</span>'
+        "</p>"
+    )
+    return (
+        '<nav class="poster-shelf" aria-label="Movie poster overview">'
+        f"{legend}<div class=\"poster-shelf-track\">{''.join(tiles)}</div></nav>"
+    )
+
+
+def _render_shelf_view_toggle(*, visible: bool) -> str:
+    if not visible:
+        return ""
+    return """
+<div class="shelf-view-toggle" role="group" aria-label="Watchlist layout">
+  <button type="button" class="shelf-view-btn is-active" id="movie-view-cards" aria-pressed="true">Cards</button>
+  <button type="button" class="shelf-view-btn" id="movie-view-posters" aria-pressed="false">Posters</button>
+</div>"""
+
+
+def _render_card_media_preview(
+    *,
+    name: str,
+    name_attr: str,
+    screenshot_url: str | None,
+    video_url: str | None,
+) -> str:
+    tiles: list[str] = []
+    if screenshot_url:
+        tiles.append(
+            _media_frame_html(
+                variant="screenshot",
+                src=screenshot_url,
+                alt=f"screenshot {name}",
+                caption="Screenshot",
+                interactive=True,
+                artifact_kind="screenshot",
+                artifact_title=f"Screenshot for {name_attr}",
+            )
+        )
+    if video_url:
+        tiles.append(
+            _media_frame_html(
+                variant="video",
+                src=video_url,
+                alt=f"crawl video {name}",
+                caption="Video",
+                interactive=True,
+                artifact_kind="video",
+                artifact_title=f"Video for {name_attr}",
+            )
+        )
+    if not tiles:
+        return ""
+    return (
+        '<div class="card-media-preview media-shelf media-shelf--compact" '
+        'aria-label="Latest crawl media">'
+        + "".join(tiles)
+        + "</div>"
     )
 
 
@@ -1125,7 +1321,8 @@ def _render_tweet_timeline_card(
     tweet_url = f"https://x.com/{handle}/status/{tid}" if tid else profile_url
     card_classes = ["tweet-embed", "tweet-timeline-item"]
     filter_tier = "ticket" if _tweet_announces_tickets(tweet) else "all"
-    if handle_state != _SX_STATE_OK:
+    has_text = bool(text_raw.strip())
+    if not has_text:
         card_classes.append("tweet-empty-card")
 
     analysis = tweet.get("ticket_analysis")
@@ -1157,7 +1354,7 @@ def _render_tweet_timeline_card(
         )
     meta = " · ".join(meta_bits) or "cached tweet"
     body = _format_sx_tweet_body_html(
-        text_raw if handle_state == _SX_STATE_OK else None,
+        text_raw if has_text else None,
         empty_message=_sx_empty_message(handle_state),
     ).replace('class="sx-tweet-body"', 'class="tweet-body"', 1)
     card_cls = html.escape(" ".join(card_classes), quote=True)
@@ -1661,7 +1858,7 @@ def _render_operator_status_strip(
   <a href="#crawl" data-filter-shortcut="signal"><strong>Signals</strong><span>{html.escape(str(counts['signal']))} targets</span></a>
   <a href="{purchase_href}"><strong>Purchase</strong><span><code>{html.escape(purchase_label)}</code></span></a>
   <a href="#x"><strong>X</strong><span>{sx_line}</span></a>
-  <span><strong>Last tick</strong><span>{html.escape(last_tick_pt or "—")}</span></span>
+  <span title="{html.escape(last_tick_pt or "—", quote=True)}"><strong>Last tick</strong><span>{html.escape(last_tick_pt or "—")}</span></span>
 </section>
 """
 
@@ -1748,6 +1945,43 @@ def _dashboard_ui_script() -> str:
       save();
     });
   }
+  var movieViewCards = document.getElementById("movie-view-cards");
+  var movieViewPosters = document.getElementById("movie-view-posters");
+  function setMovieView(mode) {
+    var posters = mode === "posters";
+    state.movieView = posters ? "posters" : "cards";
+    document.documentElement.classList.toggle("movie-view-posters", posters);
+    if (movieViewCards) {
+      movieViewCards.classList.toggle("is-active", !posters);
+      movieViewCards.setAttribute("aria-pressed", posters ? "false" : "true");
+    }
+    if (movieViewPosters) {
+      movieViewPosters.classList.toggle("is-active", posters);
+      movieViewPosters.setAttribute("aria-pressed", posters ? "true" : "false");
+    }
+    save();
+  }
+  if (movieViewCards) {
+    movieViewCards.addEventListener("click", function () { setMovieView("cards"); });
+  }
+  if (movieViewPosters) {
+    movieViewPosters.addEventListener("click", function () { setMovieView("posters"); });
+  }
+  if (state.movieView === "posters") {
+    setMovieView("posters");
+  }
+  Array.prototype.slice.call(document.querySelectorAll("[data-movie-jump]")).forEach(function (link) {
+    link.addEventListener("click", function (e) {
+      if (!document.documentElement.classList.contains("movie-view-posters")) return;
+      e.preventDefault();
+      var id = link.getAttribute("data-movie-jump");
+      setMovieView("cards");
+      var el = id ? document.getElementById("movie-" + id) : null;
+      if (el && el.scrollIntoView) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  });
   details.forEach(function (el) {
     var key = el.getAttribute("data-persist-key");
     if (!key) return;
@@ -1776,10 +2010,13 @@ def _dashboard_ui_script() -> str:
       card.className = "artifact-viewer-card";
       var close = document.createElement("button");
       close.type = "button";
-      close.className = "artifact-close";
-      close.textContent = "Close";
+      close.className = "artifact-close artifact-close-icon";
+      close.textContent = "\u00D7";
+      close.setAttribute("aria-label", "Close preview");
       var heading = document.createElement("h2");
       heading.textContent = title;
+      var frame = document.createElement("figure");
+      frame.className = "media-frame media-frame--lightbox";
       var media = document.createElement(kind === "video" ? "video" : "img");
       media.setAttribute("src", src);
       if (kind === "video") {
@@ -1788,6 +2025,7 @@ def _dashboard_ui_script() -> str:
       } else {
         media.setAttribute("alt", title);
       }
+      frame.appendChild(media);
       var linkP = document.createElement("p");
       var link = document.createElement("a");
       link.href = src;
@@ -1797,7 +2035,7 @@ def _dashboard_ui_script() -> str:
       linkP.appendChild(link);
       card.appendChild(close);
       card.appendChild(heading);
-      card.appendChild(media);
+      card.appendChild(frame);
       card.appendChild(linkP);
       viewer.appendChild(card);
       viewer.hidden = false;
@@ -1806,7 +2044,7 @@ def _dashboard_ui_script() -> str:
   });
   if (viewer) {
     viewer.addEventListener("click", function (event) {
-      if (event.target === viewer || (event.target && event.target.classList && event.target.classList.contains("artifact-close"))) {
+      if (event.target === viewer || (event.target && event.target.classList && (event.target.classList.contains("artifact-close") || event.target.classList.contains("artifact-close-icon")))) {
         closeViewer();
       }
     });
@@ -1822,6 +2060,25 @@ def _dashboard_ui_script() -> str:
   function setAddStatus(text) {
     if (addStatus) addStatus.textContent = text || "";
   }
+  function buildPosterFrame(movie) {
+    var fig = document.createElement("figure");
+    fig.className = "media-frame media-frame--thumb";
+    if (movie.poster_url) {
+      var img = document.createElement("img");
+      img.alt = movie.title || "Fandango movie poster";
+      img.src = movie.poster_url;
+      img.loading = "lazy";
+      fig.appendChild(img);
+    } else {
+      var fb = document.createElement("div");
+      fb.className = "poster-fallback";
+      fb.setAttribute("aria-label", "No poster available");
+      var t = (movie.title || "?").trim();
+      fb.textContent = t ? t.charAt(0).toUpperCase() : "?";
+      fig.appendChild(fb);
+    }
+    return fig;
+  }
   function renderAddResults(results) {
     if (!addResults) return;
     addResults.innerHTML = "";
@@ -1832,9 +2089,6 @@ def _dashboard_ui_script() -> str:
     results.slice(0, 8).forEach(function (movie) {
       var row = document.createElement("article");
       row.className = "movie-add-result";
-      var img = document.createElement("img");
-      img.alt = movie.title || "Fandango movie poster";
-      if (movie.poster_url) img.src = movie.poster_url;
       var body = document.createElement("div");
       var title = document.createElement("p");
       title.className = "movie-add-title";
@@ -1871,7 +2125,7 @@ def _dashboard_ui_script() -> str:
       });
       body.appendChild(title);
       body.appendChild(meta);
-      row.appendChild(img);
+      row.appendChild(buildPosterFrame(movie));
       row.appendChild(body);
       row.appendChild(action);
       addResults.appendChild(row);
@@ -1987,6 +2241,12 @@ def dashboard_css() -> str:
       --radius: 18px;
       --shadow: 0 18px 45px rgba(0, 0, 0, 0.08);
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 30px rgba(0, 0, 0, 0.05);
+      --media-radius: 16px;
+      --media-radius-sm: 12px;
+      --media-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+      --media-letterbox: #0a0a0c;
+      --shelf-bg: transparent;
+      --shelf-gap: 0.85rem;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -2007,6 +2267,9 @@ def dashboard_css() -> str:
         --bad: #ff453a;
         --shadow: 0 22px 60px rgba(0, 0, 0, 0.32);
         --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24), 0 16px 34px rgba(0, 0, 0, 0.22);
+        --media-letterbox: #000000;
+        --media-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+        --shelf-bg: #111114;
       }
     }
     * { box-sizing: border-box; }
@@ -2134,6 +2397,133 @@ def dashboard_css() -> str:
       text-transform: uppercase;
       letter-spacing: 0.11em;
     }
+    .section-head--shelf { padding-bottom: 0.15rem; }
+    .shelf-head-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin: 0 0 0.35rem;
+    }
+    .shelf-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+    }
+    .shelf-view-toggle {
+      display: inline-flex;
+      gap: 0.28rem;
+      padding: 0.18rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+    }
+    .shelf-view-btn {
+      margin: 0;
+      padding: 0.28rem 0.62rem;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .shelf-view-btn.is-active,
+    .shelf-view-btn[aria-pressed="true"] {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow-sm);
+    }
+    .watchlist-view { display: flex; flex-direction: column; gap: 0.72rem; }
+    html:not(.movie-view-posters) .poster-shelf { display: none; }
+    html.movie-view-posters .movie-stack { display: none; }
+    .poster-shelf-track {
+      display: flex;
+      gap: 0.72rem;
+      overflow-x: auto;
+      padding: 0.2rem 0.1rem 0.55rem;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+    .poster-shelf-track::-webkit-scrollbar { height: 5px; }
+    .poster-shelf-track::-webkit-scrollbar-thumb {
+      background: rgba(127, 127, 127, 0.35);
+      border-radius: 999px;
+    }
+    .poster-shelf-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem 0.65rem;
+      margin: 0 0 0.45rem;
+      font-size: 0.68rem;
+      color: var(--muted);
+    }
+    .poster-shelf-key {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.32rem;
+    }
+    .poster-shelf-key::before {
+      content: "";
+      width: 0.62rem;
+      height: 0.62rem;
+      border-radius: 999px;
+      border: 2px solid currentColor;
+    }
+    .poster-shelf-key--error { color: var(--bad); }
+    .poster-shelf-key--stale { color: var(--warn); }
+    .poster-shelf-key--signal { color: var(--ok); }
+    .poster-shelf-key--routine { color: var(--muted); }
+    .poster-shelf-tile {
+      flex: 0 0 92px;
+      scroll-snap-align: start;
+      display: flex;
+      flex-direction: column;
+      gap: 0.32rem;
+      min-width: 0;
+      text-decoration: none;
+      color: inherit;
+    }
+    .poster-shelf-tile .media-frame--poster {
+      width: 92px;
+      border-radius: 12px;
+      box-shadow: var(--media-shadow);
+      outline: 3px solid transparent;
+      outline-offset: 2px;
+      transition: outline-color 0.18s ease, transform 0.18s ease;
+    }
+    .poster-shelf-tile:hover .media-frame--poster { transform: translateY(-1px); }
+    .poster-shelf-tile--error .media-frame--poster { outline-color: var(--bad); }
+    .poster-shelf-tile--stale .media-frame--poster { outline-color: var(--warn); }
+    .poster-shelf-tile--signal .media-frame--poster { outline-color: var(--ok); }
+    .poster-shelf-tile--routine .media-frame--poster { outline-color: rgba(142, 142, 147, 0.55); }
+    .poster-shelf-label {
+      display: block;
+      color: var(--text);
+      font-size: 0.68rem;
+      font-weight: 650;
+      line-height: 1.25;
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .shelf-title {
+      margin: 0;
+      font-size: clamp(1.35rem, 3vw, 1.85rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--text);
+    }
+    .shelf-meta {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      white-space: nowrap;
+    }
     .panel-tagline {
       margin: 0 0 0.9rem;
       color: var(--muted);
@@ -2144,7 +2534,8 @@ def dashboard_css() -> str:
     .intel-panel,
     .panel-fold,
     footer.dash-foot,
-    .grid .card {
+    .grid .card,
+    .showings-rail > .card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
@@ -2164,14 +2555,16 @@ def dashboard_css() -> str:
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
       gap: 0.85rem;
     }
-    .grid .card {
+    .grid .card,
+    .showings-rail > .card {
       padding: 1rem;
       display: flex;
       flex-direction: column;
       gap: 0.72rem;
       transition: border-color 0.18s ease, background-color 0.18s ease;
     }
-    .grid .card:hover {
+    .grid .card:hover,
+    .showings-rail > .card:hover {
       transform: none;
       box-shadow: var(--shadow-sm);
       border-color: rgba(0, 122, 255, 0.28);
@@ -2192,6 +2585,9 @@ def dashboard_css() -> str:
       flex-wrap: wrap;
       gap: 0.35rem;
       align-items: center;
+    }
+    .card-topline .schema-badge {
+      max-width: min(100%, 18rem);
     }
     .card-link a {
       font-size: 0.86rem;
@@ -2280,6 +2676,15 @@ def dashboard_css() -> str:
       color: var(--muted);
       font-size: 0.76rem;
       line-height: 1.35;
+    }
+    .card-facts .schema-label {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: unset;
+    }
+    .card-facts .schema-badge {
+      flex-wrap: wrap;
+      row-gap: 0.15rem;
     }
     .schema-not-on-sale {
       background: rgba(142, 142, 147, 0.14);
@@ -2402,13 +2807,18 @@ def dashboard_css() -> str:
     }
     .movie-add-result {
       display: grid;
-      grid-template-columns: 52px minmax(0, 1fr) auto;
+      grid-template-columns: 60px minmax(0, 1fr) auto;
       gap: 0.65rem;
       align-items: center;
       padding: 0.55rem;
       border: 1px solid var(--border);
-      border-radius: 14px;
+      border-radius: 16px;
       background: var(--surface2);
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .movie-add-result:hover {
+      border-color: rgba(0, 122, 255, 0.32);
+      background: var(--surface);
     }
     .movie-add-result img {
       width: 52px;
@@ -2422,6 +2832,8 @@ def dashboard_css() -> str:
       margin: 0;
       color: var(--text);
       font-weight: 750;
+      font-size: 0.95rem;
+      letter-spacing: -0.02em;
     }
     .movie-add-meta {
       margin: 0.15rem 0 0;
@@ -2447,6 +2859,377 @@ def dashboard_css() -> str:
       transition: color 0.15s;
     }
     a:hover { color: var(--accent); text-decoration-color: var(--accent); }
+    .media-frame {
+      position: relative;
+      margin: 0;
+      overflow: hidden;
+      border-radius: var(--media-radius-sm);
+      background: var(--surface2);
+      box-shadow: var(--media-shadow);
+      border: 1px solid var(--border);
+    }
+    .media-frame img,
+    .media-frame video,
+    .media-frame .poster-fallback {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .media-frame--poster {
+      border-radius: var(--media-radius);
+      aspect-ratio: 2 / 3;
+    }
+    .media-frame--poster img,
+    .media-frame--poster .poster-fallback {
+      object-fit: cover;
+      aspect-ratio: 2 / 3;
+    }
+    .media-frame--thumb {
+      width: 60px;
+      aspect-ratio: 2 / 3;
+      flex-shrink: 0;
+    }
+    .media-frame--thumb img,
+    .media-frame--thumb .poster-fallback { object-fit: cover; }
+    .media-frame--screenshot,
+    .media-frame--video {
+      max-width: 160px;
+      aspect-ratio: 16 / 9;
+      background: var(--media-letterbox);
+      border-color: rgba(127, 127, 127, 0.22);
+    }
+    .media-frame--screenshot img { object-fit: contain; }
+    .media-frame--video video { object-fit: cover; }
+    .media-frame--lightbox {
+      border: 0;
+      box-shadow: none;
+      background: #000;
+      border-radius: 12px;
+      max-height: 72vh;
+    }
+    .media-frame--lightbox img,
+    .media-frame--lightbox video {
+      max-height: 72vh;
+      object-fit: contain;
+      margin-inline: auto;
+    }
+    .media-caption {
+      margin: 0;
+      padding: 0.32rem 0.45rem 0;
+      color: var(--muted);
+      font-size: 0.64rem;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .card-media-preview .media-caption {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 2;
+      padding: 0.35rem 0.45rem;
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+      color: #f5f5f7;
+      font-size: 0.62rem;
+      pointer-events: none;
+    }
+    .media-frame.is-clickable { cursor: zoom-in; }
+    .media-frame.is-clickable:hover {
+      border-color: rgba(0, 122, 255, 0.35);
+      box-shadow: 0 0 0 3px var(--accent-dim), var(--media-shadow);
+    }
+    .media-frame.is-clickable:focus-within {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .media-frame.is-clickable img,
+    .media-frame.is-clickable video {
+      pointer-events: none;
+    }
+    .media-hit-target {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      cursor: inherit;
+      color: transparent;
+      font-size: 0;
+      line-height: 0;
+      z-index: 3;
+    }
+    .media-play-badge::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.22);
+      pointer-events: none;
+    }
+    .media-play-badge::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-40%, -50%);
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 0.55rem 0 0.55rem 0.9rem;
+      border-color: transparent transparent transparent rgba(255, 255, 255, 0.92);
+      pointer-events: none;
+    }
+    .card-media-full-wrap .media-frame {
+      max-width: 100%;
+      aspect-ratio: auto;
+    }
+    .card-media-full-wrap .media-frame--screenshot img { object-fit: contain; }
+    .card-media-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      margin-top: 0.15rem;
+    }
+    .card:has(.card-media-preview) .card-expand .artifact-actions { display: none; }
+    .media-shelf {
+      display: flex;
+      gap: var(--shelf-gap);
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+      background: var(--shelf-bg);
+      border-radius: var(--radius);
+    }
+    .media-shelf--compact {
+      padding: 0;
+      background: transparent;
+      scroll-snap-type: none;
+      overflow: visible;
+    }
+    .media-shelf > .movie-group,
+    .media-shelf > .media-frame { scroll-snap-align: start; flex-shrink: 0; }
+    .movie-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0.72rem;
+    }
+    .movie-group {
+      width: 100%;
+      margin: 0;
+      padding: 0.72rem;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    @media (prefers-color-scheme: dark) {
+      .movie-group {
+        background: #161618;
+        border-color: rgba(255, 255, 255, 0.06);
+        box-shadow: none;
+      }
+    }
+    .movie-group-head {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      min-width: 0;
+      margin-bottom: 0.55rem;
+    }
+    .movie-group-head .movie-group-poster-stack,
+    .movie-group-head .media-frame--poster {
+      width: 52px;
+      flex-shrink: 0;
+    }
+    .movie-group-head .media-frame--poster img,
+    .movie-group-head .media-frame--poster .poster-fallback {
+      aspect-ratio: 2 / 3;
+      object-fit: cover;
+    }
+    .movie-group-meta { min-width: 0; }
+    .movie-group-title {
+      margin: 0;
+      color: var(--text);
+      font-size: 1.02rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+    .movie-group-eyebrow {
+      margin: 0.14rem 0 0;
+      color: var(--muted);
+      font-size: 0.74rem;
+      line-height: 1.35;
+    }
+    .movie-group-eyebrow .movie-release-date {
+      display: inline;
+      margin: 0;
+      color: var(--accent);
+      font-size: inherit;
+      font-weight: 700;
+    }
+    .showings-rail {
+      display: flex;
+      gap: 0.62rem;
+      overflow-x: auto;
+      padding: 0.1rem 0.05rem 0.45rem;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+    .showings-rail::-webkit-scrollbar { height: 5px; }
+    .showings-rail::-webkit-scrollbar-thumb {
+      background: rgba(127, 127, 127, 0.35);
+      border-radius: 999px;
+    }
+    .showings-rail > .card {
+      flex: 0 0 min(72vw, 210px);
+      scroll-snap-align: start;
+      padding: 0.72rem;
+      gap: 0.52rem;
+    }
+    .card--mini {
+      gap: 0.42rem;
+      padding: 0.62rem;
+    }
+    .card--mini .card-head-mini {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.45rem;
+      min-width: 0;
+    }
+    .card--mini h2 {
+      margin: 0;
+      font-size: 0.9rem;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card--mini .card-status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.28rem;
+      align-items: center;
+    }
+    .card--mini .card-status-row .schema-badge {
+      max-width: 100%;
+    }
+    .card-status-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.32rem;
+      margin: 0;
+    }
+    .card-status-stats div {
+      min-width: 0;
+      padding: 0.38rem 0.42rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface2);
+    }
+    .card-status-stats dt {
+      margin: 0 0 0.08rem;
+      color: var(--muted);
+      font-size: 0.58rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .card-status-stats dd {
+      margin: 0;
+      min-width: 0;
+      color: var(--text);
+      font-size: 0.72rem;
+      font-weight: 650;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card-status-stats dd code {
+      font-size: 0.68rem;
+      background: transparent;
+      padding: 0;
+    }
+    .card-alert {
+      margin: 0;
+      padding: 0.38rem 0.48rem;
+      border-radius: 10px;
+      font-size: 0.72rem;
+      line-height: 1.35;
+    }
+    .card-alert--warn {
+      border: 1px solid rgba(255, 159, 10, 0.28);
+      background: rgba(255, 159, 10, 0.1);
+      color: var(--text);
+    }
+    .card-alert--error {
+      border: 1px solid rgba(255, 69, 58, 0.28);
+      background: rgba(255, 69, 58, 0.1);
+      color: var(--text);
+    }
+    .card-quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.32rem;
+      margin: 0;
+      align-items: center;
+    }
+    .card-open-link {
+      font-size: 0.72rem;
+      font-weight: 650;
+      text-decoration: none;
+    }
+    .card-quick-btn {
+      margin: 0;
+      padding: 0.22rem 0.48rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .card-quick-btn:hover {
+      border-color: rgba(0, 122, 255, 0.35);
+      color: var(--accent);
+    }
+    .card--mini .card-expand summary {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .showings-rail .card h2 {
+      font-size: 0.94rem;
+      line-height: 1.2;
+    }
+    .showings-rail .card-topline { gap: 0.28rem; }
+    .showings-rail .card-topline .schema-badge { max-width: 100%; }
+    .showings-rail .card-link a { font-size: 0.78rem; }
+    .showings-rail .next-action {
+      padding: 0.45rem 0.55rem;
+      font-size: 0.74rem;
+      border-radius: 10px;
+    }
+    .showings-rail .card-facts {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.35rem;
+    }
+    .showings-rail .card-facts div { padding: 0.42rem; }
+    .showings-rail .card-facts dt { font-size: 0.62rem; }
+    .showings-rail .card-facts dd { font-size: 0.74rem; }
+    .showings-rail .card-media-preview { gap: 0.4rem; margin-top: 0; }
+    .showings-rail .card-media-preview .media-frame {
+      max-width: 108px;
+    }
+    .showings-rail .card-media-preview .media-caption {
+      font-size: 0.58rem;
+      padding: 0.28rem 0.35rem;
+    }
+    @media (prefers-color-scheme: dark) {
+      .media-frame--poster { border-color: transparent; }
+    }
     .thumb img {
       max-width: 100%;
       height: auto;
@@ -2673,7 +3456,8 @@ def dashboard_css() -> str:
       color: var(--muted);
       box-shadow: var(--shadow-sm);
     }
-    p.refresh-hint { margin: 0 0 0.65rem 0; font-size: 0.78rem; opacity: 0.92; }
+    p.refresh-hint { margin: 0 0 0.65rem 0; font-size: 0.78rem; opacity: 0.92; overflow-wrap: anywhere; }
+    p.refresh-hint code { white-space: nowrap; }
     .artifact-viewer[hidden] { display: none; }
     .artifact-viewer {
       position: fixed;
@@ -2682,22 +3466,42 @@ def dashboard_css() -> str:
       display: grid;
       place-items: center;
       padding: 1rem;
-      background: rgba(0, 0, 0, 0.56);
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(28px) saturate(1.5);
+      -webkit-backdrop-filter: blur(28px) saturate(1.5);
     }
     .artifact-viewer-card {
       width: min(980px, 100%);
       max-height: 92vh;
       overflow: auto;
-      border: 1px solid var(--border);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: var(--radius);
-      background: var(--bg-elevated);
+      background: #0b0b0f;
       color: var(--text);
       box-shadow: var(--shadow);
-      padding: 1rem;
+      padding: 0.65rem 0.75rem 0.85rem;
+      position: relative;
     }
     .artifact-viewer-card h2 {
       margin: 0.2rem 0 0.75rem;
-      font-size: 1rem;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .artifact-close-icon {
+      position: absolute;
+      top: 0.65rem;
+      right: 0.65rem;
+      z-index: 2;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.12);
+      color: #f5f5f7;
+      border: 0;
+      font-size: 1.35rem;
+      line-height: 1;
+      cursor: pointer;
     }
     .artifact-viewer-card img,
     .artifact-viewer-card video {
@@ -2807,77 +3611,34 @@ def dashboard_css() -> str:
       display: flex;
       gap: 1rem;
       overflow-x: auto;
-      padding: 0.15rem 0.1rem 0.85rem;
-      scroll-snap-type: x proximity;
+      padding: 0.5rem 0.1rem 0.85rem;
+      scroll-snap-type: x mandatory;
       -webkit-overflow-scrolling: touch;
     }
-    .movie-carousel::-webkit-scrollbar { height: 10px; }
+    .movie-carousel.media-shelf { scroll-snap-type: x mandatory; }
+    .movie-carousel::-webkit-scrollbar { height: 6px; }
     .movie-carousel::-webkit-scrollbar-thumb {
-      background: var(--border);
+      background: rgba(127, 127, 127, 0.35);
       border-radius: 999px;
     }
-    .movie-group {
-      flex: 0 0 min(92vw, 640px);
-      margin: 0;
-      display: grid;
-      grid-template-columns: minmax(88px, 128px) minmax(0, 1fr);
-      gap: 0.9rem;
-      align-items: start;
-      padding: 0.9rem;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--surface);
-      box-shadow: var(--shadow-sm);
-      scroll-snap-align: start;
-    }
+    /* Legacy alias — watchlist now uses .movie-stack + .showings-rail */
     .movie-group-poster,
     .target-poster {
-      display: block;
-      width: 100%;
-      aspect-ratio: 2 / 3;
-      object-fit: cover;
-      border-radius: 14px;
-      border: 1px solid var(--border);
-      background: linear-gradient(145deg, var(--surface2), rgba(0, 122, 255, 0.12));
-      color: var(--muted);
-      box-shadow: 0 10px 28px rgba(0,0,0,0.12);
+      border: 0;
+      box-shadow: none;
+      background: transparent;
     }
     .poster-fallback {
       display: grid;
       place-items: center;
-      font-size: 2rem;
+      font-size: clamp(1.8rem, 5vw, 2.4rem);
       font-weight: 750;
+      background: linear-gradient(160deg, #2a2a2e 0%, #141416 55%, rgba(10, 132, 255, 0.18) 100%);
     }
     .movie-group-body { min-width: 0; }
-    .movie-group-title {
-      margin: 0 0 0.15rem;
-      color: var(--text);
-      font-size: clamp(1.15rem, 2.5vw, 1.65rem);
-      font-weight: 700;
-      letter-spacing: -0.045em;
-    }
-    .movie-release-date {
-      margin: 0.1rem 0 0.2rem;
-      color: var(--accent);
-      font-size: 0.92rem;
-      font-weight: 750;
-      letter-spacing: -0.015em;
-    }
-    .movie-distributor {
-      margin: 0 0 0.22rem;
-      color: var(--text);
-      font-size: 0.84rem;
-      font-weight: 650;
-    }
-    .movie-group-subtitle {
-      margin: 0 0 0.65rem;
-      color: var(--muted);
-      font-size: 0.84rem;
-    }
     .movie-twitter-panel {
-      grid-column: 1 / -1;
-      margin-top: 0.85rem;
-      padding-top: 0.8rem;
+      margin-top: 0.65rem;
+      padding-top: 0.65rem;
       border-top: 1px solid var(--border);
     }
     .movie-twitter-label {
@@ -2942,10 +3703,11 @@ def dashboard_css() -> str:
       background: rgba(255, 159, 10, 0.08);
     }
     .conn-line { font-size: 0.8rem; margin: 0.5rem 0 0 0; }
+    .conn-line code { white-space: nowrap; }
     .conn-label { color: var(--muted); }
     .conn-ok { color: var(--ok); }
     .conn-bad { color: var(--bad); }
-    .conn-static { color: var(--muted); }
+    .conn-static { color: var(--muted); overflow-x: auto; white-space: nowrap; }
     .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .visually-hidden {
       position: absolute;
@@ -3064,6 +3826,12 @@ def dashboard_css() -> str:
     .compact .card-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .compact .panel-tagline,
     .compact .card-media-meta { display: none; }
+    .compact .card-media-preview .media-caption { display: none; }
+    .compact .card-media-preview .media-frame { max-width: 112px; }
+    .compact .showings-rail > .card { padding: 0.62rem; gap: 0.42rem; }
+    .compact .card--mini { padding: 0.52rem; gap: 0.35rem; }
+    .compact .card-status-stats dd { font-size: 0.68rem; }
+    .compact .showings-rail .card-media-preview .media-frame { max-width: 96px; }
     @media (prefers-color-scheme: dark) {
       .jump-nav,
       .ops-strip { background: rgba(28, 28, 30, 0.72); }
@@ -3079,17 +3847,16 @@ def dashboard_css() -> str:
       }
       .target-controls { grid-template-columns: 1fr; }
       .target-filter-row { justify-content: flex-start; }
-      .movie-carousel {
-        margin-inline: -0.85rem;
-        padding-inline: 0.85rem;
-        scroll-padding-inline: 0.85rem;
+      .movie-stack { gap: 0.62rem; }
+      .movie-group { padding: 0.65rem; border-radius: 14px; }
+      .movie-group-head .movie-group-poster-stack,
+      .movie-group-head .media-frame--poster { width: 46px; }
+      .showings-rail {
+        margin-inline: -0.35rem;
+        padding-inline: 0.35rem;
+        scroll-padding-inline: 0.35rem;
       }
-      .movie-group {
-        flex-basis: min(88vw, 520px);
-        grid-template-columns: 72px minmax(0, 1fr);
-        gap: 0.7rem;
-        padding: 0.75rem;
-      }
+      .showings-rail > .card { flex-basis: min(84vw, 240px); }
       .triage-panel,
       .runtime-panel,
       .intel-panel,
@@ -3357,11 +4124,81 @@ def render_fact_grid(entries: list[tuple[str, str]]) -> str:
     )
 
 
+def _render_card_status_stats(
+    *,
+    last_ok: str,
+    ticks: str,
+    api_status: str,
+    last_ok_title: str | None = None,
+) -> str:
+    title_attr = (
+        f' title="{html.escape(last_ok_title, quote=True)}"' if last_ok_title else ""
+    )
+    return (
+        '<dl class="card-status-stats">'
+        f'<div><dt>Last OK</dt><dd{title_attr}>{last_ok}</dd></div>'
+        f"<div><dt>Ticks</dt><dd>{ticks}</dd></div>"
+        f'<div><dt>API</dt><dd><code>{api_status}</code></dd></div>'
+        "</dl>"
+    )
+
+
+def _render_card_alert_line(
+    *,
+    err_msg: str | None,
+    is_stale: bool,
+    stale_rel: str | None,
+    next_action: str | None,
+    tier: str,
+) -> str:
+    if err_msg:
+        em = err_msg.replace("\n", " ").strip()
+        if len(em) > 120:
+            em = em[:117] + "…"
+        return f'<p class="card-alert card-alert--error">{html.escape(em)}</p>'
+    if is_stale and stale_rel:
+        return (
+            f'<p class="card-alert card-alert--warn">'
+            f"Stale crawl · last OK {html.escape(stale_rel)} ago</p>"
+        )
+    if next_action and tier in ("error", "stale", "signal"):
+        return f'<p class="card-alert card-alert--warn">{html.escape(next_action)}</p>'
+    return ""
+
+
+def _render_card_quick_actions(
+    *,
+    url_e: str,
+    name_attr: str,
+    screenshot_url: str | None,
+    video_url: str | None,
+) -> str:
+    parts: list[str] = [
+        f'<a class="card-open-link" href="{url_e}" target="_blank" rel="noopener">Open</a>'
+    ]
+    if screenshot_url:
+        parts.append(
+            '<button type="button" class="artifact-open card-quick-btn" '
+            'data-artifact-kind="screenshot" '
+            f'data-artifact-src="{html.escape(screenshot_url, quote=True)}" '
+            f'data-artifact-title="Screenshot for {name_attr}">Screenshot</button>'
+        )
+    if video_url:
+        parts.append(
+            '<button type="button" class="artifact-open card-quick-btn" '
+            'data-artifact-kind="video" '
+            f'data-artifact-src="{html.escape(video_url, quote=True)}" '
+            f'data-artifact-title="Video for {name_attr}">Video</button>'
+        )
+    return f'<p class="card-quick-actions">{"".join(parts)}</p>'
+
+
 def _render_target_card(
     t: dict[str, Any],
     *,
     fandango_poll: dict[str, Any],
     now: datetime,
+    layout: Literal["full", "mini"] = "mini",
 ) -> str:
     raw_name = str(t.get("name", ""))
     name = html.escape(raw_name)
@@ -3372,8 +4209,8 @@ def _render_target_card(
     if not isinstance(st, dict):
         st = {}
     schema_raw = st.get("last_release_schema")
-    schema_badge = _schema_badge_html(schema_raw)
-    schema_fact = _schema_badge_html(schema_raw, with_hint=True)
+    schema_badge = _schema_badge_html(schema_raw, compact=True)
+    schema_fact = _schema_badge_html(schema_raw, compact=True)
     cur = html.escape(str(st.get("current_state") or "—"))
     tticks = html.escape(str(st.get("total_ticks", "—")))
     su_raw = st.get("last_success_at")
@@ -3463,16 +4300,29 @@ def _render_target_card(
     su_url = t.get("latest_screenshot_url")
     if su_url:
         img_html = (
-            f'<p class="thumb"><img loading="lazy" src="{html.escape(su_url)}" '
-            f'alt="screenshot {name}" /></p>'
+            '<div class="card-media-full-wrap">'
+            + _media_frame_html(
+                variant="screenshot",
+                src=str(su_url),
+                alt=f"screenshot {name}",
+                css_class="card-media-full",
+            )
+            + "</div>"
         )
 
     vid_html = ""
     vu = t.get("latest_video_url")
     if vu:
         vid_html = (
-            f'<p class="vid"><video controls preload="metadata" title="crawl video {name}" '
-            f'src="{html.escape(vu)}"></video></p>'
+            '<div class="card-media-full-wrap">'
+            + _media_frame_html(
+                variant="video",
+                src=str(vu),
+                alt=f"crawl video {name}",
+                video_controls=True,
+                video_preload="metadata",
+            )
+            + "</div>"
         )
 
     trace_html = ""
@@ -3510,18 +4360,20 @@ def _render_target_card(
         api_bits.append("warning " + html.escape(str(api_warning)))
     api_html = f'<p class="card-api-meta"><strong>Direct API</strong> · {" · ".join(api_bits)}</p>'
     artifact_actions: list[str] = []
-    if su_url:
-        artifact_actions.append(
-            '<button type="button" class="artifact-open" data-artifact-kind="screenshot" '
-            f'data-artifact-src="{html.escape(str(su_url), quote=True)}" '
-            f'data-artifact-title="Screenshot for {name_attr}">Preview screenshot</button>'
-        )
-    if vu:
-        artifact_actions.append(
-            '<button type="button" class="artifact-open" data-artifact-kind="video" '
-            f'data-artifact-src="{html.escape(str(vu), quote=True)}" '
-            f'data-artifact-title="Video for {name_attr}">Preview video</button>'
-        )
+    has_card_preview = bool(su_url or vu)
+    if not has_card_preview:
+        if su_url:
+            artifact_actions.append(
+                '<button type="button" class="artifact-open" data-artifact-kind="screenshot" '
+                f'data-artifact-src="{html.escape(str(su_url), quote=True)}" '
+                f'data-artifact-title="Screenshot for {name_attr}">Preview screenshot</button>'
+            )
+        if vu:
+            artifact_actions.append(
+                '<button type="button" class="artifact-open" data-artifact-kind="video" '
+                f'data-artifact-src="{html.escape(str(vu), quote=True)}" '
+                f'data-artifact-title="Video for {name_attr}">Preview video</button>'
+            )
     artifact_actions_html = (
         f'<p class="artifact-actions">{"".join(artifact_actions)}</p>'
         if artifact_actions
@@ -3569,6 +4421,63 @@ def _render_target_card(
     tier_attr = html.escape(tier, quote=True)
     has_media_attr = "true" if (su_url or vu) else "false"
 
+    media_preview_html = _render_card_media_preview(
+        name=name,
+        name_attr=name_attr,
+        screenshot_url=str(su_url) if su_url else None,
+        video_url=str(vu) if vu else None,
+    )
+    media_pill = (
+        render_status_pill(html.escape("Media"), variants=("pill-muted",))
+        if (su_url or vu)
+        else ""
+    )
+
+    if layout == "mini":
+        last_ok_display = html.escape(rel or su or "—")
+        last_ok_title = str(su_raw) if su_raw else None
+        status_stats = _render_card_status_stats(
+            last_ok=last_ok_display,
+            ticks=tticks,
+            api_status=html.escape(api_status),
+            last_ok_title=last_ok_title,
+        )
+        alert_html = _render_card_alert_line(
+            err_msg=str(err_msg) if err_msg else None,
+            is_stale=is_stale,
+            stale_rel=rel,
+            next_action=next_action,
+            tier=tier,
+        )
+        quick_actions = _render_card_quick_actions(
+            url_e=url_e,
+            name_attr=name_attr,
+            screenshot_url=str(su_url) if su_url else None,
+            video_url=str(vu) if vu else None,
+        )
+        details_inner = (
+            f"{facts}{next_action_html}{media_preview_html}"
+            f"{err_meta}{err_html}{stale_html}{api_html}{media_inner}"
+        )
+        details_block = ""
+        if details_inner.strip():
+            details_block = render_inline_disclosure(
+                css_class="card-expand",
+                summary_html="Details",
+                inner_html=f'<div class="card-expand-body">{details_inner}</div>',
+                persist_key=f"target:{_html_id_slug(raw_name)}:diagnostics",
+            )
+        return f"""
+<section class="card card--mini" data-target-card data-target="{name_attr}" data-state="{state_attr}" data-tier="{tier_attr}" data-search="{data_search}" data-has-media="{has_media_attr}">
+  <div class="card-head-mini"><h2>{name}</h2></div>
+  <div class="card-status-row">{state_pill}{schema_badge}{stale_chip}</div>
+  {status_stats}
+  {alert_html}
+  {quick_actions}
+  {details_block}
+</section>
+"""
+
     return f"""
 <section class="card" data-target-card data-target="{name_attr}" data-state="{state_attr}" data-tier="{tier_attr}" data-search="{data_search}" data-has-media="{has_media_attr}">
   <div class="card-topline">
@@ -3576,11 +4485,13 @@ def _render_target_card(
     {state_pill}
     {schema_badge}
     {stale_chip}
+    {media_pill}
   </div>
   <h2>{name}</h2>
   <p class="card-link"><a href="{url_e}" target="_blank" rel="noopener">Open on Fandango</a></p>
   {next_action_html}
   {facts}
+  {media_preview_html}
   {details_block}
 </section>
 """
@@ -3634,7 +4545,7 @@ def _render_triage_priority_table(
         url = str(t.get("url") or "")
         url_e = html.escape(url, quote=True) if url else ""
         cur = html.escape(str(st.get("current_state") or "—"))
-        schema_badge = _schema_badge_html(st.get("last_release_schema"))
+        schema_badge = _schema_badge_html(st.get("last_release_schema"), compact=True)
         su_raw = st.get("last_success_at")
         su_rel = _relative_ago(
             str(su_raw) if su_raw is not None else None,
@@ -4220,6 +5131,12 @@ def render_index_html(
         social_x_enabled=social_x_enabled,
     )
     target_count = sum(1 for x in targets if isinstance(x, dict))
+    movie_count = sum(
+        1
+        for m in movies
+        if isinstance(m, dict) and isinstance(m.get("fandango_targets"), list)
+    )
+    shelf_meta = html.escape(f"{movie_count} movie(s) · {target_count} target(s)")
     operator_status = _render_operator_status_strip(
         targets=targets,
         fandango_poll=fandango_poll,
@@ -4239,6 +5156,7 @@ def render_index_html(
 
     assigned: set[str] = set()
     crawl_blocks: list[str] = []
+    poster_tiles: list[str] = []
     for m in movies:
         if not isinstance(m, dict):
             continue
@@ -4257,6 +5175,7 @@ def render_index_html(
         distributor = html.escape(_first_nonempty_str(m.get("distributor")) or "Distributor not set")
         tweet_embeds = _render_movie_tweet_embeds(m, social_handles=sx_handles, now=now)
         subcards: list[str] = []
+        movie_target_names: list[str] = []
         for tn in ft:
             tname = str(tn)
             if tname in target_by_name and tname not in assigned:
@@ -4268,18 +5187,35 @@ def render_index_html(
                     )
                 )
                 assigned.add(tname)
+                movie_target_names.append(tname)
         if subcards:
+            movie_status = _summarize_targets_status(
+                movie_target_names,
+                target_by_name=target_by_name,
+                fandango_poll=fandango_poll,
+                now=now,
+            )
+            poster_tiles.append(
+                _render_poster_shelf_tile(
+                    movie_id=mkey_slug,
+                    title=mtitle_raw,
+                    poster_url=poster,
+                    status=movie_status,
+                )
+            )
+            showing_label = html.escape(f"Showings for {mtitle_raw}")
             crawl_blocks.append(
                 f'<section class="movie-group" id="movie-{html.escape(mkey_slug, quote=True)}">'
+                '<div class="movie-group-head">'
                 f"{poster_html}"
-                '<div class="movie-group-body">'
+                '<div class="movie-group-meta">'
                 f'<h3 class="movie-group-title">{mtitle}</h3>'
-                f'<p class="movie-release-date">{release_date}</p>'
-                f'<p class="movie-distributor">{distributor}</p>'
-                f'<p class="movie-group-subtitle">{len(subcards)} Fandango target(s)</p>'
-                f'<div class="grid">{"".join(subcards)}</div>'
+                f'<p class="movie-group-eyebrow"><span class="movie-release-date">{release_date}</span>'
+                f" · {distributor} · {len(subcards)} showing(s)</p>"
+                "</div></div>"
+                f'<div class="showings-rail" aria-label="{showing_label}">{"".join(subcards)}</div>'
                 f"{tweet_embeds}"
-                "</div></section>"
+                "</section>"
             )
 
     rest: list[dict[str, Any]] = []
@@ -4294,15 +5230,29 @@ def render_index_html(
             _render_target_card(x, fandango_poll=fandango_poll, now=now) for x in rest
         )
         rest_tweets = _render_movie_tweet_embeds({"x_handles": []}, social_handles=sx_handles, now=now)
+        rest_status = _summarize_targets_status(
+            [str(t.get("name", "")) for t in rest],
+            target_by_name=target_by_name,
+            fandango_poll=fandango_poll,
+            now=now,
+        )
+        poster_tiles.append(
+            _render_poster_shelf_tile(
+                movie_id="ungrouped",
+                title="Other targets",
+                poster_url=None,
+                status=rest_status,
+            )
+        )
         crawl_blocks.append(
             f'<section class="movie-group" id="crawl-ungrouped">'
+            '<div class="movie-group-head">'
             f'{_poster_html(None, "Other targets", css_class="movie-group-poster")}'
-            '<div class="movie-group-body">'
-            f'<h3 class="movie-group-title">Other targets</h3>'
-            '<p class="movie-release-date">Release date not set</p>'
-            '<p class="movie-distributor">Distributor not set</p>'
-            f'<p class="movie-group-subtitle">{len(rest)} Fandango target(s)</p>'
-            f'<div class="grid">{rest_html}</div>{rest_tweets}</div></section>'
+            '<div class="movie-group-meta">'
+            '<h3 class="movie-group-title">Other targets</h3>'
+            f'<p class="movie-group-eyebrow">Release date not set · Distributor not set · {len(rest)} showing(s)</p>'
+            "</div></div>"
+            f'<div class="showings-rail" aria-label="Other targets">{rest_html}</div>{rest_tweets}</section>'
         )
     if not targets:
         crawl_blocks.append(
@@ -4312,7 +5262,7 @@ def render_index_html(
         )
     elif not crawl_blocks:
         crawl_blocks.append(
-            '<div class="grid">'
+            '<div class="showings-rail" aria-label="All targets">'
             + "".join(
                 _render_target_card(t, fandango_poll=fandango_poll, now=now)
                 for t in targets
@@ -4322,11 +5272,17 @@ def render_index_html(
         )
 
     crawl_body_inner = "\n".join(crawl_blocks)
-    crawl_body = (
-        f'<div class="movie-carousel" aria-label="Movie watchlist carousel">{crawl_body_inner}</div>'
-        if targets
-        else crawl_body_inner
-    )
+    poster_shelf = _render_poster_shelf(poster_tiles)
+    shelf_view_toggle = _render_shelf_view_toggle(visible=bool(poster_tiles))
+    if targets:
+        crawl_body = (
+            '<div class="watchlist-view" data-watchlist-view>'
+            f"{poster_shelf}"
+            f'<div class="movie-stack" aria-label="Movie watchlist">{crawl_body_inner}</div>'
+            "</div>"
+        )
+    else:
+        crawl_body = crawl_body_inner
     anchors: list[tuple[str, str]] = [
         ("#triage", "At a glance"),
         ("#runtime", "Runtime"),
@@ -4553,7 +5509,7 @@ def render_index_html(
         conn_badge = (
             '<p class="conn-line conn-static">'
             "Static render — <code>/api/revision</code> poll runs when the page is "
-            "served with live refresh from <code>watch</code> / <code>dashboard</code>."
+            "served with live refresh from <code>watch / dashboard</code>."
             "</p>"
         )
     empty_cfg = ""
@@ -4657,9 +5613,16 @@ def render_index_html(
   </header>
   <main class="dash" id="main" tabindex="-1">
   {operator_status}
-  <section class="section-head" id="crawl" aria-label="Fandango crawl">
-    <h2 class="section-label">Watchlist</h2>
-    <p class="panel-tagline">Poster-first overview. Open each card only when you need diagnostics, screenshots, video, traces, or raw state.</p>
+  <section class="section-head section-head--shelf" id="crawl" aria-label="Fandango crawl">
+    <p class="section-label">Watchlist</p>
+    <div class="shelf-head-row">
+      <h2 class="shelf-title">Movies on your list</h2>
+      <div class="shelf-head-actions">
+        <p class="shelf-meta">{shelf_meta}</p>
+        {shelf_view_toggle}
+      </div>
+    </div>
+    <p class="panel-tagline">Use Posters for an at-a-glance row with status outlines, or Cards for showings. Each showing card shows state, schema, and freshness without expanding.</p>
     {movie_add_panel}
     {target_controls}
   </section>

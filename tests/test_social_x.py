@@ -304,6 +304,9 @@ class TestCheckXSignals:
         assert imax_hs.last_seen_ticket_analysis is not None
         assert imax_hs.last_seen_ticket_analysis["announces_tickets"] is True
         assert imax_hs.last_seen_ticket_analysis["status"] == "available"
+        assert len(imax_hs.recent_tweets) == 1
+        assert imax_hs.recent_tweets[0].tweet_id == "10"
+        assert imax_hs.recent_tweets[0].text == "tickets on sale!"
 
         # Second poll: with since_id=10, the stub returns nothing new.
         client.tweet_calls.clear()
@@ -349,6 +352,8 @@ class TestCheckXSignals:
             is False
         )
         assert client.get_tweet_calls == ["10"]
+        assert len(rstate.handles["imax"].recent_tweets) == 1
+        assert rstate.handles["imax"].recent_tweets[0].tweet_id == "10"
 
     def test_no_keywords_means_no_matches_even_on_new_tweets(
         self, tmp_path: Path
@@ -456,6 +461,52 @@ class TestCheckXSignals:
         result = check_x_signals(cfg, "tok", tmp_path, client=client)
         assert len(result.matches) == 1
         assert result.matches[0].tweet_id == "10"
+
+    def test_recent_tweets_history_persists_multiple_posts(self, tmp_path: Path) -> None:
+        client = _StubXClient(
+            users={"imax": "111", "studio": "222"},
+            tweets_by_user={
+                "111": [
+                    {"id": "12", "text": "Tickets on sale now!", "created_at": "t2"},
+                    {"id": "11", "text": "New poster drop", "created_at": "t1"},
+                    {"id": "10", "text": "Behind the scenes", "created_at": "t0"},
+                ],
+                "222": [
+                    {"id": "20", "text": "Trailer tomorrow", "created_at": "t3"},
+                ],
+            },
+        )
+        cfg = _cfg(
+            [
+                SocialXHandleConfig(handle="IMAX", keywords=["tickets"]),
+                SocialXHandleConfig(handle="studio", keywords=["trailer"]),
+            ],
+            max_results_per_handle=10,
+        )
+        check_x_signals(cfg, "tok", tmp_path, client=client)
+        rstate = load_social_x_state(tmp_path)
+        imax = rstate.handles["imax"]
+        studio = rstate.handles["studio"]
+        assert [t.tweet_id for t in imax.recent_tweets] == ["12", "11", "10"]
+        assert imax.recent_tweets[0].ticket_analysis is not None
+        assert imax.recent_tweets[0].ticket_analysis["announces_tickets"] is True
+        assert imax.recent_tweets[1].ticket_analysis is not None
+        assert imax.recent_tweets[1].ticket_analysis["announces_tickets"] is False
+        assert [t.tweet_id for t in studio.recent_tweets] == ["20"]
+
+        client.tweet_calls.clear()
+        client._tweets["111"] = [
+            {"id": "13", "text": "Presale starts Friday", "created_at": "t4"},
+            *client._tweets["111"],
+        ]
+        check_x_signals(cfg, "tok", tmp_path, client=client)
+        rstate2 = load_social_x_state(tmp_path)
+        assert [t.tweet_id for t in rstate2.handles["imax"].recent_tweets] == [
+            "13",
+            "12",
+            "11",
+            "10",
+        ]
 
 
 # -----------------------------------------------------------------------------
