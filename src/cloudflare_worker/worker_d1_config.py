@@ -10,9 +10,9 @@ from typing import Any
 def _sql_param(value: Any) -> Any:
     """Coerce optional values for D1 bind (Pyodide rejects undefined)."""
     if value is None:
-        from js import null
+        from pyodide.ffi import to_js
 
-        return null
+        return to_js([None])[0]
     return value
 
 
