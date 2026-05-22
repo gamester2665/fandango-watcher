@@ -1226,8 +1226,10 @@ def _summarize_targets_status(
     fandango_poll: dict[str, Any],
     now: datetime,
 ) -> str:
+    """Worst crawl-health status across targets for poster-shelf icons."""
     stale_thr = _stale_threshold_seconds(fandango_poll)
     rank = 3
+    has_live_signal = False
     for name in target_names:
         t = target_by_name.get(str(name))
         if not isinstance(t, dict):
@@ -1235,7 +1237,45 @@ def _summarize_targets_status(
         st = t.get("state") if isinstance(t.get("state"), dict) else {}
         tier = _triage_tier(st, now=now, stale_threshold_sec=stale_thr)
         rank = min(rank, min(max(tier, 0), 3))
-    return ("error", "stale", "signal", "routine")[rank]
+        if tier == 2:
+            cur_l = str(st.get("current_state") or "").lower()
+            schema_l = str(st.get("last_release_schema") or "").lower()
+            if (
+                "partial" in schema_l
+                or "full" in schema_l
+                or "alert" in cur_l
+                or "purchas" in cur_l
+            ):
+                has_live_signal = True
+    status = ("error", "stale", "signal", "routine")[rank]
+    if status == "signal" and not has_live_signal:
+        return "routine"
+    return status
+
+
+def _poster_shelf_status_icon_html(status_key: str) -> str:
+    if status_key == "routine":
+        return ""
+    glyphs = {
+        "error": "!",
+        "stale": "⏱",
+        "signal": "●",
+    }
+    labels = {
+        "error": "Needs attention",
+        "stale": "Stale crawl",
+        "signal": "On-sale signal",
+    }
+    glyph = glyphs.get(status_key)
+    if not glyph:
+        return ""
+    label = html.escape(labels.get(status_key, status_key), quote=True)
+    glyph_esc = html.escape(glyph)
+    cls = html.escape(f"poster-shelf-status-icon poster-shelf-status-icon--{status_key}", quote=True)
+    return (
+        f'<span class="{cls}" title="{label}" aria-label="{label}">'
+        f'<span class="poster-shelf-status-glyph" aria-hidden="true">{glyph_esc}</span></span>'
+    )
 
 
 def _render_poster_shelf_tile(
@@ -1254,6 +1294,13 @@ def _render_poster_shelf_tile(
         "signal": "On-sale signal",
         "routine": "Routine watch",
     }
+    schema_labels = {
+        "not_on_sale": "Not on sale",
+        "showtimes_disclosed": "Showtimes disclosed",
+        "partial_release": "Partial release",
+        "full_release": "Full release",
+        "unknown": "Schema unknown",
+    }
     poster = _media_frame_html(
         variant="poster",
         src=poster_url,
@@ -1268,13 +1315,16 @@ def _render_poster_shelf_tile(
         f"poster-shelf-tile poster-shelf-tile--{status_key} poster-shelf-tile--schema-{schema_key}",
         quote=True,
     )
-    hint = html.escape(f"{title} · {status_labels[status_key]}", quote=True)
-    schema_badge = _schema_badge_html(schema_key, compact=True)
+    hint = html.escape(
+        f"{title} · {status_labels[status_key]} · {schema_labels.get(schema_key, schema_key)}",
+        quote=True,
+    )
+    status_icon = _poster_shelf_status_icon_html(status_key)
     return (
         f'<a class="{cls}" href="#movie-{mid}" data-movie-jump="{mid}" '
         f'data-poster-schema="{schema_esc}" title="{hint}">'
-        f"{poster}<span class=\"poster-shelf-label\">{label}</span>"
-        f'<span class="poster-shelf-schema">{schema_badge}</span></a>'
+        f'<span class="poster-shelf-poster-wrap">{poster}{status_icon}</span>'
+        f'<span class="poster-shelf-label">{label}</span></a>'
     )
 
 
@@ -1283,13 +1333,23 @@ def _render_poster_shelf(tiles: list[str]) -> str:
         return ""
     legend = (
         '<p class="poster-shelf-legend" aria-hidden="true">'
-        '<span class="poster-shelf-key poster-shelf-key--error">Attention</span>'
-        '<span class="poster-shelf-key poster-shelf-key--stale">Stale</span>'
-        '<span class="poster-shelf-key poster-shelf-key--signal">Signal</span>'
-        '<span class="poster-shelf-key poster-shelf-key--routine">Routine</span>'
-        '<span class="poster-shelf-key poster-shelf-key--schema-not-on-sale">Not on sale</span>'
-        '<span class="poster-shelf-key poster-shelf-key--schema-disclosed">Disclosed</span>'
-        '<span class="poster-shelf-key poster-shelf-key--schema-live">Live</span>'
+        '<span class="poster-shelf-legend-group poster-shelf-legend-group--status">'
+        '<span class="poster-shelf-key poster-shelf-key--status poster-shelf-key--error">'
+        '<span class="poster-shelf-status-glyph poster-shelf-status-glyph--error" aria-hidden="true">!</span>'
+        "Attention</span>"
+        '<span class="poster-shelf-key poster-shelf-key--status poster-shelf-key--stale">'
+        '<span class="poster-shelf-status-glyph poster-shelf-status-glyph--stale" aria-hidden="true">⏱</span>'
+        "Stale</span>"
+        '<span class="poster-shelf-key poster-shelf-key--status poster-shelf-key--signal">'
+        '<span class="poster-shelf-status-glyph poster-shelf-status-glyph--signal" aria-hidden="true">●</span>'
+        "Signal</span>"
+        "</span>"
+        '<span class="poster-shelf-legend-sep" aria-hidden="true">·</span>'
+        '<span class="poster-shelf-legend-group poster-shelf-legend-group--schema">'
+        '<span class="poster-shelf-key poster-shelf-key--schema poster-shelf-key--schema-not-on-sale">Not on sale</span>'
+        '<span class="poster-shelf-key poster-shelf-key--schema poster-shelf-key--schema-disclosed">Disclosed</span>'
+        '<span class="poster-shelf-key poster-shelf-key--schema poster-shelf-key--schema-live">Live</span>'
+        "</span>"
         "</p>"
     )
     return (
@@ -2758,30 +2818,57 @@ def dashboard_css() -> str:
     .poster-shelf-legend {
       display: flex;
       flex-wrap: wrap;
+      align-items: center;
       gap: 0.45rem 0.65rem;
       margin: 0 0 0.45rem;
       font-size: 0.68rem;
       color: var(--muted);
+    }
+    .poster-shelf-legend-group {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem 0.65rem;
+    }
+    .poster-shelf-legend-sep {
+      color: rgba(127, 127, 127, 0.55);
+      font-weight: 700;
+      user-select: none;
     }
     .poster-shelf-key {
       display: inline-flex;
       align-items: center;
       gap: 0.32rem;
     }
-    .poster-shelf-key::before {
+    .poster-shelf-key--schema::before {
       content: "";
       width: 0.62rem;
       height: 0.62rem;
       border-radius: 999px;
       border: 2px solid currentColor;
+      background: transparent;
     }
-    .poster-shelf-key--error { color: var(--bad); }
-    .poster-shelf-key--stale { color: var(--warn); }
-    .poster-shelf-key--signal { color: var(--ok); }
-    .poster-shelf-key--routine { color: var(--muted); }
+    .poster-shelf-key--status { color: var(--text); }
+    .poster-shelf-key--error .poster-shelf-status-glyph { background: var(--bad); }
+    .poster-shelf-key--stale .poster-shelf-status-glyph { background: var(--warn); color: #1d1d1f; }
+    .poster-shelf-key--signal .poster-shelf-status-glyph { background: var(--ok); }
     .poster-shelf-key--schema-not-on-sale { color: var(--muted); }
     .poster-shelf-key--schema-disclosed { color: #b8860b; }
     .poster-shelf-key--schema-live { color: var(--ok); }
+    .poster-shelf-status-glyph {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 0.95rem;
+      height: 0.95rem;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 0.58rem;
+      font-weight: 800;
+      line-height: 1;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    }
+    .poster-shelf-status-glyph--signal { font-size: 0.42rem; }
     .poster-shelf-tile {
       flex: 0 0 92px;
       scroll-snap-align: start;
@@ -2792,6 +2879,11 @@ def dashboard_css() -> str:
       text-decoration: none;
       color: inherit;
     }
+    .poster-shelf-poster-wrap {
+      position: relative;
+      width: 92px;
+      align-self: center;
+    }
     .poster-shelf-tile .media-frame--poster {
       width: 92px;
       border-radius: 12px;
@@ -2801,21 +2893,28 @@ def dashboard_css() -> str:
       transition: outline-color 0.18s ease, transform 0.18s ease;
     }
     .poster-shelf-tile:hover .media-frame--poster { transform: translateY(-1px); }
-    .poster-shelf-tile--error .media-frame--poster { outline-color: var(--bad); }
-    .poster-shelf-tile--stale .media-frame--poster { outline-color: var(--warn); }
-    .poster-shelf-tile--signal .media-frame--poster { outline-color: var(--ok); }
-    .poster-shelf-tile--routine .media-frame--poster { outline-color: rgba(142, 142, 147, 0.55); }
-    .poster-shelf-tile--schema-not-on-sale .media-frame--poster { outline-color: rgba(142, 142, 147, 0.55); }
+    .poster-shelf-tile--schema-not_on_sale .media-frame--poster,
+    .poster-shelf-tile--schema-unknown .media-frame--poster { outline-color: rgba(142, 142, 147, 0.55); }
     .poster-shelf-tile--schema-showtimes_disclosed .media-frame--poster { outline-color: rgba(255, 204, 0, 0.85); }
     .poster-shelf-tile--schema-partial_release .media-frame--poster,
     .poster-shelf-tile--schema-full_release .media-frame--poster { outline-color: var(--ok); }
-    .poster-shelf-schema {
-      display: block;
-      text-align: center;
-      transform: scale(0.82);
-      transform-origin: top center;
+    .poster-shelf-status-icon {
+      position: absolute;
+      top: -0.28rem;
+      right: -0.28rem;
+      z-index: 2;
+      pointer-events: none;
     }
-    .poster-shelf-schema .schema-label { display: none; }
+    .poster-shelf-status-icon .poster-shelf-status-glyph {
+      width: 1.05rem;
+      height: 1.05rem;
+      font-size: 0.62rem;
+      border: 2px solid var(--bg-elevated);
+    }
+    .poster-shelf-status-icon--signal .poster-shelf-status-glyph { font-size: 0.46rem; }
+    .poster-shelf-status-icon--error .poster-shelf-status-glyph { background: var(--bad); }
+    .poster-shelf-status-icon--stale .poster-shelf-status-glyph { background: var(--warn); color: #1d1d1f; }
+    .poster-shelf-status-icon--signal .poster-shelf-status-glyph { background: var(--ok); }
     .poster-shelf-tile.is-hidden { display: none; }
     .poster-shelf-label {
       display: block;

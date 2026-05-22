@@ -572,7 +572,46 @@ def test_watchlist_poster_shelf_status_outline() -> None:
     html_out = render_index_html(snap)
     assert "poster-shelf-tile--error" in html_out
     assert "poster-shelf-tile--signal" in html_out
+    assert "poster-shelf-status-icon" in html_out
+    assert "poster-shelf-legend-group--status" in html_out
+    assert "poster-shelf-legend-group--schema" in html_out
     assert 'data-movie-jump="' in html_out
+
+
+def test_poster_shelf_disclosed_schema_uses_outline_without_signal_icon() -> None:
+    from datetime import UTC, datetime
+
+    recent = datetime.now(UTC).replace(microsecond=0).isoformat()
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": recent, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "disclosed-only",
+                "url": "https://example.com/d",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "showtimes_disclosed",
+                    "last_showtime_count": 6,
+                    "last_buyable_showtime_count": 0,
+                    "last_success_at": recent,
+                },
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [
+            {
+                "key": "disclosed-movie",
+                "title": "Disclosed Movie",
+                "fandango_targets": ["disclosed-only"],
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert "poster-shelf-tile--schema-showtimes_disclosed" in html_out
+    assert 'class="poster-shelf-status-icon' not in html_out
+    assert "poster-shelf-tile--signal" not in html_out
 
 
 def test_watchlist_controls_and_movie_schema_sort_attributes() -> None:
