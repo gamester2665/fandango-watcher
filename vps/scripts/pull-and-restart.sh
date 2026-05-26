@@ -21,7 +21,14 @@ bash "$KIT/scripts/preflight.sh"
 vps_compose_cmd up -d --build "$VPS_COMPOSE_SERVICE"
 
 vps_compose_cmd ps
-curl -fsS "http://127.0.0.1:${VPS_HEALTHZ_PORT}${VPS_HEALTHZ_PATH}" || {
+for _ in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:${VPS_HEALTHZ_PORT}${VPS_HEALTHZ_PATH}" >/dev/null; then
+    curl -fsS "http://127.0.0.1:${VPS_HEALTHZ_PORT}${VPS_HEALTHZ_PATH}"
+    echo ""
+    break
+  fi
+  sleep 2
+done || {
   echo "healthz not ready yet; check compose logs ${VPS_COMPOSE_SERVICE}" >&2
   exit 1
 }
