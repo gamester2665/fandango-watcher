@@ -212,6 +212,7 @@ class TestNotify:
     ) -> None:
         events = set(config["notify"]["on_events"])  # type: ignore[index]
         required = {
+            "release_transition_showtimes_disclosed",
             "release_transition_bad_to_good",
             "purchase_succeeded",
             "purchase_halted_invariant",

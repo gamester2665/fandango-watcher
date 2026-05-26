@@ -192,6 +192,7 @@ notify:
   email_max_attachments: 5
   email_max_attachment_bytes: 6000000
   on_events:
+    - release_transition_showtimes_disclosed
     - release_transition_bad_to_good
     - purchase_succeeded
     - purchase_held_for_confirm

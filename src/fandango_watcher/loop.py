@@ -182,6 +182,40 @@ def build_notification(
             email_attachments=attachments,
         )
 
+    if event == Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED:
+        assert parsed is not None, "release_transition_showtimes_disclosed needs parsed"
+        subject = f"Showtimes disclosed: {target_name}"
+        body_lines = [
+            "Showtimes are visible on Fandango but not buyable yet.",
+            f"Target: {target_name}",
+            f"URL: {target_url}",
+            f"Release schema: {_schema_value(parsed)}",
+            f"Theaters: {parsed.theater_count}  Showtimes: {parsed.showtime_count}  Buyable: {parsed.buyable_showtime_count}",
+            (
+                f"CityWalk: present={parsed.citywalk_present} "
+                f"showtimes={parsed.citywalk_showtime_count} "
+                f"formats={list(parsed.citywalk_formats_seen)}"
+            ),
+        ]
+        attachments: list[tuple[str, Path]] = []
+        if (
+            notify is not None
+            and notify.attach_screenshots_to_email
+            and parsed.screenshot_path
+        ):
+            p = Path(parsed.screenshot_path)
+            try:
+                if p.is_file() and p.stat().st_size <= notify.email_max_attachment_bytes:
+                    attachments.append((p.name, p))
+            except OSError:
+                pass
+        return NotificationMessage(
+            event=event,
+            subject=subject,
+            body="\n".join(body_lines),
+            email_attachments=attachments,
+        )
+
     if event == Event.WATCHER_STUCK_ON_ERROR_STREAK:
         subject = f"Watcher stuck: {target_name}"
         streak = error_streak if error_streak is not None else "?"

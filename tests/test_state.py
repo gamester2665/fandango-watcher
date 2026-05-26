@@ -2,6 +2,8 @@
 
 Covers:
 
+* transition() fires release_transition_showtimes_disclosed on the
+  not_on_sale -> showtimes_disclosed edge (including the first-ever crawl)
 * transition() fires release_transition_bad_to_good exactly on the
   not_on_sale -> {partial, full} edge (including the first-ever crawl)
 * transition() does NOT re-fire on subsequent good crawls
@@ -167,18 +169,35 @@ class TestTransitionBadToGood:
         assert result.state.last_error_message is None
         assert result.state.consecutive_successes == 1
 
-    def test_not_on_sale_to_disclosed_does_not_fire(self) -> None:
+    def test_not_on_sale_to_disclosed_fires_disclosed_event(self) -> None:
         prev = TargetState(
             target_name="odyssey",
             last_release_schema=ReleaseSchema.NOT_ON_SALE,
             current_state=WatcherState.WATCHING,
         )
         result = transition(prev, _showtimes_disclosed(), now=NOW)
+        assert Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED in result.events
         assert Event.RELEASE_TRANSITION_BAD_TO_GOOD not in result.events
         assert result.state.current_state == WatcherState.WATCHING
         assert result.state.last_release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
         assert result.state.last_showtime_count == 4
         assert result.state.last_buyable_showtime_count == 0
+
+    def test_first_ever_disclosed_crawl_fires_disclosed_event(self) -> None:
+        prev = TargetState(target_name="odyssey")
+        result = transition(prev, _showtimes_disclosed(), now=NOW)
+        assert Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED in result.events
+        assert Event.RELEASE_TRANSITION_BAD_TO_GOOD not in result.events
+
+    def test_subsequent_disclosed_crawl_does_not_re_fire(self) -> None:
+        prev = TargetState(
+            target_name="odyssey",
+            last_release_schema=ReleaseSchema.SHOWTIMES_DISCLOSED,
+            current_state=WatcherState.WATCHING,
+        )
+        result = transition(prev, _showtimes_disclosed(), now=LATER)
+        assert Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED not in result.events
+        assert result.events == []
 
     def test_disclosed_to_partial_fires_event(self) -> None:
         prev = TargetState(

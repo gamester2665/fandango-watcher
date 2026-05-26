@@ -55,6 +55,7 @@ from fandango_watcher.models import (
     PartialReleasePageData,
     ReleaseSchema,
     Showtime,
+    ShowtimesDisclosedPageData,
     TheaterListing,
 )
 from fandango_watcher.notify import (
@@ -111,6 +112,20 @@ def _parsed_partial() -> PartialReleasePageData:
         citywalk_showtime_count=2,
         buyable_citywalk_showtime_count=2,
         ticket_url="https://fandango.com/ticketing/abc",
+    )
+
+
+def _parsed_disclosed() -> ShowtimesDisclosedPageData:
+    return ShowtimesDisclosedPageData(
+        url="https://fandango.com/x",
+        page_title="X",
+        theater_count=1,
+        showtime_count=4,
+        buyable_showtime_count=0,
+        buyable_theater_count=0,
+        citywalk_present=True,
+        citywalk_showtime_count=4,
+        buyable_citywalk_showtime_count=0,
     )
 
 
@@ -592,6 +607,21 @@ class TestBuildNotification:
         assert "partial_release" in msg.body
         assert "https://fandango.com/ticketing/abc" in msg.body
         assert "CityWalk" in msg.body or "citywalk" in msg.body.lower()
+
+    def test_showtimes_disclosed_body_has_key_fields(self) -> None:
+        parsed = _parsed_disclosed()
+        msg = build_notification(
+            Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED,
+            target_name="disclosure-day",
+            target_url="https://fandango.com/disclosure-day",
+            parsed=parsed,
+        )
+        assert msg.event == Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED
+        assert "Showtimes disclosed" in msg.subject
+        assert "not buyable yet" in msg.body
+        assert "showtimes_disclosed" in msg.body
+        assert "Buyable: 0" in msg.body
+        assert "Plan:" not in msg.body
 
     def test_release_attaches_screenshot_when_notify_flag_on(
         self, tmp_path: Path

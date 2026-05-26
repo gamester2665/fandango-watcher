@@ -42,6 +42,9 @@ class WatcherState(StrEnum):
 # ``notify.on_events`` YAML config can all reference the exact same string.
 class Event:
     RELEASE_TRANSITION_BAD_TO_GOOD: ClassVar[str] = "release_transition_bad_to_good"
+    RELEASE_TRANSITION_SHOWTIMES_DISCLOSED: ClassVar[str] = (
+        "release_transition_showtimes_disclosed"
+    )
     WATCHER_STUCK_ON_ERROR_STREAK: ClassVar[str] = "watcher_stuck_on_error_streak"
     DIRECT_API_UNKNOWN_FORMATS: ClassVar[str] = "direct_api_unknown_formats"
     DIRECT_API_FAILURE_STREAK: ClassVar[str] = "direct_api_failure_streak"
@@ -142,6 +145,22 @@ def _fires_bad_to_good(
     }
 
 
+def _fires_showtimes_disclosed(
+    prev_schema: ReleaseSchema | str | None,
+    new_schema: ReleaseSchema | str,
+) -> bool:
+    """True when visible showtimes appear but none are buyable yet."""
+    new_value = new_schema.value if isinstance(new_schema, ReleaseSchema) else new_schema
+    if new_value != ReleaseSchema.SHOWTIMES_DISCLOSED.value:
+        return False
+    if prev_schema is None:
+        return True
+    prev_value = (
+        prev_schema.value if isinstance(prev_schema, ReleaseSchema) else prev_schema
+    )
+    return prev_value == ReleaseSchema.NOT_ON_SALE.value
+
+
 def transition(
     prev: TargetState,
     parsed: ParsedPageData,
@@ -152,6 +171,8 @@ def transition(
 
     Fired events (by name, matching ``notify.on_events``):
 
+    * ``release_transition_showtimes_disclosed`` — previous schema was None or
+      ``not_on_sale`` and current is ``showtimes_disclosed``.
     * ``release_transition_bad_to_good`` — previous schema was None,
       ``not_on_sale``, or ``showtimes_disclosed`` and current is
       ``partial_release``/``full_release``. This is the core "tickets just
@@ -161,6 +182,8 @@ def transition(
     new_schema = parsed.release_schema
 
     events: list[str] = []
+    if _fires_showtimes_disclosed(prev.last_release_schema, new_schema):
+        events.append(Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED)
     if _fires_bad_to_good(prev.last_release_schema, new_schema):
         events.append(Event.RELEASE_TRANSITION_BAD_TO_GOOD)
 
