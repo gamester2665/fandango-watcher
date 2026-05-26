@@ -1,6 +1,7 @@
 # Pull latest main on the fandango VPS, ensure disclosed SMS is configured, rebuild watcher.
 #
 # Requires repository secret: VPS_SSH_PASSWORD
+# Uses Cloudflare Tunnel SSH (fandango-ssh.geobregon.com) when direct port 22 is blocked.
 # Manual: Actions → VPS deploy watcher → Run workflow
 
 name: VPS deploy watcher
@@ -15,46 +16,75 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     permissions:
       contents: read
     steps:
-      - name: Deploy on VPS
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: 74.48.91.123
-          username: root
-          password: ${{ secrets.VPS_SSH_PASSWORD }}
-          command_timeout: 25m
-          script: |
-            set -euo pipefail
-            cd /root/fandango-watcher
-            if [[ ! -f docker-compose.yml ]]; then
-              echo "missing /root/fandango-watcher/docker-compose.yml" >&2
-              exit 1
+      - uses: actions/checkout@v4
+
+      - name: Install cloudflared and sshpass
+        run: |
+          set -euo pipefail
+          curl -L --fail -o cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          sudo mv cloudflared /usr/local/bin/cloudflared
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+
+      - name: Deploy on VPS via Cloudflare Tunnel SSH
+        env:
+          VPS_SSH_PASSWORD: ${{ secrets.VPS_SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cloudflared access tcp \
+            --hostname fandango-ssh.geobregon.com \
+            --url 127.0.0.1:10022 &
+          CF_PID=$!
+          cleanup() { kill "$CF_PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for i in $(seq 1 30); do
+            if (echo >/dev/tcp/127.0.0.1/10022) >/dev/null 2>&1; then
+              break
             fi
-            if [[ -f config.yaml ]] && ! grep -q 'release_transition_showtimes_disclosed' config.yaml; then
-              python3 - <<'PY'
-            from pathlib import Path
-            path = Path("config.yaml")
-            text = path.read_text(encoding="utf-8")
-            needle = "    - release_transition_bad_to_good"
-            event = "    - release_transition_showtimes_disclosed"
-            if event not in text and needle in text:
-                text = text.replace(needle, event + "\n" + needle, 1)
-                path.write_text(text, encoding="utf-8")
-                print("patched config.yaml: added release_transition_showtimes_disclosed")
-            elif event in text:
-                print("config.yaml already has release_transition_showtimes_disclosed")
-            else:
-                print("WARN: could not patch config.yaml automatically; add event manually", flush=True)
-            PY
-            fi
-            export VPS_PROJECT_ENV='/root/fandango-watcher/vps/projects/fandango-watcher.env'
-            export VPS_PROJECT_NAME='fandango-watcher'
-            docker builder prune -f >/dev/null 2>&1 || true
-            bash vps/scripts/pull-and-restart.sh
-            echo "deployed commit: $(git log -1 --oneline)"
-            curl -fsS http://127.0.0.1:8787/healthz | head -c 500
-            echo ""
-            grep -n 'release_transition' config.yaml | head -10 || true
+            sleep 1
+          done
+          sshpass -e ssh \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ConnectTimeout=60 \
+            -p 10022 \
+            root@127.0.0.1 \
+            'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /root/fandango-watcher
+          if [[ ! -f docker-compose.yml ]]; then
+            echo "missing /root/fandango-watcher/docker-compose.yml" >&2
+            exit 1
+          fi
+          if [[ -f config.yaml ]] && ! grep -q 'release_transition_showtimes_disclosed' config.yaml; then
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path("config.yaml")
+          text = path.read_text(encoding="utf-8")
+          needle = "    - release_transition_bad_to_good"
+          event = "    - release_transition_showtimes_disclosed"
+          if event not in text and needle in text:
+              text = text.replace(needle, event + "\n" + needle, 1)
+              path.write_text(text, encoding="utf-8")
+              print("patched config.yaml: added release_transition_showtimes_disclosed")
+          elif event in text:
+              print("config.yaml already has release_transition_showtimes_disclosed")
+          else:
+              print("WARN: could not patch config.yaml automatically", flush=True)
+          PY
+          fi
+          export VPS_PROJECT_ENV='/root/fandango-watcher/vps/projects/fandango-watcher.env'
+          export VPS_PROJECT_NAME='fandango-watcher'
+          docker builder prune -f >/dev/null 2>&1 || true
+          bash vps/scripts/pull-and-restart.sh
+          echo "deployed commit: $(git log -1 --oneline)"
+          curl -fsS http://127.0.0.1:8787/healthz
+          echo ""
+          grep -n 'release_transition' config.yaml | head -10 || true
+          REMOTE
