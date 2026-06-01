@@ -34,11 +34,24 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .artifacts import prune_artifact_trees
-from .config import NotifyConfig, PurchaseConfig, Settings, WatcherConfig, plain_secret
+from .config import (
+    HourAlignConfig,
+    NotifyConfig,
+    PollConfig,
+    PurchaseConfig,
+    Settings,
+    WatcherConfig,
+    plain_secret,
+)
 from .dashboard import DashboardData, DashboardPaths
-from .direct_api_detect import DirectApiDetectionMeta, detect_target_direct_api
+from .direct_api_detect import (
+    DirectApiDetectionMeta,
+    _wanted_formats,
+    detect_target_direct_api,
+)
 from .fandango_api import FandangoApiClient
 from .fandango_api import FandangoApiError
 from .healthz import HealthzContext, Heartbeat, start_healthz_server
@@ -49,7 +62,15 @@ from .notify import (
     NotificationMessage,
     build_notifier,
 )
+from .movie_watch import process_movies_after_tick
+from .movie_watch_state import load_movie_watch_state
 from .purchase import PurchaseAttempt, PurchaseOutcome, plan_purchase
+from .release_notify import (
+    append_notification_log,
+    mark_persistent_release_notify,
+    should_send_persistent_release_notify,
+)
+from .schedule_intel import find_pinned_showtime_in_parsed
 from .purchaser import run_scripted_purchase
 from .social_x import XSignalMatch, check_x_signals
 from .state import (
@@ -365,6 +386,25 @@ def build_purchase_outcome_notification(
 # Dispatch helpers
 # -----------------------------------------------------------------------------
 
+_RELEASE_NOTIFY_DEDUPE_EVENTS = frozenset({
+    Event.RELEASE_TRANSITION_BAD_TO_GOOD,
+    Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED,
+})
+
+
+def _movie_action_key(cfg: WatcherConfig, target_name: str) -> str:
+    """Stable key for per-tick dedupe when several targets map to one movie."""
+    movie = cfg.movie_for_target(target_name)
+    if movie is not None:
+        return f"movie:{movie.key}"
+    return f"target:{target_name}"
+
+
+def _notify_dedupe_key(cfg: WatcherConfig, *, target_name: str, event: str) -> str | None:
+    if event not in _RELEASE_NOTIFY_DEDUPE_EVENTS:
+        return None
+    return f"{event}:{_movie_action_key(cfg, target_name)}"
+
 
 def _emit_events(
     notifier: FanOutNotifier,
@@ -375,11 +415,36 @@ def _emit_events(
     target_url: str,
     parsed: ParsedPageData | None,
     error: BaseException | None,
+    notified_keys: set[str] | None = None,
+    state_dir: Path | None = None,
 ) -> list[ChannelResult]:
     all_results: list[ChannelResult] = []
+    movie = cfg.movie_for_target(target_name)
+    movie_key = movie.key if movie is not None else None
     for event in result.events:
         if event not in cfg.notify.on_events:
             logger.debug("event %s not in notify.on_events; skipping", event)
+            continue
+        dedupe_key = _notify_dedupe_key(cfg, target_name=target_name, event=event)
+        if dedupe_key and notified_keys is not None:
+            if dedupe_key in notified_keys:
+                logger.info(
+                    "skipping duplicate notify event=%s target=%s dedupe_key=%s",
+                    event,
+                    target_name,
+                    dedupe_key,
+                )
+                continue
+            notified_keys.add(dedupe_key)
+        if not should_send_persistent_release_notify(
+            state_dir, cfg, target_name=target_name, event=event
+        ):
+            logger.info(
+                "skipping persistent duplicate notify event=%s target=%s movie=%s",
+                event,
+                target_name,
+                movie_key,
+            )
             continue
         msg = build_notification(
             event,
@@ -397,7 +462,23 @@ def _emit_events(
             target_name,
             notifier.channel_names,
         )
-        all_results.extend(notifier.send(msg))
+        channel_results = notifier.send(msg)
+        all_results.extend(channel_results)
+        ok_channels = [r.name for r in channel_results if r.ok]
+        if ok_channels:
+            mark_persistent_release_notify(
+                state_dir,
+                cfg,
+                target_name=target_name,
+                event=event,
+            )
+            append_notification_log(
+                state_dir,
+                event=event,
+                target_name=target_name,
+                movie_key=movie_key,
+                channels_ok=ok_channels,
+            )
     return all_results
 
 
@@ -581,6 +662,77 @@ def _next_sleep_seconds(
         return min(base, float(cap_seconds))
     factor = backoff_multiplier ** max(0, consecutive_errors - 1)
     return min(base * factor, float(cap_seconds))
+
+
+def _hour_align_active(now_local: datetime, hours: list[int]) -> bool:
+    if not hours:
+        return True
+    return now_local.hour in hours
+
+
+def _next_local_hour_boundary(now_local: datetime, hours: list[int]) -> datetime | None:
+    """Next local :00:00 at an allowed hour, strictly after ``now_local``."""
+    allowed = set(range(24)) if not hours else set(hours)
+    candidate = now_local.replace(minute=0, second=0, microsecond=0)
+    if now_local >= candidate:
+        candidate += timedelta(hours=1)
+    for _ in range(25):
+        if candidate.hour in allowed and candidate > now_local:
+            return candidate
+        candidate += timedelta(hours=1)
+    return None
+
+
+def _resolve_hour_align_timezone(hour_align: HourAlignConfig, fallback_tz: str) -> str:
+    return hour_align.timezone or fallback_tz
+
+
+def _next_sleep_seconds_with_hour_align(
+    *,
+    poll: PollConfig,
+    timezone: str,
+    consecutive_errors: int,
+    rng: random.Random,
+    now: datetime | None = None,
+) -> float:
+    """Sleep duration with optional snap-to-:00 and post-hour burst polling."""
+    base = _next_sleep_seconds(
+        min_seconds=poll.min_seconds,
+        max_seconds=poll.max_seconds,
+        backoff_multiplier=poll.error_backoff_multiplier,
+        cap_seconds=poll.error_backoff_cap_seconds,
+        consecutive_errors=consecutive_errors,
+        rng=rng,
+    )
+    ha = poll.hour_align
+    if not ha.enabled or consecutive_errors > 0:
+        return base
+
+    now_utc = now if now is not None else datetime.now(UTC)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=UTC)
+    now_local = now_utc.astimezone(ZoneInfo(_resolve_hour_align_timezone(ha, timezone)))
+
+    if (
+        ha.burst_seconds > 0
+        and _hour_align_active(now_local, ha.hours)
+    ):
+        elapsed_in_hour = (
+            now_local.minute * 60
+            + now_local.second
+            + now_local.microsecond / 1_000_000.0
+        )
+        if elapsed_in_hour < ha.burst_seconds:
+            burst = rng.uniform(ha.burst_min_seconds, ha.burst_max_seconds)
+            return min(burst, float(poll.error_backoff_cap_seconds))
+
+    boundary = _next_local_hour_boundary(now_local, ha.hours)
+    if boundary is not None:
+        secs_until = (boundary - now_local).total_seconds()
+        if 0 < secs_until <= ha.snap_lead_seconds:
+            return max(1.0, secs_until)
+
+    return base
 
 
 # -----------------------------------------------------------------------------
@@ -873,6 +1025,9 @@ def run_watch(
                     )
 
             try:
+                tick_notified_keys: set[str] = set()
+                tick_purchased_keys: set[str] = set()
+                tick_parsed_by_target: dict[str, ParsedPageData] = {}
                 for target in cfg.targets:
                     if local_stop.is_set():
                         break
@@ -915,6 +1070,8 @@ def run_watch(
                                     target_url=target.url,
                                     parsed=None,
                                     error=e,
+                                    notified_keys=tick_notified_keys,
+                                    state_dir=state_dir,
                                 )
                                 continue
                             logger.warning(
@@ -967,6 +1124,8 @@ def run_watch(
                                     target_url=target.url,
                                     parsed=None,
                                     error=browser_error,
+                                    notified_keys=tick_notified_keys,
+                                    state_dir=state_dir,
                                 )
                                 continue
                     elif use_shared_playwright:
@@ -996,6 +1155,8 @@ def run_watch(
                                 target_url=target.url,
                                 parsed=None,
                                 error=crawl_error,
+                                notified_keys=tick_notified_keys,
+                                state_dir=state_dir,
                             )
                             continue
                         parsed = raw_out
@@ -1033,6 +1194,8 @@ def run_watch(
                                 target_url=target.url,
                                 parsed=None,
                                 error=e,
+                                notified_keys=tick_notified_keys,
+                                state_dir=state_dir,
                             )
                             continue
 
@@ -1061,6 +1224,7 @@ def run_watch(
                         ok_result.events.append(Event.DIRECT_API_FAILURE_STREAK)
                     target_states[target.name] = ok_state
                     save_target_state(state_dir, ok_state)
+                    tick_parsed_by_target[target.name] = parsed
                     _emit_events(
                         notify_impl,
                         result=ok_result,
@@ -1069,6 +1233,8 @@ def run_watch(
                         target_url=target.url,
                         parsed=parsed,
                         error=None,
+                        notified_keys=tick_notified_keys,
+                        state_dir=state_dir,
                     )
 
                     if (
@@ -1076,57 +1242,105 @@ def run_watch(
                         and cfg.purchase.enabled
                         and cfg.purchase.mode in ("full_auto", "hold_and_confirm")
                     ):
-                        buy_plan = plan_purchase(
-                            parsed,
-                            target_name=target.name,
-                            purchase_cfg=cfg.purchase,
-                        )
-                        if buy_plan is not None:
-                            art_root = (
-                                purchase_artifacts_dir
-                                if purchase_artifacts_dir is not None
-                                else Path(cfg.screenshots.per_purchase_dir)
+                        purchase_key = _movie_action_key(cfg, target.name)
+                        if purchase_key in tick_purchased_keys:
+                            logger.info(
+                                "skipping duplicate purchase target=%s purchase_key=%s",
+                                target.name,
+                                purchase_key,
                             )
-                            try:
-                                attempt = purchase_impl(
-                                    buy_plan,
-                                    browser_cfg=cfg.browser,
-                                    purchase_cfg=cfg.purchase,
-                                    per_purchase_dir=art_root,
-                                    hold_for_confirm=(
-                                        cfg.purchase.mode == "hold_and_confirm"
-                                    ),
-                                    settings=settings,
-                                    agent_fallback_cfg=cfg.agent_fallback,
-                                )
-                            except Exception as e:  # noqa: BLE001
-                                logger.exception(
-                                    "purchase_fn raised target=%s", target.name
-                                )
-                                attempt = PurchaseAttempt(
-                                    plan=buy_plan,
-                                    started_at=datetime.now(UTC),
-                                    finished_at=datetime.now(UTC),
-                                    outcome=PurchaseOutcome.FAILED_SCRIPTED,
-                                    error_message=f"{type(e).__name__}: {e}",
-                                )
-                            _emit_purchase_outcome(
-                                notify_impl,
-                                cfg,
-                                attempt=attempt,
+                        else:
+                            only_url: str | None = None
+                            only_label: str | None = None
+                            if cfg.pin_watch.prefer_pin_for_purchase:
+                                movie = cfg.movie_for_target(target.name)
+                                if movie is not None:
+                                    mws = load_movie_watch_state(
+                                        state_dir, movie.key
+                                    )
+                                    wanted = _wanted_formats(target, cfg)
+                                    for pin in mws.pinned_showtimes:
+                                        st = find_pinned_showtime_in_parsed(
+                                            parsed, pin, wanted_formats=wanted
+                                        )
+                                        if (
+                                            st is not None
+                                            and st.is_buyable
+                                            and st.ticket_url
+                                        ):
+                                            only_url = st.ticket_url
+                                            only_label = pin.time_label
+                                            break
+                            buy_plan = plan_purchase(
+                                parsed,
                                 target_name=target.name,
-                                target_url=target.url,
+                                purchase_cfg=cfg.purchase,
+                                only_showtime_url=only_url,
+                                only_showtime_label=only_label,
                             )
-                            append_purchase_jsonl(
-                                state_dir,
-                                {
-                                    "target": target.name,
-                                    "at": datetime.now(UTC).isoformat(),
-                                    "attempt": attempt.model_dump(mode="json"),
-                                },
-                                max_bytes=cfg.purchase_audit.max_bytes,
-                                keep_rotated=cfg.purchase_audit.keep_rotated,
-                            )
+                            if buy_plan is not None:
+                                tick_purchased_keys.add(purchase_key)
+                                art_root = (
+                                    purchase_artifacts_dir
+                                    if purchase_artifacts_dir is not None
+                                    else Path(cfg.screenshots.per_purchase_dir)
+                                )
+                                try:
+                                    attempt = purchase_impl(
+                                        buy_plan,
+                                        browser_cfg=cfg.browser,
+                                        purchase_cfg=cfg.purchase,
+                                        per_purchase_dir=art_root,
+                                        hold_for_confirm=(
+                                            cfg.purchase.mode == "hold_and_confirm"
+                                        ),
+                                        settings=settings,
+                                        agent_fallback_cfg=cfg.agent_fallback,
+                                    )
+                                except Exception as e:  # noqa: BLE001
+                                    logger.exception(
+                                        "purchase_fn raised target=%s", target.name
+                                    )
+                                    attempt = PurchaseAttempt(
+                                        plan=buy_plan,
+                                        started_at=datetime.now(UTC),
+                                        finished_at=datetime.now(UTC),
+                                        outcome=PurchaseOutcome.FAILED_SCRIPTED,
+                                        error_message=f"{type(e).__name__}: {e}",
+                                    )
+                                _emit_purchase_outcome(
+                                    notify_impl,
+                                    cfg,
+                                    attempt=attempt,
+                                    target_name=target.name,
+                                    target_url=target.url,
+                                )
+                                append_purchase_jsonl(
+                                    state_dir,
+                                    {
+                                        "target": target.name,
+                                        "at": datetime.now(UTC).isoformat(),
+                                        "attempt": attempt.model_dump(mode="json"),
+                                    },
+                                    max_bytes=cfg.purchase_audit.max_bytes,
+                                    keep_rotated=cfg.purchase_audit.keep_rotated,
+                                )
+
+                try:
+                    process_movies_after_tick(
+                        cfg,
+                        settings,
+                        state_dir=state_dir,
+                        notifier=notify_impl,
+                        tick_parsed_by_target=tick_parsed_by_target,
+                        api_client=direct_api_client,
+                        calendar_dates=shared_calendar_dates,
+                        notified_keys=tick_notified_keys,
+                        healthz_host=healthz_host,
+                        healthz_port=healthz_port or 8787,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("movie schedule/pin processing failed")
             finally:
                 if direct_api_client is not None:
                     direct_api_client.close()
@@ -1158,19 +1372,18 @@ def run_watch(
                     target_states[t.name].consecutive_errors for t in cfg.targets
                 )
             )
-            sleep_seconds = _next_sleep_seconds(
-                min_seconds=cfg.poll.min_seconds,
-                max_seconds=cfg.poll.max_seconds,
-                backoff_multiplier=cfg.poll.error_backoff_multiplier,
-                cap_seconds=cfg.poll.error_backoff_cap_seconds,
+            sleep_seconds = _next_sleep_seconds_with_hour_align(
+                poll=cfg.poll,
+                timezone=settings.tz,
                 consecutive_errors=err_for_sleep,
                 rng=rng_impl,
             )
             logger.debug(
-                "sleeping %.1fs (err_for_sleep=%d tick_had_ok=%s)",
+                "sleeping %.1fs (err_for_sleep=%d tick_had_ok=%s hour_align=%s)",
                 sleep_seconds,
                 err_for_sleep,
                 tick_had_successful_crawl,
+                cfg.poll.hour_align.enabled,
             )
             sleep_impl(sleep_seconds)
     finally:

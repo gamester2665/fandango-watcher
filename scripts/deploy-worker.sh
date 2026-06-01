@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Deploy the Cloudflare Python Worker (wrangler.toml + pywrangler).
-# Prereqs: Node.js (for npx wrangler), `uv`, and Cloudflare auth (`wrangler login`
-# in an interactive shell, or CLOUDFLARE_API_TOKEN for CI/agents).
+# Deploy the Cloudflare Python Worker (wrangler.toml + npx wrangler).
+# Uses ``wrangler deploy`` directly (bundles src/cloudflare_worker/*.py). Avoid
+# ``pywrangler deploy`` on Windows — it can spawn thousands of python.exe workers.
+# Prereqs: Node.js (npx wrangler) and Cloudflare auth (wrangler login or
+# CLOUDFLARE_API_TOKEN for CI/agents).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -94,5 +96,10 @@ if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
   _deploy_hide_env_token
 fi
 
-uv sync --group dev --no-default-groups
-exec uv run pywrangler deploy "$@"
+# Cap uv parallelism so Windows does not spawn thousands of python.exe workers.
+export UV_CONCURRENT_BUILDS="${UV_CONCURRENT_BUILDS:-1}"
+export UV_CONCURRENT_DOWNLOADS="${UV_CONCURRENT_DOWNLOADS:-2}"
+export UV_CONCURRENT_INSTALLS="${UV_CONCURRENT_INSTALLS:-1}"
+
+# workers-py bundles deps into python_modules/ then wrangler uploads (required).
+exec uvx --from workers-py pywrangler deploy "$@"

@@ -199,6 +199,23 @@ class TestTransitionBadToGood:
         assert Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED not in result.events
         assert result.events == []
 
+    def test_api_empty_read_does_not_downgrade_disclosed_schema(self) -> None:
+        prev = TargetState(
+            target_name="supergirl",
+            last_release_schema=ReleaseSchema.SHOWTIMES_DISCLOSED,
+            current_state=WatcherState.WATCHING,
+        )
+        empty = NotOnSalePageData(
+            url="https://fandango.com/x",
+            page_title="X",
+            theater_count=0,
+            showtime_count=0,
+            schema_evidence=["direct_api", "direct_api_no_matching_showtimes"],
+        )
+        result = transition(prev, empty, now=LATER)
+        assert result.events == []
+        assert result.state.last_release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+
     def test_disclosed_to_partial_fires_event(self) -> None:
         prev = TargetState(
             target_name="odyssey",

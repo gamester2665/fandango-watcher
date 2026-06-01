@@ -96,6 +96,7 @@ async def run_tick(env: Any):
     notifier = build_notifier(cfg.notify, settings)
 
     results = []
+    tick_notified_keys: set[str] = set()
     for target in cfg.targets:
         prev_state = await state_provider.load_target_state(target.name)
 
@@ -131,6 +132,7 @@ async def run_tick(env: Any):
                 target_url=target.url,
                 parsed=parsed,
                 error=None,
+                notified_keys=tick_notified_keys,
             )
             results.append({"target": target.name, "status": "ok"})
 
@@ -147,6 +149,7 @@ async def run_tick(env: Any):
                 target_url=target.url,
                 parsed=None,
                 error=e,
+                notified_keys=tick_notified_keys,
             )
             results.append({"target": target.name, "status": "error", "message": str(e)})
 

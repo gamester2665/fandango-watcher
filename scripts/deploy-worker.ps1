@@ -1,6 +1,6 @@
-# Deploy the Cloudflare Python Worker (wrangler.toml + pywrangler).
-# Prereqs: Node.js (for npx wrangler), uv, and Cloudflare auth (wrangler login
-# or CLOUDFLARE_API_TOKEN).
+# Deploy the Cloudflare Python Worker.
+# On Windows, prefer: bash scripts/deploy-worker-gha.sh  (GitHub Actions — no local python storm)
+# Or: bash scripts/deploy-worker.sh  (uvx pywrangler; may hang on pyodide — use GHA if so)
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 
@@ -43,5 +43,7 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-uv sync --group dev --no-default-groups
-uv run pywrangler deploy @args
+$env:UV_CONCURRENT_BUILDS = if ($env:UV_CONCURRENT_BUILDS) { $env:UV_CONCURRENT_BUILDS } else { "1" }
+$env:UV_CONCURRENT_DOWNLOADS = if ($env:UV_CONCURRENT_DOWNLOADS) { $env:UV_CONCURRENT_DOWNLOADS } else { "2" }
+$env:UV_CONCURRENT_INSTALLS = if ($env:UV_CONCURRENT_INSTALLS) { $env:UV_CONCURRENT_INSTALLS } else { "1" }
+uvx --from workers-py pywrangler deploy @args

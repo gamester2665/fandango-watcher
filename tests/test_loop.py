@@ -30,6 +30,8 @@ import pytest
 from fandango_watcher.config import (
     BrowserConfig,
     DirectApiConfig,
+    HourAlignConfig,
+    MovieConfig,
     NotifyConfig,
     PollConfig,
     PurchaseConfig,
@@ -42,7 +44,9 @@ from fandango_watcher.config import (
 )
 from fandango_watcher.loop import (
     ERROR_STREAK_THRESHOLD,
+    _next_local_hour_boundary,
     _next_sleep_seconds,
+    _next_sleep_seconds_with_hour_align,
     append_purchase_jsonl,
     build_notification,
     build_purchase_outcome_notification,
@@ -387,6 +391,194 @@ class TestRunWatchHappyPath:
         assert cap2.sent == []
 
 
+class TestReleaseNotifyDedupe:
+    def _two_target_movie_cfg(self, tmp_path: Path) -> WatcherConfig:
+        return WatcherConfig(
+            targets=[
+                TargetConfig(
+                    name="odyssey-overview",
+                    url="https://fandango.com/odyssey-overview",
+                ),
+                TargetConfig(
+                    name="odyssey-imax-70mm",
+                    url="https://fandango.com/odyssey-imax-70mm",
+                ),
+            ],
+            movies=[
+                MovieConfig(
+                    key="odyssey",
+                    title="The Odyssey",
+                    fandango_targets=["odyssey-overview", "odyssey-imax-70mm"],
+                ),
+            ],
+            theater=TheaterConfig(
+                display_name="AMC Universal CityWalk",
+                fandango_theater_anchor="AMC Universal CityWalk",
+            ),
+            formats={"require": ["IMAX", "IMAX_70MM"], "include": []},  # type: ignore[arg-type]
+            poll=PollConfig(
+                min_seconds=30,
+                max_seconds=30,
+                error_backoff_multiplier=2.0,
+                error_backoff_cap_seconds=1800,
+            ),
+            purchase={"enabled": False, "mode": "notify_only", "seat_priority": {}},  # type: ignore[arg-type]
+            notify=NotifyConfig(
+                channels=["twilio"],
+                on_events=[
+                    Event.RELEASE_TRANSITION_BAD_TO_GOOD,
+                    Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED,
+                ],
+            ),
+            browser=BrowserConfig(
+                headless=True,
+                user_data_dir=str(tmp_path / "profile"),
+                viewport=ViewportConfig(),
+            ),
+            direct_api={"enabled": False},
+        )
+
+    def test_one_release_sms_when_two_targets_share_movie(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = self._two_target_movie_cfg(tmp_path)
+
+        def fake_crawl(target, **kwargs: Any):  # type: ignore[no-untyped-def]
+            return _parsed_partial()
+
+        capture = _CapturingNotifier()
+        run_watch(
+            cfg,
+            _settings(),
+            state_dir=tmp_path / "state",
+            screenshot_dir=None,
+            crawl_fn=fake_crawl,
+            notifier=_fanout(capture),
+            healthz_port=None,
+            sleep_fn=lambda _s: None,
+            max_ticks=1,
+        )
+
+        release_msgs = [
+            m
+            for m in capture.sent
+            if m.event == Event.RELEASE_TRANSITION_BAD_TO_GOOD
+        ]
+        assert len(release_msgs) == 1
+
+    def test_one_disclosed_sms_per_movie_across_flapping_ticks(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = _minimal_cfg(tmp_path).model_copy(
+            update={
+                "movies": [
+                    MovieConfig(
+                        key="odyssey",
+                        title="Odyssey",
+                        fandango_targets=["odyssey"],
+                    )
+                ],
+                "notify": NotifyConfig(
+                    channels=["twilio"],
+                    on_events=[Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED],
+                ),
+            }
+        )
+        calls = 0
+
+        def fake_crawl(target, **kwargs: Any):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _parsed_not_on_sale()
+            if calls == 2:
+                return _parsed_disclosed()
+            if calls == 3:
+                return _parsed_not_on_sale()
+            return _parsed_disclosed()
+
+        capture = _CapturingNotifier()
+        run_watch(
+            cfg,
+            _settings(),
+            state_dir=tmp_path / "state",
+            screenshot_dir=None,
+            crawl_fn=fake_crawl,
+            notifier=_fanout(capture),
+            healthz_port=None,
+            sleep_fn=lambda _s: None,
+            max_ticks=4,
+        )
+
+        disclosed_msgs = [
+            m
+            for m in capture.sent
+            if m.event == Event.RELEASE_TRANSITION_SHOWTIMES_DISCLOSED
+        ]
+        assert len(disclosed_msgs) == 1
+
+    def test_one_purchase_attempt_when_two_targets_share_movie(
+        self, tmp_path: Path
+    ) -> None:
+        cfg = self._two_target_movie_cfg(tmp_path).model_copy(
+            update={
+                "purchase": PurchaseConfig(
+                    enabled=True,
+                    mode="full_auto",
+                    seat_priority={
+                        "IMAX_70MM": SeatPrefEntry(
+                            auditorium=19, seats=["N10", "N11"]
+                        ),
+                    },
+                ),
+                "notify": NotifyConfig(
+                    channels=["twilio"],
+                    on_events=[
+                        Event.RELEASE_TRANSITION_BAD_TO_GOOD,
+                        Event.PURCHASE_SUCCEEDED,
+                    ],
+                ),
+            }
+        )
+
+        def fake_crawl(target, **kwargs: Any):  # type: ignore[no-untyped-def]
+            return _parsed_citywalk_imax_buyable()
+
+        calls: list[PurchasePlan] = []
+
+        def fake_purchase(plan: PurchasePlan, **kwargs: Any) -> PurchaseAttempt:
+            calls.append(plan)
+            return PurchaseAttempt(
+                plan=plan,
+                started_at=datetime.now(UTC),
+                finished_at=datetime.now(UTC),
+                outcome=PurchaseOutcome.SUCCESS,
+            )
+
+        capture = _CapturingNotifier()
+        run_watch(
+            cfg,
+            _settings(),
+            state_dir=tmp_path / "state",
+            screenshot_dir=None,
+            crawl_fn=fake_crawl,
+            notifier=_fanout(capture),
+            healthz_port=None,
+            sleep_fn=lambda _s: None,
+            max_ticks=1,
+            purchase_fn=fake_purchase,
+        )
+
+        assert len(calls) == 1
+        release_msgs = [
+            m
+            for m in capture.sent
+            if m.event == Event.RELEASE_TRANSITION_BAD_TO_GOOD
+        ]
+        assert len(release_msgs) == 1
+        assert sum(1 for m in capture.sent if m.event == Event.PURCHASE_SUCCEEDED) == 1
+
+
 # -----------------------------------------------------------------------------
 # run_watch error paths
 # -----------------------------------------------------------------------------
@@ -517,6 +709,90 @@ class TestNextSleepSeconds:
             rng=rng,
         )
         assert s_capped == 1800.0
+
+
+class TestHourAlignSleep:
+    def test_next_boundary_finds_upcoming_hour(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        now = datetime(2026, 5, 27, 5, 55, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
+        boundary = _next_local_hour_boundary(now, [5, 6, 7])
+        assert boundary == datetime(2026, 5, 27, 6, 0, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+
+    def test_snaps_sleep_to_next_hour_when_within_lead(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        poll = PollConfig(
+            min_seconds=270,
+            max_seconds=330,
+            hour_align=HourAlignConfig(
+                enabled=True,
+                hours=[6, 7],
+                snap_lead_seconds=600,
+                burst_seconds=0,
+            ),
+        )
+        now = datetime(2026, 5, 27, 5, 55, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+        sleep = _next_sleep_seconds_with_hour_align(
+            poll=poll,
+            timezone="America/Los_Angeles",
+            consecutive_errors=0,
+            rng=random.Random(0),
+            now=now,
+        )
+        assert sleep == pytest.approx(300.0)
+
+    def test_burst_polls_right_after_hour(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        poll = PollConfig(
+            min_seconds=270,
+            max_seconds=330,
+            hour_align=HourAlignConfig(
+                enabled=True,
+                hours=[6],
+                burst_seconds=120,
+                burst_min_seconds=30,
+                burst_max_seconds=45,
+            ),
+        )
+        now = datetime(2026, 5, 27, 6, 0, 10, tzinfo=ZoneInfo("America/Los_Angeles"))
+        sleep = _next_sleep_seconds_with_hour_align(
+            poll=poll,
+            timezone="America/Los_Angeles",
+            consecutive_errors=0,
+            rng=random.Random(0),
+            now=now,
+        )
+        assert 30 <= sleep <= 45
+
+    def test_disabled_uses_normal_jitter(self) -> None:
+        poll = PollConfig(min_seconds=300, max_seconds=300)
+        sleep = _next_sleep_seconds_with_hour_align(
+            poll=poll,
+            timezone="America/Los_Angeles",
+            consecutive_errors=0,
+            rng=random.Random(42),
+        )
+        assert sleep == pytest.approx(300.0)
+
+    def test_error_backoff_skips_hour_align(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        poll = PollConfig(
+            min_seconds=300,
+            max_seconds=300,
+            hour_align=HourAlignConfig(enabled=True, snap_lead_seconds=600, burst_seconds=0),
+        )
+        now = datetime(2026, 5, 27, 5, 55, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+        sleep = _next_sleep_seconds_with_hour_align(
+            poll=poll,
+            timezone="America/Los_Angeles",
+            consecutive_errors=2,
+            rng=random.Random(0),
+            now=now,
+        )
+        assert sleep == pytest.approx(600.0)
 
 
 class TestAppendPurchaseJsonl:

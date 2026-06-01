@@ -1090,6 +1090,72 @@ def _best_schema_for_targets(
     return best
 
 
+def _target_release_schema_and_buyable(
+    name: str,
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+) -> tuple[str, int | None]:
+    t = target_by_name.get(str(name))
+    if not isinstance(t, dict):
+        return "unknown", None
+    st = t.get("state") if isinstance(t.get("state"), dict) else {}
+    schema = str(st.get("last_release_schema") or "unknown").lower()
+    raw_buyable = st.get("last_buyable_showtime_count")
+    if raw_buyable is None:
+        return schema, None
+    try:
+        return schema, int(raw_buyable)
+    except (TypeError, ValueError):
+        return schema, None
+
+
+def _movie_group_release_schema(
+    target_names: Iterable[str],
+    *,
+    target_by_name: dict[str, dict[str, Any]],
+) -> str:
+    """Roll up release schema for a movie group (poster + header).
+
+    Live/partial signals still promote when any sub-target has buyable inventory.
+    Showtimes-disclosed (visible but not buyable) only appears on the parent when
+    every sub-target is in that state — one disclosed format must not mark the
+  whole movie as sold out.
+    """
+    names = [str(n) for n in target_names]
+    if not names:
+        return "unknown"
+
+    entries = [
+        _target_release_schema_and_buyable(n, target_by_name=target_by_name) for n in names
+    ]
+    schemas = [schema for schema, _ in entries]
+
+    if any(buyable is not None and buyable > 0 for _, buyable in entries):
+        return _best_schema_for_targets(names, target_by_name=target_by_name)
+
+    if any(schema in ("partial_release", "full_release") for schema in schemas):
+        return _best_schema_for_targets(names, target_by_name=target_by_name)
+
+    if schemas and all(schema == "showtimes_disclosed" for schema in schemas):
+        return "showtimes_disclosed"
+
+    if schemas and all(schema == "not_on_sale" for schema in schemas):
+        return "not_on_sale"
+
+    without_disclosed = [schema for schema in schemas if schema != "showtimes_disclosed"]
+    if without_disclosed:
+        best = "unknown"
+        best_rank = -1
+        for schema in without_disclosed:
+            rank = _schema_rank(schema)
+            if rank > best_rank:
+                best_rank = rank
+                best = schema
+        return best
+
+    return "unknown"
+
+
 def _release_date_sort_value(
     movie: dict[str, Any],
     *,
@@ -1203,6 +1269,21 @@ def _media_frame_html(
     if caption and variant in ("screenshot", "video") and interactive:
         return f'<figure class="{frame_cls}">{inner}{badge_html}{cap_html}{btn_html}</figure>'
     return f'<figure class="{frame_cls}">{cap_html}{inner}{badge_html}{btn_html}</figure>'
+
+
+def _render_movie_schedule_panel(movie_key: str) -> str:
+    key_attr = html.escape(movie_key, quote=True)
+    return (
+        f'<div class="movie-schedule-panel" data-movie-schedule-panel '
+        f'data-movie-key="{key_attr}">'
+        '<p class="movie-schedule-head"><strong>CityWalk schedule</strong> '
+        '<span class="hint">Load dates, then pin a showtime to watch.</span></p>'
+        '<button type="button" class="btn-ghost" data-load-schedule>Load schedule</button>'
+        '<div class="movie-schedule-list" hidden></div>'
+        '<p class="hint movie-schedule-pins">Pinned: '
+        f'<span data-pin-summary data-movie-key="{key_attr}">none</span></p>'
+        "</div>"
+    )
 
 
 def _poster_html(poster_url: str | None, title: str, *, css_class: str) -> str:
@@ -2367,6 +2448,101 @@ def _dashboard_ui_script() -> str:
         });
     });
   }
+  function renderScheduleList(panel, data) {
+    var list = panel.querySelector(".movie-schedule-list");
+    var summary = panel.querySelector("[data-pin-summary]");
+    if (!list) return;
+    list.innerHTML = "";
+    var schedule = data.schedule || {};
+    var days = schedule.days || [];
+    var pins = data.pinned_showtimes || [];
+    if (summary) {
+      summary.textContent = pins.length
+        ? pins.map(function (p) { return p.label || (p.date + " " + p.time_label); }).join("; ")
+        : "none";
+    }
+    if (!days.length) {
+      list.hidden = false;
+      list.textContent = "No CityWalk showtimes found for this movie.";
+      return;
+    }
+    days.forEach(function (day) {
+      var block = document.createElement("div");
+      block.className = "movie-schedule-day";
+      var title = document.createElement("strong");
+      title.textContent = day.date || "Date";
+      block.appendChild(title);
+      (day.records || []).forEach(function (rec) {
+        var row = document.createElement("div");
+        row.className = "movie-schedule-row";
+        var label = (rec.time_label || "?") + " " + ((rec.format_names || [])[0] || "");
+        if (rec.is_buyable) label += " · buyable";
+        row.textContent = label;
+        var pinBtn = document.createElement("button");
+        pinBtn.type = "button";
+        pinBtn.className = "btn-ghost btn-pin-showtime";
+        pinBtn.textContent = "Pin";
+        pinBtn.addEventListener("click", function () {
+          var movieKey = panel.getAttribute("data-movie-key");
+          var pin = {
+            date: rec.date || day.date,
+            time_label: rec.time_label,
+            format: (rec.normalized_formats || [])[0] || "IMAX_70MM",
+            showtime_hash: rec.showtime_hash,
+            ticket_url: rec.ticket_url,
+            label: (day.date || "") + " " + (rec.time_label || "") + " " + ((rec.format_names || [])[0] || "")
+          };
+          fetch("/api/movies/" + encodeURIComponent(movieKey) + "/pins", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pinned_showtimes: [pin] })
+          })
+            .then(function (resp) {
+              return resp.json().then(function (body) {
+                if (!resp.ok || body.ok === false) throw new Error(body.error || "Pin failed");
+                return body;
+              });
+            })
+            .then(function (body) {
+              renderScheduleList(panel, { schedule: schedule, pinned_showtimes: body.pinned_showtimes || [pin] });
+            })
+            .catch(function (err) {
+              window.alert(err && err.message ? err.message : "Pin failed");
+            });
+        });
+        row.appendChild(pinBtn);
+        block.appendChild(row);
+      });
+      list.appendChild(block);
+    });
+    list.hidden = false;
+  }
+  document.querySelectorAll("[data-movie-schedule-panel]").forEach(function (panel) {
+    var loadBtn = panel.querySelector("[data-load-schedule]");
+    if (!loadBtn) return;
+    loadBtn.addEventListener("click", function () {
+      var movieKey = panel.getAttribute("data-movie-key");
+      if (!movieKey) return;
+      loadBtn.disabled = true;
+      loadBtn.textContent = "Loading…";
+      fetch("/api/movies/" + encodeURIComponent(movieKey) + "/schedule")
+        .then(function (resp) {
+          return resp.json().then(function (data) {
+            if (!resp.ok || data.ok === false) throw new Error(data.error || "Load failed");
+            return data;
+          });
+        })
+        .then(function (data) {
+          renderScheduleList(panel, data);
+          loadBtn.textContent = "Refresh schedule";
+        })
+        .catch(function (err) {
+          window.alert(err && err.message ? err.message : "Schedule load failed");
+          loadBtn.textContent = "Load schedule";
+        })
+        .finally(function () { loadBtn.disabled = false; });
+    });
+  });
   document.querySelectorAll(".movie-delete-btn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var key = btn.getAttribute("data-movie-key");
@@ -3481,6 +3657,23 @@ def dashboard_css() -> str:
     .movie-group--schema-partial_release { border-left: 3px solid rgba(255, 159, 10, 0.75); }
     .movie-group--schema-full_release { border-left: 3px solid rgba(52, 199, 89, 0.75); }
     .movie-group-counts { color: var(--text); font-weight: 650; }
+    .movie-schedule-panel {
+      margin: 0.75rem 0 0;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .movie-schedule-day { margin-top: 0.5rem; }
+    .movie-schedule-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+    }
+    .btn-pin-showtime { font-size: 0.8rem; padding: 0.15rem 0.5rem; }
     .movie-group-title {
       margin: 0;
       color: var(--text);
@@ -5620,7 +5813,7 @@ def render_index_html(
                 movie_target_names.append(tname)
         if not subcards:
             continue
-        movie_schema = _best_schema_for_targets(
+        movie_schema = _movie_group_release_schema(
             movie_target_names,
             target_by_name=target_by_name,
         )
@@ -5725,6 +5918,7 @@ def render_index_html(
             f" · {distributor} · {counts_html}{len(group['subcards'])} showing(s)</p>"
             "</div></div>"
             f'<div class="showings-rail" aria-label="{showing_label}">{"".join(group["subcards"])}</div>'
+            f"{_render_movie_schedule_panel(group['key'])}"
             f"{tweet_embeds}"
             "</section>"
         )

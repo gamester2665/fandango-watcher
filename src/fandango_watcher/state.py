@@ -56,6 +56,10 @@ class Event:
     PURCHASE_HELD_FOR_CONFIRM: ClassVar[str] = "purchase_held_for_confirm"
     PURCHASE_FAILED_SCRIPTED: ClassVar[str] = "purchase_failed_scripted"
     SOCIAL_X_MATCH: ClassVar[str] = "social_x_match"
+    CITYWALK_SCHEDULE_REVEALED: ClassVar[str] = "citywalk_schedule_revealed"
+    PINNED_SHOWTIME_LIVE: ClassVar[str] = "pinned_showtime_live"
+    PINNED_SHOWTIME_LISTED: ClassVar[str] = "pinned_showtime_listed"
+    PINNED_SHOWTIME_GONE: ClassVar[str] = "pinned_showtime_gone"
 
 
 # -----------------------------------------------------------------------------
@@ -161,6 +165,30 @@ def _fires_showtimes_disclosed(
     return prev_value == ReleaseSchema.NOT_ON_SALE.value
 
 
+def _effective_release_schema(
+    prev: TargetState,
+    parsed: ParsedPageData,
+) -> ReleaseSchema:
+    """Avoid API empty-read flicker downgrading disclosed back to not_on_sale."""
+    new_schema = parsed.release_schema
+    prev_value = _schema_value(prev.last_release_schema)
+    new_value = _schema_value(new_schema)
+    if (
+        prev_value == ReleaseSchema.SHOWTIMES_DISCLOSED.value
+        and new_value == ReleaseSchema.NOT_ON_SALE.value
+    ):
+        evidence = list(getattr(parsed, "schema_evidence", []) or [])
+        if any("direct_api" in str(item) for item in evidence):
+            return ReleaseSchema.SHOWTIMES_DISCLOSED
+    return new_schema
+
+
+def _schema_value(schema: ReleaseSchema | str | None) -> str | None:
+    if schema is None:
+        return None
+    return schema.value if isinstance(schema, ReleaseSchema) else str(schema)
+
+
 def transition(
     prev: TargetState,
     parsed: ParsedPageData,
@@ -179,7 +207,7 @@ def transition(
       dropped" alert.
     """
     effective_now = now if now is not None else datetime.now(UTC)
-    new_schema = parsed.release_schema
+    new_schema = _effective_release_schema(prev, parsed)
 
     events: list[str] = []
     if _fires_showtimes_disclosed(prev.last_release_schema, new_schema):

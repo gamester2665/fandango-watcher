@@ -85,9 +85,22 @@ INIT_SCHEMA_STATEMENTS: tuple[str, ...] = (
       x_handles_json TEXT NOT NULL DEFAULT '[]',
       x_keywords_json TEXT NOT NULL DEFAULT '[]',
       reference_page_key TEXT,
-      sort_order INTEGER NOT NULL DEFAULT 0
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      aspect_ratio_max REAL,
+      is_real_imax INTEGER,
+      aspect_ratio_notes TEXT,
+      aspect_ratio_source TEXT,
+      aspect_ratio_updated_at TEXT
     )
     """.strip(),
+)
+
+SCHEMA_MIGRATION_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE movies ADD COLUMN aspect_ratio_max REAL",
+    "ALTER TABLE movies ADD COLUMN is_real_imax INTEGER",
+    "ALTER TABLE movies ADD COLUMN aspect_ratio_notes TEXT",
+    "ALTER TABLE movies ADD COLUMN aspect_ratio_source TEXT",
+    "ALTER TABLE movies ADD COLUMN aspect_ratio_updated_at TEXT",
 )
 
 _PATCH_FIELDS = frozenset(
@@ -100,6 +113,11 @@ _PATCH_FIELDS = frozenset(
         "x_keywords",
         "distributor",
         "reference_page_key",
+        "aspect_ratio_max",
+        "is_real_imax",
+        "aspect_ratio_notes",
+        "aspect_ratio_source",
+        "aspect_ratio_updated_at",
     }
 )
 
@@ -130,6 +148,30 @@ def _target_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    return None
+
+
+def _db_bool(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 1 if value else 0
+    return 1 if int(value) else 0
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
 def _movie_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "key": str(row["key"]),
@@ -153,6 +195,11 @@ def _movie_row(row: dict[str, Any]) -> dict[str, Any]:
             str(v) for v in _loads_json_list(row.get("x_keywords_json"), field="x_keywords_json")
         ],
         "reference_page_key": _optional_text(row.get("reference_page_key")),
+        "aspect_ratio_max": _optional_float(row.get("aspect_ratio_max")),
+        "is_real_imax": _optional_bool(row.get("is_real_imax")),
+        "aspect_ratio_notes": _optional_text(row.get("aspect_ratio_notes")),
+        "aspect_ratio_source": _optional_text(row.get("aspect_ratio_source")),
+        "aspect_ratio_updated_at": _optional_text(row.get("aspect_ratio_updated_at")),
     }
 
 
@@ -186,6 +233,11 @@ def _movie_to_db(movie: dict[str, Any], *, sort_order: int) -> dict[str, Any]:
         "x_keywords_json": json.dumps(list(movie.get("x_keywords") or [])),
         "reference_page_key": _db_text(movie.get("reference_page_key")),
         "sort_order": sort_order,
+        "aspect_ratio_max": movie.get("aspect_ratio_max"),
+        "is_real_imax": _db_bool(movie.get("is_real_imax")),
+        "aspect_ratio_notes": _db_text(movie.get("aspect_ratio_notes")),
+        "aspect_ratio_source": _db_text(movie.get("aspect_ratio_source")),
+        "aspect_ratio_updated_at": _db_text(movie.get("aspect_ratio_updated_at")),
     }
 
 
@@ -237,6 +289,12 @@ class D1WatchlistProvider:
     async def init_schema(self) -> None:
         for stmt in INIT_SCHEMA_STATEMENTS:
             await self.db.prepare(stmt).run()
+        for stmt in SCHEMA_MIGRATION_STATEMENTS:
+            try:
+                await self.db.prepare(stmt).run()
+            except Exception as exc:  # noqa: BLE001 — idempotent ADD COLUMN
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     async def get_revision(self) -> int:
         row = await self.db.prepare(
@@ -312,8 +370,9 @@ class D1WatchlistProvider:
         await self.db.prepare(
             "INSERT INTO movies (key, title, fandango_movie_id, distributor, release_date, "
             "poster_url, fandango_targets_json, preferred_formats_json, x_handles_json, "
-            "x_keywords_json, reference_page_key, sort_order) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "x_keywords_json, reference_page_key, sort_order, aspect_ratio_max, is_real_imax, "
+            "aspect_ratio_notes, aspect_ratio_source, aspect_ratio_updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).bind(
             row["key"],
             row["title"],
@@ -327,6 +386,11 @@ class D1WatchlistProvider:
             row["x_keywords_json"],
             row["reference_page_key"],
             row["sort_order"],
+            row["aspect_ratio_max"],
+            row["is_real_imax"],
+            row["aspect_ratio_notes"],
+            row["aspect_ratio_source"],
+            row["aspect_ratio_updated_at"],
         ).run()
 
     async def replace_watchlist(
@@ -434,7 +498,9 @@ class D1WatchlistProvider:
         await self.db.prepare(
             "UPDATE movies SET title = ?, fandango_movie_id = ?, distributor = ?, release_date = ?, "
             "poster_url = ?, fandango_targets_json = ?, preferred_formats_json = ?, "
-            "x_handles_json = ?, x_keywords_json = ?, reference_page_key = ? "
+            "x_handles_json = ?, x_keywords_json = ?, reference_page_key = ?, "
+            "aspect_ratio_max = ?, is_real_imax = ?, aspect_ratio_notes = ?, "
+            "aspect_ratio_source = ?, aspect_ratio_updated_at = ? "
             "WHERE key = ?"
         ).bind(
             out_row["title"],
@@ -447,6 +513,11 @@ class D1WatchlistProvider:
             out_row["x_handles_json"],
             out_row["x_keywords_json"],
             out_row["reference_page_key"],
+            out_row["aspect_ratio_max"],
+            out_row["is_real_imax"],
+            out_row["aspect_ratio_notes"],
+            out_row["aspect_ratio_source"],
+            out_row["aspect_ratio_updated_at"],
             key,
         ).run()
         revision = await self._bump_revision()

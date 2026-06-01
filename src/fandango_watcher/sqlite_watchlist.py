@@ -12,6 +12,7 @@ from .cloudflare_config import (
     INIT_SCHEMA_STATEMENTS,
     ConfigConflictError,
     MoviePatch,
+    _apply_schema_migrations_sync,
     movie_model_to_row,
     movie_row_to_model,
     target_model_to_row,
@@ -45,6 +46,7 @@ class SqliteWatchlistProvider:
             try:
                 for stmt in INIT_SCHEMA_STATEMENTS:
                     conn.execute(stmt)
+                _apply_schema_migrations_sync(conn)
                 conn.commit()
             finally:
                 conn.close()
@@ -155,8 +157,9 @@ class SqliteWatchlistProvider:
                     conn.execute(
                         "INSERT INTO movies (key, title, fandango_movie_id, distributor, release_date, "
                         "poster_url, fandango_targets_json, preferred_formats_json, x_handles_json, "
-                        "x_keywords_json, reference_page_key, sort_order) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "x_keywords_json, reference_page_key, sort_order, aspect_ratio_max, is_real_imax, "
+                        "aspect_ratio_notes, aspect_ratio_source, aspect_ratio_updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             row["key"],
                             row["title"],
@@ -170,6 +173,11 @@ class SqliteWatchlistProvider:
                             row["x_keywords_json"],
                             row["reference_page_key"],
                             row["sort_order"],
+                            row["aspect_ratio_max"],
+                            row["is_real_imax"],
+                            row["aspect_ratio_notes"],
+                            row["aspect_ratio_source"],
+                            row["aspect_ratio_updated_at"],
                         ),
                     )
                 revision = self._bump_revision(conn)
@@ -239,8 +247,9 @@ class SqliteWatchlistProvider:
                 conn.execute(
                     "INSERT INTO movies (key, title, fandango_movie_id, distributor, release_date, "
                     "poster_url, fandango_targets_json, preferred_formats_json, x_handles_json, "
-                    "x_keywords_json, reference_page_key, sort_order) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "x_keywords_json, reference_page_key, sort_order, aspect_ratio_max, is_real_imax, "
+                    "aspect_ratio_notes, aspect_ratio_source, aspect_ratio_updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         row["key"],
                         row["title"],
@@ -254,6 +263,11 @@ class SqliteWatchlistProvider:
                         row["x_keywords_json"],
                         row["reference_page_key"],
                         row["sort_order"],
+                        row["aspect_ratio_max"],
+                        row["is_real_imax"],
+                        row["aspect_ratio_notes"],
+                        row["aspect_ratio_source"],
+                        row["aspect_ratio_updated_at"],
                     ),
                 )
                 revision = self._bump_revision(conn)
@@ -288,7 +302,9 @@ class SqliteWatchlistProvider:
                 conn.execute(
                     "UPDATE movies SET title = ?, fandango_movie_id = ?, distributor = ?, release_date = ?, "
                     "poster_url = ?, fandango_targets_json = ?, preferred_formats_json = ?, "
-                    "x_handles_json = ?, x_keywords_json = ?, reference_page_key = ? "
+                    "x_handles_json = ?, x_keywords_json = ?, reference_page_key = ?, "
+                    "aspect_ratio_max = ?, is_real_imax = ?, aspect_ratio_notes = ?, "
+                    "aspect_ratio_source = ?, aspect_ratio_updated_at = ? "
                     "WHERE key = ?",
                     (
                         out_row["title"],
@@ -301,6 +317,11 @@ class SqliteWatchlistProvider:
                         out_row["x_handles_json"],
                         out_row["x_keywords_json"],
                         out_row["reference_page_key"],
+                        out_row["aspect_ratio_max"],
+                        out_row["is_real_imax"],
+                        out_row["aspect_ratio_notes"],
+                        out_row["aspect_ratio_source"],
+                        out_row["aspect_ratio_updated_at"],
                         key,
                     ),
                 )

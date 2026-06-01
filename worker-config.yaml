@@ -75,6 +75,24 @@ direct_api:
   alert_unknown_formats: true
 
 # -----------------------------------------------------------------------------
+# CityWalk schedule SMS + pinned showtime alerts (see config.example.yaml).
+# -----------------------------------------------------------------------------
+schedule_notify:
+  enabled: true
+  include_times: true
+  max_dates_in_sms: 14
+  resend_on_schedule_change: false
+  full_calendar_scan: true
+  max_dates_scan: 90
+
+pin_watch:
+  enabled: true
+  notify_on_listed: false
+  notify_on_live: true
+  notify_on_gone: true
+  prefer_pin_for_purchase: true
+
+# -----------------------------------------------------------------------------
 # Polling cadence. Defaults target ~5 min with small jitter; increase if
 # Fandango starts pushing back (403s, throttling, empty DOMs).
 # -----------------------------------------------------------------------------
@@ -83,6 +101,13 @@ poll:
   max_seconds: 330
   error_backoff_multiplier: 2
   error_backoff_cap_seconds: 1800
+  hour_align:
+    enabled: true
+    hours: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+    snap_lead_seconds: 600
+    burst_seconds: 120
+    burst_min_seconds: 30
+    burst_max_seconds: 45
 
 # -----------------------------------------------------------------------------
 # Positive-ticketing heuristic inputs used by the Schema A/B/C classifier.
@@ -193,6 +218,9 @@ notify:
   on_events:
     - release_transition_showtimes_disclosed
     - release_transition_bad_to_good
+    - citywalk_schedule_revealed
+    - pinned_showtime_live
+    - pinned_showtime_gone
     - purchase_succeeded
     - purchase_held_for_confirm
     - purchase_halted_invariant

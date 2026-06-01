@@ -35,6 +35,11 @@ def test_movie_row_round_trip() -> None:
         preferred_formats=[FormatTag.IMAX_70MM, FormatTag.IMAX],
         x_handles=["TheOdysseyFilm"],
         x_keywords=["tickets", "odyssey"],
+        aspect_ratio_max=1.43,
+        is_real_imax=True,
+        aspect_ratio_notes="First feature shot 100% on 15/70 IMAX film.",
+        aspect_ratio_source="manual-research-2026-05-27",
+        aspect_ratio_updated_at="2026-05-27T00:00:00+00:00",
     )
     row = movie_model_to_row(movie, sort_order=1)
     restored = movie_row_to_model(row)

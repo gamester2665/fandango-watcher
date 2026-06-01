@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .config import MovieConfig, TargetConfig
 from .models import FormatTag
+from .movie_aspect_intel import SCHEMA_MIGRATION_STATEMENTS
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,11 @@ class MoviePatch(BaseModel):
     x_keywords: list[str] | None = None
     distributor: str | None = None
     reference_page_key: str | None = None
+    aspect_ratio_max: float | None = None
+    is_real_imax: bool | None = None
+    aspect_ratio_notes: str | None = None
+    aspect_ratio_source: str | None = None
+    aspect_ratio_updated_at: str | None = None
 
 
 INIT_SCHEMA_STATEMENTS: tuple[str, ...] = (
@@ -68,10 +74,31 @@ INIT_SCHEMA_STATEMENTS: tuple[str, ...] = (
       x_handles_json TEXT NOT NULL DEFAULT '[]',
       x_keywords_json TEXT NOT NULL DEFAULT '[]',
       reference_page_key TEXT,
-      sort_order INTEGER NOT NULL DEFAULT 0
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      aspect_ratio_max REAL,
+      is_real_imax INTEGER,
+      aspect_ratio_notes TEXT,
+      aspect_ratio_source TEXT,
+      aspect_ratio_updated_at TEXT
     )
     """.strip(),
 )
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    return None
+
+
+def _db_bool(value: bool | None) -> int | None:
+    if value is None:
+        return None
+    return 1 if value else 0
 
 
 def _loads_json_list(raw: str | None, *, field: str) -> list[Any]:
@@ -123,6 +150,11 @@ def movie_row_to_model(row: dict[str, Any]) -> MovieConfig:
         x_handles=x_handles,
         x_keywords=x_keywords,
         reference_page_key=row.get("reference_page_key"),
+        aspect_ratio_max=row.get("aspect_ratio_max"),
+        is_real_imax=_optional_bool(row.get("is_real_imax")),
+        aspect_ratio_notes=row.get("aspect_ratio_notes"),
+        aspect_ratio_source=row.get("aspect_ratio_source"),
+        aspect_ratio_updated_at=row.get("aspect_ratio_updated_at"),
     )
 
 
@@ -156,7 +188,30 @@ def movie_model_to_row(movie: MovieConfig, *, sort_order: int) -> dict[str, Any]
         "x_keywords_json": json.dumps(list(movie.x_keywords)),
         "reference_page_key": movie.reference_page_key,
         "sort_order": sort_order,
+        "aspect_ratio_max": movie.aspect_ratio_max,
+        "is_real_imax": _db_bool(movie.is_real_imax),
+        "aspect_ratio_notes": movie.aspect_ratio_notes,
+        "aspect_ratio_source": movie.aspect_ratio_source,
+        "aspect_ratio_updated_at": movie.aspect_ratio_updated_at,
     }
+
+
+def _apply_schema_migrations_sync(conn: Any) -> None:
+    for stmt in SCHEMA_MIGRATION_STATEMENTS:
+        try:
+            conn.execute(stmt)
+        except Exception as exc:  # noqa: BLE001 — idempotent ADD COLUMN
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
+async def _apply_schema_migrations_async(db: Any) -> None:
+    for stmt in SCHEMA_MIGRATION_STATEMENTS:
+        try:
+            await db.prepare(stmt).run()
+        except Exception as exc:  # noqa: BLE001 — idempotent ADD COLUMN
+            if "duplicate column" not in str(exc).lower():
+                raise
 
 
 class D1WatchlistProvider:
@@ -168,6 +223,7 @@ class D1WatchlistProvider:
     async def init_schema(self) -> None:
         for stmt in INIT_SCHEMA_STATEMENTS:
             await self.db.prepare(stmt).run()
+        await _apply_schema_migrations_async(self.db)
 
     async def get_revision(self) -> int:
         row = await self.db.prepare(
@@ -266,8 +322,9 @@ class D1WatchlistProvider:
             await self.db.prepare(
                 "INSERT INTO movies (key, title, fandango_movie_id, distributor, release_date, "
                 "poster_url, fandango_targets_json, preferred_formats_json, x_handles_json, "
-                "x_keywords_json, reference_page_key, sort_order) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "x_keywords_json, reference_page_key, sort_order, aspect_ratio_max, is_real_imax, "
+                "aspect_ratio_notes, aspect_ratio_source, aspect_ratio_updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             ).bind(
                 row["key"],
                 row["title"],
@@ -281,6 +338,11 @@ class D1WatchlistProvider:
                 row["x_keywords_json"],
                 row["reference_page_key"],
                 row["sort_order"],
+                row["aspect_ratio_max"],
+                row["is_real_imax"],
+                row["aspect_ratio_notes"],
+                row["aspect_ratio_source"],
+                row["aspect_ratio_updated_at"],
             ).run()
 
         revision = await self._bump_revision()
@@ -338,8 +400,9 @@ class D1WatchlistProvider:
         await self.db.prepare(
             "INSERT INTO movies (key, title, fandango_movie_id, distributor, release_date, "
             "poster_url, fandango_targets_json, preferred_formats_json, x_handles_json, "
-            "x_keywords_json, reference_page_key, sort_order) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "x_keywords_json, reference_page_key, sort_order, aspect_ratio_max, is_real_imax, "
+            "aspect_ratio_notes, aspect_ratio_source, aspect_ratio_updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).bind(
             row["key"],
             row["title"],
@@ -353,6 +416,11 @@ class D1WatchlistProvider:
             row["x_keywords_json"],
             row["reference_page_key"],
             row["sort_order"],
+            row["aspect_ratio_max"],
+            row["is_real_imax"],
+            row["aspect_ratio_notes"],
+            row["aspect_ratio_source"],
+            row["aspect_ratio_updated_at"],
         ).run()
 
         revision = await self._bump_revision()
@@ -377,7 +445,9 @@ class D1WatchlistProvider:
         await self.db.prepare(
             "UPDATE movies SET title = ?, fandango_movie_id = ?, distributor = ?, release_date = ?, "
             "poster_url = ?, fandango_targets_json = ?, preferred_formats_json = ?, "
-            "x_handles_json = ?, x_keywords_json = ?, reference_page_key = ? "
+            "x_handles_json = ?, x_keywords_json = ?, reference_page_key = ?, "
+            "aspect_ratio_max = ?, is_real_imax = ?, aspect_ratio_notes = ?, "
+            "aspect_ratio_source = ?, aspect_ratio_updated_at = ? "
             "WHERE key = ?"
         ).bind(
             out_row["title"],
@@ -390,6 +460,11 @@ class D1WatchlistProvider:
             out_row["x_handles_json"],
             out_row["x_keywords_json"],
             out_row["reference_page_key"],
+            out_row["aspect_ratio_max"],
+            out_row["is_real_imax"],
+            out_row["aspect_ratio_notes"],
+            out_row["aspect_ratio_source"],
+            out_row["aspect_ratio_updated_at"],
             key,
         ).run()
         revision = await self._bump_revision()

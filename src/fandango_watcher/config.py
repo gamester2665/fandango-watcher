@@ -91,11 +91,47 @@ class DirectApiConfig(ConfigBase):
     alert_unknown_formats: bool = True
 
 
+class HourAlignConfig(ConfigBase):
+    """Optional cadence that lands ticks on local :00 and bursts right after.
+
+    Fandango drops often land on the hour; with ~5 min jitter alone you can
+    miss the first minute of sales. When enabled, the watch loop snaps sleep
+    so a tick fires at each allowed hour boundary, then polls faster briefly.
+    """
+
+    enabled: bool = False
+    # IANA zone; ``None`` -> ``Settings.tz`` at runtime.
+    timezone: str | None = None
+    # Local hours (0-23) when :00 snaps apply. Empty -> every hour.
+    hours: list[int] = Field(default_factory=list)
+    # Align to the next :00 when it is this many seconds away or closer.
+    snap_lead_seconds: int = Field(default=600, ge=30, le=7200)
+    # After each aligned :00 tick, poll faster for this long.
+    burst_seconds: int = Field(default=120, ge=0, le=900)
+    burst_min_seconds: int = Field(default=30, ge=30)
+    burst_max_seconds: int = Field(default=45, ge=30)
+
+    @model_validator(mode="after")
+    def _validate_hour_align(self) -> HourAlignConfig:
+        if self.burst_min_seconds > self.burst_max_seconds:
+            raise ValueError(
+                f"poll.hour_align.burst_min_seconds ({self.burst_min_seconds}) must be <= "
+                f"burst_max_seconds ({self.burst_max_seconds})"
+            )
+        bad_hours = [h for h in self.hours if h < 0 or h > 23]
+        if bad_hours:
+            raise ValueError(
+                f"poll.hour_align.hours must be 0-23; invalid: {bad_hours}"
+            )
+        return self
+
+
 class PollConfig(ConfigBase):
     min_seconds: int = Field(ge=30)
     max_seconds: int = Field(ge=30)
     error_backoff_multiplier: float = Field(default=2.0, ge=1.0)
     error_backoff_cap_seconds: int = Field(default=1800, ge=60)
+    hour_align: HourAlignConfig = Field(default_factory=HourAlignConfig)
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> PollConfig:
@@ -178,6 +214,28 @@ class AgentFallbackConfig(ConfigBase):
     max_cost_usd: float = Field(default=2.0, gt=0)
     # Hard wall-clock cap on ``asyncio.run(agent.run(...))`` (browser-use).
     max_wall_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+class ScheduleNotifyConfig(ConfigBase):
+    """One-time (or on-change) SMS listing CityWalk play dates for a movie."""
+
+    enabled: bool = True
+    include_times: bool = True
+    max_dates_in_sms: int = Field(default=14, ge=1, le=60)
+    resend_on_schedule_change: bool = False
+    # Scan full calendar even when detection uses stop_on_first_match.
+    full_calendar_scan: bool = True
+    max_dates_scan: int | None = Field(default=None, ge=1, le=365)
+
+
+class PinWatchConfig(ConfigBase):
+    """Alerts when operator-pinned showtimes change state."""
+
+    enabled: bool = True
+    notify_on_listed: bool = False
+    notify_on_live: bool = True
+    notify_on_gone: bool = True
+    prefer_pin_for_purchase: bool = True
 
 
 class NotifyConfig(ConfigBase):
@@ -328,10 +386,25 @@ class MovieConfig(ConfigBase):
     # for the same handle (the explicit entry wins for that combination).
     x_keywords: list[str] = Field(default_factory=list)
     reference_page_key: str | None = None
+    # Max expanded IMAX aspect ratio (e.g. 1.43 GT/70mm, 1.90 digital IMAX).
+    aspect_ratio_max: float | None = None
+    # True when the title has meaningful 1.43 expanded IMAX content (not DMR-only).
+    is_real_imax: bool | None = None
+    aspect_ratio_notes: str | None = None
+    aspect_ratio_source: str | None = None
+    aspect_ratio_updated_at: str | None = None
 
     model_config = ConfigDict(extra="forbid", use_enum_values=True)
 
-    @field_validator("distributor", "poster_url", "release_date", mode="before")
+    @field_validator(
+        "distributor",
+        "poster_url",
+        "release_date",
+        "aspect_ratio_notes",
+        "aspect_ratio_source",
+        "aspect_ratio_updated_at",
+        mode="before",
+    )
     @classmethod
     def _strip_empty_optional_movie_fields(cls, v: object) -> object:
         if isinstance(v, str) and not v.strip():
@@ -400,6 +473,8 @@ class WatcherConfig(ConfigBase):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     social_x: SocialXConfig = Field(default_factory=SocialXConfig)
     release_intel: ReleaseIntelConfig = Field(default_factory=ReleaseIntelConfig)
+    schedule_notify: ScheduleNotifyConfig = Field(default_factory=ScheduleNotifyConfig)
+    pin_watch: PinWatchConfig = Field(default_factory=PinWatchConfig)
     movies: list[MovieConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")

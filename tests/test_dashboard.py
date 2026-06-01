@@ -30,6 +30,7 @@ from fandango_watcher.dashboard import (
     _fmt_timestamp_html,
     _latest_artifact_for_target,
     _linkify_tweet_text,
+    _movie_group_release_schema,
     _relative_ago,
     _summarize_social_x,
     add_movie_from_fandango_search_result,
@@ -612,6 +613,118 @@ def test_poster_shelf_disclosed_schema_uses_outline_without_signal_icon() -> Non
     assert "poster-shelf-tile--schema-showtimes_disclosed" in html_out
     assert 'class="poster-shelf-status-icon' not in html_out
     assert "poster-shelf-tile--signal" not in html_out
+
+
+def test_movie_group_release_schema_requires_all_subtargets_disclosed() -> None:
+    target_by_name = {
+        "overview": {
+            "name": "overview",
+            "state": {
+                "last_release_schema": "showtimes_disclosed",
+                "last_buyable_showtime_count": 0,
+            },
+        },
+        "imax": {
+            "name": "imax",
+            "state": {
+                "last_release_schema": "partial_release",
+                "last_buyable_showtime_count": 2,
+            },
+        },
+    }
+    assert (
+        _movie_group_release_schema(
+            ["overview", "imax"],
+            target_by_name=target_by_name,
+        )
+        == "partial_release"
+    )
+
+    only_disclosed = {
+        "a": {
+            "name": "a",
+            "state": {
+                "last_release_schema": "showtimes_disclosed",
+                "last_buyable_showtime_count": 0,
+            },
+        },
+        "b": {
+            "name": "b",
+            "state": {"last_release_schema": "not_on_sale"},
+        },
+    }
+    assert (
+        _movie_group_release_schema(["a", "b"], target_by_name=only_disclosed)
+        == "not_on_sale"
+    )
+
+    all_disclosed = {
+        "a": {
+            "name": "a",
+            "state": {
+                "last_release_schema": "showtimes_disclosed",
+                "last_buyable_showtime_count": 0,
+            },
+        },
+        "b": {
+            "name": "b",
+            "state": {
+                "last_release_schema": "showtimes_disclosed",
+                "last_showtime_count": 3,
+                "last_buyable_showtime_count": 0,
+            },
+        },
+    }
+    assert (
+        _movie_group_release_schema(["a", "b"], target_by_name=all_disclosed)
+        == "showtimes_disclosed"
+    )
+
+
+def test_movie_group_hides_disclosed_chip_when_only_one_subtarget_is_disclosed() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "odyssey-overview",
+                "url": "https://example.com/overview",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "showtimes_disclosed",
+                    "last_showtime_count": 6,
+                    "last_buyable_showtime_count": 0,
+                },
+            },
+            {
+                "name": "odyssey-imax",
+                "url": "https://example.com/imax",
+                "state": {
+                    "current_state": "watching",
+                    "last_release_schema": "not_on_sale",
+                },
+            },
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "unconfigured", "reason": "test"},
+        "movies": [
+            {
+                "key": "odyssey",
+                "title": "Odyssey",
+                "fandango_targets": ["odyssey-overview", "odyssey-imax"],
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap)
+    assert re.search(
+        r'<section class="movie-group movie-group--schema-not_on_sale"[^>]*'
+        r'data-movie-schema="not_on_sale"',
+        html_out,
+    )
+    assert not re.search(
+        r'<section class="movie-group movie-group--schema-showtimes_disclosed"',
+        html_out,
+    )
 
 
 def test_watchlist_controls_and_movie_schema_sort_attributes() -> None:

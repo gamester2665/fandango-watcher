@@ -573,6 +573,53 @@ def _make_handler_cls(
                     ]
                     _send_json(self, {"movies": movies}, send_body=send_body)
                     return
+
+                import re as _re
+
+                schedule_match = _re.match(
+                    r"^/api/movies/([^/]+)/schedule$", path_only
+                )
+                if schedule_match is not None:
+                    movie_key = schedule_match.group(1)
+                    from .fandango_api import FandangoApiClient
+                    from .movie_watch import fetch_movie_schedule_json
+
+                    try:
+                        with FandangoApiClient(
+                            base_url=dd.cfg.direct_api.base_url,
+                            theater_id=dd.cfg.direct_api.theater_id,
+                            chain_code=dd.cfg.direct_api.chain_code,
+                        ) as client:
+                            payload = fetch_movie_schedule_json(
+                                dd.cfg,
+                                movie_key,
+                                state_dir=dd.paths.state_dir,
+                                api_client=client,
+                            )
+                    except ValueError as exc:
+                        _send_json(
+                            self,
+                            {"ok": False, "error": str(exc)},
+                            status=HTTPStatus.BAD_REQUEST,
+                            send_body=send_body,
+                        )
+                        return
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "movie schedule fetch failed key=%s", movie_key, exc_info=True
+                        )
+                        _send_json(
+                            self,
+                            {
+                                "ok": False,
+                                "error": f"schedule fetch failed: {type(exc).__name__}",
+                            },
+                            status=HTTPStatus.BAD_GATEWAY,
+                            send_body=send_body,
+                        )
+                        return
+                    _send_json(self, payload, send_body=send_body)
+                    return
                 if path_only == "/api/fandango/search":
                     query = (parse_qs(parsed.query).get("q") or [""])[0].strip()
                     if not query:
@@ -791,8 +838,11 @@ def _make_handler_cls(
                 return
 
             add_path = path_only == "/api/movies/add"
+            import re as _re
+
+            pins_match = _re.match(r"^/api/movies/([^/]+)/pins$", path_only)
             patch_match = path_only.startswith("/api/movies/") and path_only != "/api/movies/add"
-            if method == "POST" and not add_path:
+            if method == "POST" and not add_path and pins_match is None:
                 self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
                 return
             if method in ("PATCH", "DELETE") and not patch_match:
@@ -818,6 +868,40 @@ def _make_handler_cls(
                     )
                     return
                 payload = parsed_body
+
+            if method == "POST" and pins_match is not None:
+                movie_key = pins_match.group(1)
+                from .movie_watch import set_movie_pins
+                from .movie_watch_state import PinnedShowtime
+
+                try:
+                    pins_raw = payload.get("pinned_showtimes") or []
+                    pins = [
+                        PinnedShowtime.model_validate(item)
+                        for item in pins_raw
+                    ]
+                    state = set_movie_pins(
+                        dashboard_data.paths.state_dir, movie_key, pins
+                    )
+                except Exception as exc:
+                    _send_json(
+                        self,
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                _send_json(
+                    self,
+                    {
+                        "ok": True,
+                        "movie_key": movie_key,
+                        "pinned_showtimes": [
+                            p.model_dump(mode="json")
+                            for p in state.pinned_showtimes
+                        ],
+                    },
+                )
+                return
 
             from .dashboard import (
                 add_movie_from_fandango_search_result,

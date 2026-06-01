@@ -143,6 +143,8 @@ def plan_purchase(
     *,
     target_name: str,
     purchase_cfg: PurchaseConfig,
+    only_showtime_url: str | None = None,
+    only_showtime_label: str | None = None,
 ) -> PurchasePlan | None:
     """Pick the highest-priority CityWalk showtime + seats for ``parsed``.
 
@@ -175,6 +177,15 @@ def plan_purchase(
             for st in fs.showtimes:
                 if not st.is_buyable or not st.ticket_url:
                     continue
+                if only_showtime_url and st.ticket_url != only_showtime_url:
+                    continue
+                if only_showtime_label and st.label != only_showtime_label:
+                    label_match = (
+                        only_showtime_label.strip().lower() in st.label.strip().lower()
+                        or st.label.strip().lower() in only_showtime_label.strip().lower()
+                    )
+                    if not label_match:
+                        continue
                 return PurchasePlan(
                     target_name=target_name,
                     theater_name=theater.name,
