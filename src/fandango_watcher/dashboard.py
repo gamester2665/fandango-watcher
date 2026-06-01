@@ -1027,6 +1027,47 @@ def _poster_url_for_movie(
     return None
 
 
+def _movie_aspect_ratio_max(movie: dict[str, Any]) -> float | None:
+    raw = movie.get("aspect_ratio_max")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_aspect_ratio_label(ratio: float) -> str:
+    text = f"{ratio:.2f}".rstrip("0").rstrip(".")
+    return f"{text}:1"
+
+
+def _render_aspect_ratio_chip(movie: dict[str, Any], *, compact: bool = False) -> str:
+    """IMAX max expanded aspect ratio from watchlist metadata (D1 / config)."""
+    ratio = _movie_aspect_ratio_max(movie)
+    if ratio is None:
+        return ""
+    label = _format_aspect_ratio_label(ratio)
+    real = bool(movie.get("is_real_imax"))
+    notes = _first_nonempty_str(movie.get("aspect_ratio_notes"))
+    cls = "aspect-ratio-chip aspect-ratio-chip--real-imax" if real else "aspect-ratio-chip aspect-ratio-chip--dmr"
+    title_attr = f' title="{html.escape(notes, quote=True)}"' if notes else ""
+    prefix = "" if compact else "Max "
+    real_suffix = " · GT" if real and compact else (" · full IMAX" if real else "")
+    return (
+        f'<span class="{cls}"{title_attr}>'
+        f"{html.escape(prefix)}{html.escape(label)}{html.escape(real_suffix)}"
+        f"</span>"
+    )
+
+
+def _render_aspect_ratio_meta(movie: dict[str, Any]) -> str:
+    chip = _render_aspect_ratio_chip(movie, compact=False)
+    if not chip:
+        return ""
+    return f' · <span class="movie-aspect-meta">{chip}</span>'
+
+
 def _release_date_for_movie(
     movie: dict[str, Any],
     *,
@@ -1366,6 +1407,7 @@ def _render_poster_shelf_tile(
     poster_url: str | None,
     status: str,
     schema: str = "unknown",
+    aspect_chip: str = "",
 ) -> str:
     status_key = status if status in ("error", "stale", "signal", "routine") else "routine"
     schema_key = _schema_filter_key(schema)
@@ -1401,11 +1443,15 @@ def _render_poster_shelf_tile(
         quote=True,
     )
     status_icon = _poster_shelf_status_icon_html(status_key)
+    aspect_block = (
+        f'<span class="poster-shelf-aspect">{aspect_chip}</span>' if aspect_chip else ""
+    )
     return (
         f'<a class="{cls}" href="#movie-{mid}" data-movie-jump="{mid}" '
         f'data-poster-schema="{schema_esc}" title="{hint}">'
         f'<span class="poster-shelf-poster-wrap">{poster}{status_icon}</span>'
-        f'<span class="poster-shelf-label">{label}</span></a>'
+        f'<span class="poster-shelf-label">{label}</span>'
+        f"{aspect_block}</a>"
     )
 
 
@@ -1444,8 +1490,8 @@ def _render_shelf_view_toggle(*, visible: bool) -> str:
         return ""
     return """
 <div class="shelf-view-toggle" role="group" aria-label="Watchlist layout">
-  <button type="button" class="shelf-view-btn is-active" id="movie-view-cards" aria-pressed="true">Cards</button>
-  <button type="button" class="shelf-view-btn" id="movie-view-posters" aria-pressed="false">Posters</button>
+  <button type="button" class="shelf-view-btn is-active" data-movie-view="cards" aria-pressed="true">Cards</button>
+  <button type="button" class="shelf-view-btn" data-movie-view="posters" aria-pressed="false">Posters</button>
 </div>"""
 
 
@@ -2238,28 +2284,23 @@ def _dashboard_ui_script() -> str:
       save();
     });
   }
-  var movieViewCards = document.getElementById("movie-view-cards");
-  var movieViewPosters = document.getElementById("movie-view-posters");
   function setMovieView(mode) {
     var posters = mode === "posters";
     state.movieView = posters ? "posters" : "cards";
     document.documentElement.classList.toggle("movie-view-posters", posters);
-    if (movieViewCards) {
-      movieViewCards.classList.toggle("is-active", !posters);
-      movieViewCards.setAttribute("aria-pressed", posters ? "false" : "true");
-    }
-    if (movieViewPosters) {
-      movieViewPosters.classList.toggle("is-active", posters);
-      movieViewPosters.setAttribute("aria-pressed", posters ? "true" : "false");
-    }
+    Array.prototype.slice.call(document.querySelectorAll(".shelf-view-toggle [data-movie-view]")).forEach(function (btn) {
+      var view = btn.getAttribute("data-movie-view") || "cards";
+      var active = view === (posters ? "posters" : "cards");
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
     save();
   }
-  if (movieViewCards) {
-    movieViewCards.addEventListener("click", function () { setMovieView("cards"); });
-  }
-  if (movieViewPosters) {
-    movieViewPosters.addEventListener("click", function () { setMovieView("posters"); });
-  }
+  Array.prototype.slice.call(document.querySelectorAll(".shelf-view-toggle [data-movie-view]")).forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      setMovieView(btn.getAttribute("data-movie-view") || "cards");
+    });
+  });
   if (state.movieView === "posters") {
     setMovieView("posters");
   }
@@ -3101,6 +3142,44 @@ def dashboard_css() -> str:
       text-align: center;
       overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .poster-shelf-aspect {
+      display: flex;
+      justify-content: center;
+      min-height: 1.1rem;
+    }
+    .poster-shelf-aspect .aspect-ratio-chip {
+      font-size: 0.58rem;
+      padding: 0.1rem 0.32rem;
+    }
+    .aspect-ratio-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.15rem;
+      padding: 0.12rem 0.42rem;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      cursor: help;
+    }
+    .aspect-ratio-chip--real-imax {
+      border-color: rgba(36, 138, 61, 0.35);
+      background: rgba(36, 138, 61, 0.1);
+      color: var(--ok);
+    }
+    .aspect-ratio-chip--dmr {
+      border-color: rgba(88, 86, 214, 0.28);
+      background: rgba(88, 86, 214, 0.08);
+      color: var(--accent2);
+    }
+    .movie-aspect-meta {
+      display: inline;
       white-space: nowrap;
     }
     .shelf-title {
@@ -5879,6 +5958,7 @@ def render_index_html(
             if counts_line
             else ""
         )
+        aspect_chip = _render_aspect_ratio_chip(m, compact=True)
         poster_tiles.append(
             _render_poster_shelf_tile(
                 movie_id=mkey_slug,
@@ -5886,10 +5966,16 @@ def render_index_html(
                 poster_url=poster,
                 status=movie_status,
                 schema=movie_schema,
+                aspect_chip=aspect_chip,
             )
         )
         showing_label = html.escape(f"Showings for {mtitle_raw}")
         schema_key = _schema_filter_key(movie_schema)
+        aspect_label = (
+            _format_aspect_ratio_label(_movie_aspect_ratio_max(m))
+            if _movie_aspect_ratio_max(m) is not None
+            else ""
+        )
         search_blob = " ".join(
             str(x)
             for x in (
@@ -5899,6 +5985,8 @@ def render_index_html(
                 distributor,
                 release_date,
                 counts_line,
+                aspect_label,
+                "imax" if m.get("is_real_imax") else "",
             )
         )
         crawl_blocks.append(
@@ -5915,7 +6003,9 @@ def render_index_html(
             f'<div class="movie-group-title-row"><h3 class="movie-group-title">{mtitle}</h3>'
             f'{schema_badge}</div>'
             f'<p class="movie-group-eyebrow"><span class="movie-release-date">{release_date}</span>'
-            f" · {distributor} · {counts_html}{len(group['subcards'])} showing(s)</p>"
+            f" · {distributor}"
+            f"{_render_aspect_ratio_meta(m)}"
+            f" · {counts_html}{len(group['subcards'])} showing(s)</p>"
             "</div></div>"
             f'<div class="showings-rail" aria-label="{showing_label}">{"".join(group["subcards"])}</div>'
             f"{_render_movie_schedule_panel(group['key'])}"
@@ -5984,7 +6074,6 @@ def render_index_html(
         crawl_body = (
             '<div class="watchlist-view" data-watchlist-view>'
             f"{watchlist_controls}"
-            f"{shelf_view_toggle}"
             f"{poster_shelf}"
             f'<div class="movie-stack" aria-label="Movie watchlist">{crawl_body_inner}</div>'
             "</div>"
@@ -6330,7 +6419,7 @@ def render_index_html(
         {shelf_view_toggle}
       </div>
     </div>
-    <p class="panel-tagline">Use Posters for an at-a-glance row with status outlines, or Cards for showings. Each showing card shows state, schema, and freshness without expanding.</p>
+    <p class="panel-tagline">Use Posters for an at-a-glance row with status outlines and max IMAX aspect ratio, or Cards for per-target showings. Hover a ratio chip for research notes.</p>
     {movie_add_panel}
     {target_controls}
   </section>

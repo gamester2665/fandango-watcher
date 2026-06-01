@@ -538,7 +538,8 @@ def test_watchlist_shelf_section_head() -> None:
     assert "shelf-meta" in html_out
     assert "movie-stack" in html_out
     assert "showings-rail" in html_out
-    assert "movie-view-cards" in html_out
+    assert 'data-movie-view="cards"' in html_out
+    assert html_out.count('aria-label="Watchlist layout"') == 1
     assert "poster-shelf" in html_out
     assert "poster-shelf-tile--" in html_out
 
@@ -941,6 +942,39 @@ def test_render_index_html_color_codes_release_schemas_with_operator_hints() -> 
     assert "Broad ticket signal" in html_out
     assert "schema-unknown" in html_out
     assert "No successful crawl schema yet" in html_out
+
+
+def test_watchlist_shows_imax_aspect_ratio_chip() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "odyssey-imax-70mm",
+                "url": "https://example.com/odyssey",
+                "state": {"current_state": "watching", "total_ticks": 2},
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "disabled", "reason": "test"},
+        "movies": [
+            {
+                "key": "odyssey",
+                "title": "The Odyssey (2026)",
+                "fandango_targets": ["odyssey-imax-70mm"],
+                "aspect_ratio_max": 1.43,
+                "is_real_imax": True,
+                "aspect_ratio_notes": "Full 1.43 IMAX film capture.",
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert "aspect-ratio-chip--real-imax" in html_out
+    assert "Max 1.43:1" in html_out
+    assert "poster-shelf-aspect" in html_out
+    assert "1.43:1" in html_out
+    assert "GT" in html_out
+    assert 'title="Full 1.43 IMAX film capture."' in html_out
 
 
 def test_render_index_html_simple_watchlist_uses_movie_poster_and_hides_advanced() -> None:
