@@ -759,6 +759,17 @@ def _make_handler_cls(
                     )
                     _send_json(self, payload, send_body=send_body)
                     return
+                if path_only.startswith("/static/"):
+                    from .dashboard import dashboard_static_dir
+
+                    rel = path_only[len("/static/") :]
+                    _serve_artifact_file(
+                        self,
+                        artifacts_root=dashboard_static_dir(),
+                        relative_url_path=rel,
+                        send_body=send_body,
+                    )
+                    return
                 if path_only.startswith("/artifacts/"):
                     rel = path_only[len("/artifacts/") :]
                     _serve_artifact_file(

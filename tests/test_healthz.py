@@ -379,6 +379,24 @@ class TestDashboardRoutes:
         expected = json.loads(expected_raw)
         assert got == expected
 
+    def test_dashboard_static_serves_bundled_imax_chart(self, tmp_path: Path) -> None:
+        """Packaged ``/static/`` assets ship with the dashboard (IMAX size chart)."""
+        cfg = _dash_cfg(tmp_path)
+        paths = DashboardPaths.from_config(cfg)
+        dd = DashboardData(cfg=cfg, paths=paths, heartbeat=Heartbeat())
+        hb = Heartbeat()
+        with _running_server(hb, dashboard_data=dd) as ctx:
+            url = (
+                "http://127.0.0.1:"
+                f"{ctx.port}/static/la-imax-screen-size-comparison.png"
+            )
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                assert resp.status == 200
+                assert resp.headers.get("Content-Type", "").startswith("image/")
+                body = resp.read()
+                assert len(body) > 1000
+                assert body[:8] == b"\x89PNG\r\n\x1a\n"
+
     def test_artifact_file_includes_private_cache(
         self, tmp_path: Path
     ) -> None:

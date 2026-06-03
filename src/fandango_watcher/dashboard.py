@@ -21,6 +21,8 @@ from .social_x import load_social_x_state
 
 _PT = ZoneInfo("America/Los_Angeles")
 _CITYWALK_THEATER_SLUG = "universal-cinema-amc-at-citywalk-hollywood-aaawx"
+DASHBOARD_STATIC_DIR = Path(__file__).resolve().parent / "static"
+IMAX_SCREEN_SIZE_CHART_FILENAME = "la-imax-screen-size-comparison.png"
 _TWEET_URL_RE = re.compile(
     r"https?://[^\s<>\"']+",
     re.IGNORECASE,
@@ -1066,6 +1068,48 @@ def _render_aspect_ratio_meta(movie: dict[str, Any]) -> str:
     if not chip:
         return ""
     return f' · <span class="movie-aspect-meta">{chip}</span>'
+
+
+def dashboard_static_dir() -> Path:
+    """Bundled dashboard images (served at ``/static/...``)."""
+    return DASHBOARD_STATIC_DIR
+
+
+def _imax_screen_size_chart_path() -> Path | None:
+    path = DASHBOARD_STATIC_DIR / IMAX_SCREEN_SIZE_CHART_FILENAME
+    return path if path.is_file() else None
+
+
+def _render_imax_screen_reference_panel() -> str:
+    """LA-area IMAX screen size infographic (expandable via artifact lightbox)."""
+    if _imax_screen_size_chart_path() is None:
+        return ""
+    url = f"/static/{IMAX_SCREEN_SIZE_CHART_FILENAME}"
+    frame = _media_frame_html(
+        variant="screenshot",
+        src=url,
+        alt="LA Area IMAX screen size comparison chart",
+        title="LA Area IMAX Screen Size Comparison",
+        caption="Tap to expand",
+        css_class="imax-screen-ref-thumb",
+        interactive=True,
+        artifact_kind="screenshot",
+        artifact_title="LA Area IMAX Screen Size Comparison",
+        loading="lazy",
+    )
+    return (
+        '<aside class="imax-screen-ref-panel" id="imax-screen-sizes" '
+        'aria-label="LA IMAX screen size reference">'
+        '<h3 class="imax-screen-ref-heading">LA IMAX screen sizes</h3>'
+        '<p class="hint imax-screen-ref-lede">'
+        "Physical screen footprints for SoCal IMAX venues — "
+        "<strong>Universal CityWalk</strong> is <strong>79×58 ft</strong> "
+        "(~1.36:1). Compare to GT Laser halls like Irvine/Ontario (~1.30:1) "
+        "and wider screens like TCL Chinese (~2.04:1)."
+        "</p>"
+        f"{frame}"
+        "</aside>"
+    )
 
 
 def _release_date_for_movie(
@@ -3181,6 +3225,38 @@ def dashboard_css() -> str:
     .movie-aspect-meta {
       display: inline;
       white-space: nowrap;
+    }
+    .imax-screen-ref-panel {
+      margin: 0.35rem 0 0.55rem;
+      padding: 0.72rem 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-elevated);
+      box-shadow: var(--shadow-sm);
+    }
+    .imax-screen-ref-heading {
+      margin: 0 0 0.35rem;
+      font-size: 0.92rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .imax-screen-ref-lede {
+      margin: 0 0 0.55rem;
+      max-width: 72ch;
+    }
+    .imax-screen-ref-panel .media-frame--screenshot {
+      max-width: min(520px, 100%);
+      margin: 0;
+      cursor: zoom-in;
+    }
+    .imax-screen-ref-panel .imax-screen-ref-thumb {
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+    }
+    .imax-screen-ref-panel .media-caption {
+      font-size: 0.72rem;
+      color: var(--muted);
     }
     .shelf-title {
       margin: 0;
@@ -6380,6 +6456,7 @@ def render_index_html(
 }})();
   </script>
 """
+    imax_screen_ref_panel = _render_imax_screen_reference_panel()
     ui_script = _dashboard_ui_script()
 
     return f"""<!DOCTYPE html>
@@ -6420,6 +6497,7 @@ def render_index_html(
       </div>
     </div>
     <p class="panel-tagline">Use Posters for an at-a-glance row with status outlines and max IMAX aspect ratio, or Cards for per-target showings. Hover a ratio chip for research notes.</p>
+    {imax_screen_ref_panel}
     {movie_add_panel}
     {target_controls}
   </section>

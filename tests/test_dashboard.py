@@ -944,6 +944,34 @@ def test_render_index_html_color_codes_release_schemas_with_operator_hints() -> 
     assert "No successful crawl schema yet" in html_out
 
 
+def test_imax_screen_reference_panel_is_expandable() -> None:
+    snap = {
+        "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
+        "targets": [
+            {
+                "name": "alpha",
+                "url": "https://example.com/t",
+                "state": {"current_state": "watching", "total_ticks": 2},
+            }
+        ],
+        "social_x": {"handles": {}},
+        "release_intel": {"status": "disabled", "reason": "test"},
+        "movies": [
+            {
+                "key": "alpha-movie",
+                "title": "Alpha Movie",
+                "fandango_targets": ["alpha"],
+            }
+        ],
+        "runtime": {"fandango_poll": {"min_seconds": 30, "max_seconds": 35, "error_backoff_cap_seconds": 1800}},
+    }
+    html_out = render_index_html(snap, refresh_seconds=0)
+    assert "imax-screen-ref-panel" in html_out
+    assert "la-imax-screen-size-comparison.png" in html_out
+    assert "data-artifact-src=\"/static/la-imax-screen-size-comparison.png\"" in html_out
+    assert "Universal CityWalk" in html_out
+
+
 def test_watchlist_shows_imax_aspect_ratio_chip() -> None:
     snap = {
         "healthz": {"started_at": "x", "last_tick_at": None, "total_ticks": 0, "total_errors": 0},
