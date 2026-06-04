@@ -5142,6 +5142,15 @@ def _render_target_card(
     if api_warning:
         api_bits.append("warning " + html.escape(str(api_warning)))
     api_html = f'<p class="card-api-meta"><strong>Direct API</strong> · {" · ".join(api_bits)}</p>'
+    evidence_raw = st.get("last_schema_evidence") or []
+    evidence_list = evidence_raw if isinstance(evidence_raw, list) else []
+    evidence_html = ""
+    if evidence_list:
+        snippet = ", ".join(str(item) for item in evidence_list[-8:])
+        evidence_html = (
+            f'<p class="card-evidence-meta"><strong>Schema evidence</strong> '
+            f"<code>{html.escape(snippet)}</code></p>"
+        )
     artifact_actions: list[str] = []
     has_card_preview = bool(su_url or vu)
     if not has_card_preview:
@@ -5169,7 +5178,7 @@ def _render_target_card(
         if next_action
         else ""
     )
-    details_inner = f"{err_meta}{err_html}{stale_html}{api_html}{media_inner}"
+    details_inner = f"{err_meta}{err_html}{stale_html}{api_html}{evidence_html}{media_inner}"
     details_block = ""
     if details_inner.strip():
         details_block = render_inline_disclosure(

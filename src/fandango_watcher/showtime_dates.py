@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, urlparse
+from datetime import date
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 if TYPE_CHECKING:
     from .config import TargetConfig, WatcherConfig
@@ -20,6 +21,9 @@ _MONTH_DAY_YEAR_RE = re.compile(
     r"\b(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})\b"
 )
 _TITLE_YEAR_RE = re.compile(r"\((\d{4})\)\s*$")
+OVERVIEW_BROWSER_CONFIRM_DAYS_BEFORE = 14
+OVERVIEW_BROWSER_CONFIRM_DAYS_AFTER = 7
+
 _MONTHS = {
     "jan": 1,
     "january": 1,
@@ -111,6 +115,40 @@ def parse_release_date_iso(text: str | None) -> str | None:
     return None
 
 
+def parse_format_from_target_url(url: str) -> str | None:
+    """Return the ``format`` query value from a movie-overview URL, if present."""
+    values = parse_qs(urlparse(url).query).get("format") or []
+    for value in values:
+        label = unquote_plus(value.strip())
+        if label:
+            return label
+    return None
+
+
+def target_is_format_filtered(target: TargetConfig) -> bool:
+    """True when the target URL or config selects a specific screen format."""
+    if parse_format_from_target_url(target.url):
+        return True
+    if target.format_filter_click_label or target.format_filter_click_selector:
+        return True
+    name = target.name.lower()
+    return "-imax-" in name or name.endswith("-imax")
+
+
+def days_until_release(
+    release_iso: str,
+    *,
+    today: date | None = None,
+) -> int | None:
+    """Days from ``today`` until ``release_iso`` (negative = already opened)."""
+    if not _valid_iso_date(release_iso):
+        return None
+    year_s, month_s, day_s = release_iso.split("-", 2)
+    opening = date(int(year_s), int(month_s), int(day_s))
+    ref = today or datetime.now(UTC).date()
+    return (opening - ref).days
+
+
 def parse_date_from_target_url(url: str) -> str | None:
     query = parse_qs(urlparse(url).query)
     for key in ("date", "startDate"):
@@ -190,13 +228,21 @@ def should_browser_confirm_overview(
         return False
     if (getattr(parsed, "showtime_count", None) or 0) > 0:
         return False
-    return bool(
-        priority_showtime_dates(
-            target,
-            cfg,
-            release_date_text=release_date_text,
-        )
+    priority = priority_showtime_dates(
+        target,
+        cfg,
+        release_date_text=release_date_text,
     )
+    if not priority:
+        return False
+    days_out = days_until_release(priority[0])
+    if days_out is None:
+        return True
+    if days_out > OVERVIEW_BROWSER_CONFIRM_DAYS_BEFORE:
+        return False
+    if days_out < -OVERVIEW_BROWSER_CONFIRM_DAYS_AFTER:
+        return False
+    return True
 
 
 def target_uses_any_format_for_disclosed(target: TargetConfig) -> bool:

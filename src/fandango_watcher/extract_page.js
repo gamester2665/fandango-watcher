@@ -95,18 +95,41 @@
           heading.closest(".shared-showtimes__container") ||
           heading.closest('[class*="shared-showtimes"]');
         if (!container) return;
-        const showtimes = showtimesFromElements(collectShowtimeElements(container));
+        const sections = [];
+        container
+          .querySelectorAll(".shared-showtimes__amenity-group")
+          .forEach((group) => {
+            const titleEl = group.querySelector(".shared-showtimes__title");
+            const amenitiesEl = group.querySelector(".shared-showtimes__amenities");
+            const title = text(titleEl);
+            const amenities = text(amenitiesEl);
+            const sectionLabel =
+              [title, amenities].filter(Boolean).join(" · ") || "Standard";
+            const showtimes = showtimesFromElements(
+              collectShowtimeElements(group)
+            );
+            if (showtimes.length === 0) return;
+            sections.push({
+              label: sectionLabel,
+              attributes: amenities ? [amenities] : [],
+              showtimes,
+            });
+          });
+        if (sections.length === 0) {
+          const showtimes = showtimesFromElements(
+            collectShowtimeElements(container)
+          );
+          sections.push({
+            label: "Standard",
+            attributes: [],
+            showtimes,
+          });
+        }
         shared.push({
           name,
           address: null,
           distance_miles: null,
-          format_sections: [
-            {
-              label: "Standard",
-              attributes: [],
-              showtimes,
-            },
-          ],
+          format_sections: sections,
         });
       });
     return shared;

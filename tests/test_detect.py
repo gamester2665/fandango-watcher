@@ -406,7 +406,107 @@ class TestCityWalkDetection:
 # -----------------------------------------------------------------------------
 
 
+class TestRefineParsedForTarget:
+    def test_format_filter_keeps_only_imax_70mm_sections(self) -> None:
+        from fandango_watcher.config import (
+            FormatsConfig,
+            MovieConfig,
+            NotifyConfig,
+            PollConfig,
+            PurchaseConfig,
+            TargetConfig,
+            TheaterConfig,
+            WatcherConfig,
+        )
+        from fandango_watcher.detect import refine_parsed_for_target
+        from fandango_watcher.models import (
+            FormatSection,
+            FormatTag,
+            Showtime,
+            ShowtimesDisclosedPageData,
+            TheaterListing,
+        )
+
+        cfg = WatcherConfig(
+            targets=[
+                TargetConfig(
+                    name="odyssey-imax-70mm",
+                    url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview?format=IMAX%2070MM",
+                )
+            ],
+            theater=TheaterConfig(display_name="CW", fandango_theater_anchor="CW"),
+            formats=FormatsConfig(require=[FormatTag.IMAX_70MM], include=[]),
+            poll=PollConfig(min_seconds=30, max_seconds=30),
+            purchase=PurchaseConfig(enabled=False),
+            notify=NotifyConfig(channels=[], on_events=[]),
+            movies=[
+                MovieConfig(
+                    key="odyssey",
+                    title="The Odyssey (2026)",
+                    release_date="2026-07-17",
+                    fandango_targets=["odyssey-imax-70mm"],
+                    preferred_formats=[FormatTag.IMAX_70MM, FormatTag.IMAX],
+                )
+            ],
+        )
+        parsed = ShowtimesDisclosedPageData(
+            url=cfg.targets[0].url,
+            page_title="Odyssey",
+            theater_count=1,
+            showtime_count=5,
+            buyable_showtime_count=0,
+            buyable_theater_count=0,
+            theaters=[
+                TheaterListing(
+                    name="Regal Example",
+                    format_sections=[
+                        FormatSection(
+                            label="Standard",
+                            normalized_format=FormatTag.STANDARD,
+                            showtimes=[
+                                Showtime(label="7:00p", is_buyable=False),
+                            ],
+                        ),
+                        FormatSection(
+                            label="IMAX 70MM · Reserved seating, 70MM Film",
+                            normalized_format=FormatTag.IMAX_70MM,
+                            showtimes=[
+                                Showtime(label="6:30p", is_buyable=False),
+                            ],
+                        ),
+                    ],
+                )
+            ],
+        )
+        refined = refine_parsed_for_target(
+            parsed,
+            cfg.targets[0],
+            cfg,
+            citywalk_anchor="CityWalk",
+        )
+        assert refined.showtime_count == 1
+        assert any("format_filter=" in e for e in refined.schema_evidence)
+
+
 class TestSchemaEvidence:
+    def test_regional_only_when_no_citywalk_showtimes(self) -> None:
+        snapshot = _empty_snapshot(
+            theaters=[
+                ExtractedTheater(
+                    name="Regal Example",
+                    format_sections=[
+                        ExtractedFormatSection(
+                            label="Standard",
+                            showtimes=[ExtractedShowtime(label="7:00p", is_buyable=False)],
+                        )
+                    ],
+                )
+            ],
+        )
+        result = classify(snapshot, citywalk_anchor=CITYWALK_ANCHOR)
+        assert result.release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+        assert "regional_showtimes_only" in result.schema_evidence
+
     def test_includes_counts(self) -> None:
         snapshot = _empty_snapshot(
             theaters=[_citywalk_theater(sections=[_imax_70mm_section()])]

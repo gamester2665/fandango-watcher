@@ -47,7 +47,7 @@ from .config import (
     plain_secret,
 )
 from .dashboard import DashboardData, DashboardPaths
-from .detect import prefer_stronger_parsed
+from .detect import prefer_stronger_parsed, refine_parsed_for_target
 from .direct_api_detect import (
     DirectApiDetectionMeta,
     _wanted_formats,
@@ -1064,6 +1064,12 @@ def run_watch(
                                     screenshot_dir=screenshot_dir,
                                     cfg=cfg,
                                     release_date_text=prev.last_release_date_text,
+                                )
+                                browser_parsed = refine_parsed_for_target(
+                                    browser_parsed,
+                                    target,
+                                    cfg,
+                                    citywalk_anchor=cfg.theater.fandango_theater_anchor,
                                 )
                                 parsed = prefer_stronger_parsed(
                                     parsed,

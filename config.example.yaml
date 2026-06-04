@@ -22,6 +22,7 @@ targets:
     url: https://www.fandango.com/the-odyssey-2026-241283/movie-overview?format=IMAX%2070MM
     wait_until: domcontentloaded
     timeout_ms: 30000
+    # ``?format=`` is also used to click the matching chip before extraction.
     # Optional direct-API overrides; usually movies[].fandango_movie_id/title is enough.
     # direct_api_movie_id: 241283
     # direct_api_formats: [IMAX_70MM]

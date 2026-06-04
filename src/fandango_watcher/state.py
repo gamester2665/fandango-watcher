@@ -95,6 +95,7 @@ class TargetState(BaseModel):
     direct_api_last_matching_hashes: list[str] = Field(default_factory=list)
     direct_api_fallback_count: int = Field(default=0, ge=0)
     direct_api_last_drift_warning: str | None = None
+    last_schema_evidence: list[str] = Field(default_factory=list)
 
 
 class TransitionResult(BaseModel):
@@ -220,6 +221,7 @@ def transition(
     else:
         new_watcher_state = WatcherState.WATCHING
 
+    evidence = list(getattr(parsed, "schema_evidence", []) or [])[-12:]
     updated = prev.model_copy(
         update={
             "current_state": new_watcher_state,
@@ -228,6 +230,7 @@ def transition(
             "last_buyable_showtime_count": parsed.buyable_showtime_count,
             "last_release_date_text": parsed.release_date_text or prev.last_release_date_text,
             "last_poster_url": parsed.poster_url or prev.last_poster_url,
+            "last_schema_evidence": evidence,
             "last_tick_at": effective_now,
             "last_success_at": effective_now,
             "last_error_message": None,

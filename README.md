@@ -73,6 +73,17 @@ fandango-watcher watch --config config.yaml --direct-api-mode api --no-browser-f
 fandango-watcher once --config config.yaml --target odyssey-overview --direct-api-mode browser
 ```
 
+### Release schemas: overview vs format targets
+
+Fandango uses two different surfaces:
+
+| Target kind | Example | What “disclosed” means |
+|-------------|---------|-------------------------|
+| `*-overview` | `odyssey-overview` | Regional showtimes on the movie page (`?date=YYYY-MM-DD`). CityWalk may still be empty. |
+| `*-imax-*` / `?format=` | `odyssey-imax-70mm` | Only rows matching **IMAX 70MM** (URL `format=` auto-clicks the chip; parser filters sections). |
+
+Set `movies[].release_date` (or rely on page text like `Opens Jul 17`) so the watcher always scans **opening day** in the direct API and runs a browser overview confirm within **14 days** before / **7 days** after release. Schema evidence (`regional_showtimes_only`, `browser_overview_confirm`, `format_filter=…`) is shown on the dashboard target card.
+
 ---
 
 ## VPS / production (manual)

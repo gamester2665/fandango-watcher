@@ -75,7 +75,7 @@ def _format_value(value: FormatTag | str) -> str:
     return value.value if isinstance(value, FormatTag) else str(value)
 
 
-def _wanted_formats(target: TargetConfig, cfg: WatcherConfig) -> set[str]:
+def wanted_formats_for_target(target: TargetConfig, cfg: WatcherConfig) -> set[str]:
     if target.direct_api_formats:
         return {_format_value(value) for value in target.direct_api_formats}
     movie = cfg.movie_for_target(target.name)
@@ -85,6 +85,9 @@ def _wanted_formats(target: TargetConfig, cfg: WatcherConfig) -> set[str]:
         _format_value(value)
         for value in [*cfg.formats.require, *cfg.formats.include]
     }
+
+
+_wanted_formats = wanted_formats_for_target
 
 
 def _movie_matchers(target: TargetConfig, cfg: WatcherConfig) -> tuple[int | None, str | None]:
@@ -332,7 +335,7 @@ def detect_target_direct_api(
         inspected_dates: list[str] = []
         meta = DirectApiDetectionMeta()
         movie_id, movie_title = _movie_matchers(target, cfg)
-        wanted_formats = _wanted_formats(target, cfg)
+        wanted_formats = wanted_formats_for_target(target, cfg)
         match_any_format = target_uses_any_format_for_disclosed(target)
         matches: list[FandangoShowtimeRecord] = []
         visible_matches: list[FandangoShowtimeRecord] = []

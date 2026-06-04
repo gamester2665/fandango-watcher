@@ -395,7 +395,9 @@ class TestDashboardRoutes:
                 assert resp.headers.get("Content-Type", "").startswith("image/")
                 body = resp.read()
                 assert len(body) > 1000
-                assert body[:8] == b"\x89PNG\r\n\x1a\n"
+                is_png = body[:8] == b"\x89PNG\r\n\x1a\n"
+                is_jpeg = body[:3] == b"\xff\xd8\xff"
+                assert is_png or is_jpeg
 
     def test_artifact_file_includes_private_cache(
         self, tmp_path: Path

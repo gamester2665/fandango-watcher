@@ -29,13 +29,14 @@ from typing import Any
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .config import BrowserConfig, TargetConfig, WatcherConfig
-from .showtime_dates import effective_crawl_url
+from .showtime_dates import effective_crawl_url, parse_format_from_target_url
 from .detect import (
     ExtractedFormatSection,
     ExtractedShowtime,
     ExtractedTheater,
     PageSnapshot,
     classify,
+    refine_parsed_for_target,
 )
 from .models import ParsedPageData, ReleaseSchema
 from .playwright_video import rename_page_video_after_close
@@ -78,16 +79,24 @@ def _wait_for_fandango_showtime_dom(page: Page, *, timeout_ms: int = 15_000) -> 
         )
 
 
+def _effective_format_filter_label(target: TargetConfig) -> str | None:
+    if target.format_filter_click_label:
+        return target.format_filter_click_label.strip() or None
+    return parse_format_from_target_url(target.url)
+
+
 def _maybe_click_format_filter(page: Page, target: TargetConfig) -> None:
     """If configured, click a Fandango format chip before extraction.
 
     Use ``format_filter_click_selector`` for a CSS selector, or
     ``format_filter_click_label`` for a case-insensitive substring match
-    (scoped to ``#lazyload-format-filters`` when present). On failure, logs a
-    warning and continues so the crawl still returns a snapshot.
+    (scoped to ``#lazyload-format-filters`` when present). When the target URL
+    includes ``?format=``, that value is used as the chip label if YAML omits
+    one. On failure, logs a warning and continues so the crawl still returns a
+    snapshot.
     """
     sel = target.format_filter_click_selector
-    label = target.format_filter_click_label
+    label = _effective_format_filter_label(target)
     if not sel and not label:
         return
     timeout = int(target.format_filter_click_timeout_ms)
@@ -265,6 +274,13 @@ def crawl_open_page(
             page=page, url=crawl_url, screenshot_path=screenshot_path
         )
         parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
+    if cfg is not None:
+        parsed = refine_parsed_for_target(
+            parsed,
+            target,
+            cfg,
+            citywalk_anchor=citywalk_anchor,
+        )
     return parsed
 
 

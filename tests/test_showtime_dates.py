@@ -16,11 +16,15 @@ from fandango_watcher.config import (
 from fandango_watcher.detect import prefer_stronger_parsed
 from fandango_watcher.models import NotOnSalePageData, ReleaseSchema, ShowtimesDisclosedPageData
 from fandango_watcher.showtime_dates import (
+    OVERVIEW_BROWSER_CONFIRM_DAYS_BEFORE,
+    days_until_release,
     effective_crawl_url,
     merge_scan_dates,
+    parse_format_from_target_url,
     parse_release_date_iso,
     priority_showtime_dates,
     should_browser_confirm_overview,
+    target_is_format_filtered,
     target_uses_any_format_for_disclosed,
 )
 
@@ -110,7 +114,70 @@ def test_target_uses_any_format_for_disclosed_overview_only() -> None:
     assert target_uses_any_format_for_disclosed(imax) is False
 
 
+def test_parse_format_from_target_url() -> None:
+    url = "https://www.fandango.com/foo/movie-overview?format=IMAX%2070MM"
+    assert parse_format_from_target_url(url) == "IMAX 70MM"
+
+
+def test_target_is_format_filtered() -> None:
+    overview = TargetConfig(
+        name="odyssey-overview",
+        url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview",
+    )
+    imax = TargetConfig(
+        name="odyssey-imax-70mm",
+        url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview?format=IMAX%2070MM",
+    )
+    assert target_is_format_filtered(overview) is False
+    assert target_is_format_filtered(imax) is True
+
+
+def test_should_browser_confirm_overview_throttled_far_from_release() -> None:
+    from datetime import date
+
+    cfg = WatcherConfig(
+        targets=[
+            TargetConfig(
+                name="odyssey-overview",
+                url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview",
+            )
+        ],
+        theater=TheaterConfig(display_name="CW", fandango_theater_anchor="CW"),
+        formats=FormatsConfig(require=[], include=[]),
+        poll=PollConfig(min_seconds=30, max_seconds=30),
+        purchase=PurchaseConfig(enabled=False),
+        notify=NotifyConfig(channels=[], on_events=[]),
+        movies=[
+            MovieConfig(
+                key="odyssey",
+                title="The Odyssey (2026)",
+                release_date="2099-01-01",
+                fandango_targets=["odyssey-overview"],
+            )
+        ],
+    )
+    parsed = NotOnSalePageData(
+        url=cfg.targets[0].url,
+        page_title="Future",
+        theater_count=0,
+        showtime_count=0,
+    )
+    assert (
+        should_browser_confirm_overview(
+            cfg.targets[0],
+            cfg,
+            parsed,
+            release_date_text=None,
+        )
+        is False
+    )
+    assert days_until_release("2099-01-01", today=date(2026, 6, 4)) > OVERVIEW_BROWSER_CONFIRM_DAYS_BEFORE
+
+
 def test_should_browser_confirm_overview_when_opening_day_known() -> None:
+    from datetime import date, timedelta
+
+    soon = (date.today() + timedelta(days=7)).isoformat()
     cfg = WatcherConfig(
         targets=[
             TargetConfig(
@@ -128,7 +195,7 @@ def test_should_browser_confirm_overview_when_opening_day_known() -> None:
                 key="odyssey",
                 title="The Odyssey (2026)",
                 fandango_movie_id=241283,
-                release_date="2026-07-17",
+                release_date=soon,
                 fandango_targets=["odyssey-overview"],
             )
         ],

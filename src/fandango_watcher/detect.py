@@ -15,6 +15,7 @@ from typing import TypeVar
 
 from pydantic import Field
 
+from .config import TargetConfig, WatcherConfig
 from .models import (
     FormatFilter,
     FormatSection,
@@ -29,6 +30,7 @@ from .models import (
     ShowtimesDisclosedPageData,
     TheaterListing,
 )
+from .showtime_dates import target_is_format_filtered
 
 # -----------------------------------------------------------------------------
 # Tunable thresholds. Partial vs full release is a judgement call; keep the
@@ -330,6 +332,8 @@ def classify(
         evidence.append("loading_format_filters_present")
     if citywalk_present:
         evidence.append(f"citywalk_showtime_count={citywalk_showtime_count}")
+    elif showtime_count > 0:
+        evidence.append("regional_showtimes_only")
 
     # Ticket URL falls back to the first buyable showtime's URL when the
     # extractor didn't surface an explicit top-level link.
@@ -396,6 +400,105 @@ _SCHEMA_RANK: dict[str, int] = {
 def _schema_rank_value(schema: ReleaseSchema | str) -> int:
     value = schema.value if isinstance(schema, ReleaseSchema) else str(schema)
     return _SCHEMA_RANK.get(value, 0)
+
+
+def _format_tag_value(tag: FormatTag | str) -> str:
+    return tag.value if isinstance(tag, FormatTag) else str(tag)
+
+
+def refine_parsed_for_target(
+    parsed: ParsedPageData,
+    target: TargetConfig,
+    cfg: WatcherConfig,
+    *,
+    citywalk_anchor: str,
+) -> ParsedPageData:
+    """Drop format sections that do not match a format-filtered target URL/config."""
+    from .direct_api_detect import wanted_formats_for_target
+
+    if not target_is_format_filtered(target):
+        return parsed
+    wanted = wanted_formats_for_target(target, cfg)
+    if not wanted:
+        return parsed
+
+    extracted: list[ExtractedTheater] = []
+    for theater in parsed.theaters:
+        sections: list[ExtractedFormatSection] = []
+        for fs in theater.format_sections:
+            tag = _format_tag_value(fs.normalized_format)
+            label_tag = _format_tag_value(normalize_format_label(fs.label))
+            if tag in wanted or label_tag in wanted:
+                sections.append(
+                    ExtractedFormatSection(
+                        label=fs.label,
+                        showtimes=[
+                            ExtractedShowtime(
+                                label=st.label,
+                                ticket_url=st.ticket_url,
+                                is_buyable=st.is_buyable,
+                                date_label=st.date_label,
+                            )
+                            for st in fs.showtimes
+                        ],
+                    )
+                )
+        if sections:
+            extracted.append(
+                ExtractedTheater(
+                    name=theater.name,
+                    address=theater.address,
+                    distance_miles=theater.distance_miles,
+                    format_sections=sections,
+                )
+            )
+
+    prior_evidence = list(parsed.schema_evidence)
+    if not extracted:
+        snapshot = PageSnapshot(
+            url=parsed.url,
+            page_title=parsed.page_title or "",
+            movie_title=parsed.movie_title,
+            release_date_text=parsed.release_date_text,
+            poster_url=parsed.poster_url,
+            screenshot_path=parsed.screenshot_path,
+            theaters=[],
+        )
+        refined = classify(snapshot, citywalk_anchor=citywalk_anchor)
+        tags = ",".join(sorted(wanted))
+        return refined.model_copy(
+            update={
+                "schema_evidence": [
+                    *prior_evidence,
+                    f"format_filter={tags}",
+                    "format_filter_no_matching_sections",
+                ],
+            }
+        )
+
+    snapshot = PageSnapshot(
+        url=parsed.url,
+        page_title=parsed.page_title or "",
+        movie_title=parsed.movie_title,
+        release_date_text=parsed.release_date_text,
+        poster_url=parsed.poster_url,
+        screenshot_path=parsed.screenshot_path,
+        format_filter_labels=[
+            ff.label for ff in (parsed.format_filters_present or [])
+        ],
+        theaters=extracted,
+    )
+    refined = classify(snapshot, citywalk_anchor=citywalk_anchor)
+    tags = ",".join(sorted(wanted))
+    return refined.model_copy(
+        update={
+            "schema_evidence": [
+                *prior_evidence,
+                f"format_filter={tags}",
+                *refined.schema_evidence,
+            ],
+        }
+    )
 
 
 def prefer_stronger_parsed(
