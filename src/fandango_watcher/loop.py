@@ -1040,6 +1040,7 @@ def run_watch(
                                 cfg,
                                 client=direct_api_client,
                                 calendar_dates=shared_calendar_dates,
+                                release_date_text=prev.last_release_date_text,
                             )
                             parsed = direct_result.parsed
                             direct_meta = direct_result.meta
@@ -1095,6 +1096,8 @@ def run_watch(
                                     browser_cfg=cfg.browser,
                                     citywalk_anchor=cfg.theater.fandango_theater_anchor,
                                     screenshot_dir=screenshot_dir,
+                                    cfg=cfg,
+                                    release_date_text=prev.last_release_date_text,
                                 )
                                 tick_had_successful_crawl = True
                             except Exception as browser_error:  # noqa: BLE001

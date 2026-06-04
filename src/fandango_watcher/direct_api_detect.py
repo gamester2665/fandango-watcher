@@ -19,6 +19,11 @@ from .fandango_api import (
     get_available_formats,
     parse_showtime_records,
 )
+from .showtime_dates import (
+    merge_scan_dates,
+    priority_showtime_dates,
+    target_uses_any_format_for_disclosed,
+)
 from .models import (
     FormatFilter,
     FormatSection,
@@ -100,6 +105,7 @@ def _record_matches_target(
     movie_title: str | None,
     wanted_formats: set[str],
     require_buyable: bool = True,
+    match_any_format: bool = False,
 ) -> bool:
     if require_buyable and not record.is_buyable:
         return False
@@ -109,7 +115,7 @@ def _record_matches_target(
         title = (record.movie_title or "").lower()
         if movie_title not in title and title not in movie_title:
             return False
-    if wanted_formats:
+    if wanted_formats and not match_any_format:
         raw = set(record.format_names)
         norm = {_format_value(value) for value in record.normalized_formats}
         if not raw.intersection(wanted_formats) and not norm.intersection(wanted_formats):
@@ -302,6 +308,7 @@ def detect_target_direct_api(
     *,
     client: FandangoApiClient | None = None,
     calendar_dates: list[str] | None = None,
+    release_date_text: str | None = None,
 ) -> DirectApiDetectionResult:
     owns_client = client is None
     api = client or FandangoApiClient(
@@ -312,11 +319,21 @@ def detect_target_direct_api(
     )
     try:
         dates = calendar_dates if calendar_dates is not None else api.calendar_dates()
-        scan_dates = dates[: cfg.direct_api.max_dates_per_tick]
+        priority = priority_showtime_dates(
+            target,
+            cfg,
+            release_date_text=release_date_text,
+        )
+        scan_dates = merge_scan_dates(
+            dates,
+            priority,
+            max_dates=cfg.direct_api.max_dates_per_tick,
+        )
         inspected_dates: list[str] = []
         meta = DirectApiDetectionMeta()
         movie_id, movie_title = _movie_matchers(target, cfg)
         wanted_formats = _wanted_formats(target, cfg)
+        match_any_format = target_uses_any_format_for_disclosed(target)
         matches: list[FandangoShowtimeRecord] = []
         visible_matches: list[FandangoShowtimeRecord] = []
         all_records: list[FandangoShowtimeRecord] = []
@@ -344,6 +361,7 @@ def detect_target_direct_api(
                     movie_title=movie_title,
                     wanted_formats=wanted_formats,
                     require_buyable=False,
+                    match_any_format=match_any_format,
                 )
             ]
             date_matches = [

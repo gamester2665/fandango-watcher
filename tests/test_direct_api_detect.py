@@ -114,6 +114,74 @@ def test_direct_api_adapter_returns_showtimes_disclosed_for_visible_non_buyable_
     assert result.parsed.citywalk_showtime_count >= 1
 
 
+def test_direct_api_scans_release_date_outside_calendar_prefix() -> None:
+    cfg = _cfg()
+    cfg.movies[0].fandango_movie_id = 241283
+    cfg.movies[0].title = "The Odyssey (2026)"
+    cfg.movies[0].release_date = "2026-07-17"
+    cfg.targets[0].name = "odyssey-overview"
+    cfg.targets[0].url = (
+        "https://www.fandango.com/the-odyssey-2026-241283/movie-overview"
+    )
+    cfg.direct_api.max_dates_per_tick = 2
+
+    class _OdysseyClient(_FakeClient):
+        def get_json(self, url: str) -> dict[str, Any]:
+            theater = _fixture("showtimes_citywalk_mixed.json")["viewModel"]["theater"]
+            if url.endswith("/2026-07-17"):
+                return {
+                    "viewModel": {
+                        "date": "2026-07-17",
+                        "formats": ["STANDARD"],
+                        "theater": theater,
+                        "movies": [
+                            {
+                                "id": 241283,
+                                "title": "The Odyssey (2026)",
+                                "variants": [
+                                    {
+                                        "filmFormatHeader": "Standard",
+                                        "amenityGroups": [
+                                            {
+                                                "showtimes": [
+                                                    {
+                                                        "date": "7:00p",
+                                                        "expired": True,
+                                                        "type": "available",
+                                                        "ticketingJumpPageURL": "https://tickets.fandango.com/odyssey",
+                                                    }
+                                                ]
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            return {
+                "viewModel": {
+                    "date": "2026-06-01",
+                    "formats": [],
+                    "theater": theater,
+                    "movies": [],
+                }
+            }
+
+    result = detect_target_direct_api(
+        cfg.targets[0],
+        cfg,
+        client=_OdysseyClient(),  # type: ignore[arg-type]
+        calendar_dates=[f"2026-06-{day:02d}" for day in range(1, 31)],
+        release_date_text="Opens Jul 17",
+    )
+
+    assert "2026-07-17" in result.meta.inspected_dates
+    assert result.parsed.release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+    assert result.parsed.showtime_count >= 1
+    assert result.parsed.buyable_showtime_count == 0
+
+
 def test_direct_api_adapter_returns_not_on_sale_when_movie_filter_misses() -> None:
     cfg = _cfg()
     cfg.movies[0].title = "Not In Fixture"

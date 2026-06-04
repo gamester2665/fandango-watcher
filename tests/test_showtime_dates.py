@@ -1,0 +1,107 @@
+"""Tests for release-date scan helpers."""
+
+from __future__ import annotations
+
+from fandango_watcher.config import (
+    DirectApiConfig,
+    FormatsConfig,
+    MovieConfig,
+    NotifyConfig,
+    PollConfig,
+    PurchaseConfig,
+    TargetConfig,
+    TheaterConfig,
+    WatcherConfig,
+)
+from fandango_watcher.showtime_dates import (
+    effective_crawl_url,
+    merge_scan_dates,
+    parse_release_date_iso,
+    priority_showtime_dates,
+    target_uses_any_format_for_disclosed,
+)
+
+
+def test_parse_release_date_iso_opens_month_day() -> None:
+    assert parse_release_date_iso("Opens Jul 17") == "2026-07-17"
+
+
+def test_merge_scan_dates_puts_release_date_first() -> None:
+    calendar = [f"2026-06-{day:02d}" for day in range(1, 31)]
+    merged = merge_scan_dates(calendar, ["2026-07-17"], max_dates=5)
+    assert merged[0] == "2026-07-17"
+    assert "2026-07-17" in merged
+    assert len(merged) == 5
+
+
+def test_priority_showtime_dates_from_movie_and_text() -> None:
+    cfg = WatcherConfig(
+        targets=[
+            TargetConfig(
+                name="odyssey-overview",
+                url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview",
+            )
+        ],
+        theater=TheaterConfig(display_name="CW", fandango_theater_anchor="CW"),
+        formats=FormatsConfig(require=[], include=[]),
+        poll=PollConfig(min_seconds=30, max_seconds=30),
+        purchase=PurchaseConfig(enabled=False),
+        notify=NotifyConfig(channels=[], on_events=[]),
+        movies=[
+            MovieConfig(
+                key="odyssey",
+                title="The Odyssey (2026)",
+                release_date="2026-07-17",
+                fandango_targets=["odyssey-overview"],
+            )
+        ],
+    )
+    dates = priority_showtime_dates(
+        cfg.targets[0],
+        cfg,
+        release_date_text="Opens Jul 17",
+    )
+    assert dates == ["2026-07-17"]
+
+
+def test_effective_crawl_url_appends_opening_date() -> None:
+    cfg = WatcherConfig(
+        targets=[
+            TargetConfig(
+                name="odyssey-overview",
+                url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview",
+            )
+        ],
+        theater=TheaterConfig(display_name="CW", fandango_theater_anchor="CW"),
+        formats=FormatsConfig(require=[], include=[]),
+        poll=PollConfig(min_seconds=30, max_seconds=30),
+        purchase=PurchaseConfig(enabled=False),
+        notify=NotifyConfig(channels=[], on_events=[]),
+        movies=[
+            MovieConfig(
+                key="odyssey",
+                title="The Odyssey (2026)",
+                release_date="2026-07-17",
+                fandango_targets=["odyssey-overview"],
+            )
+        ],
+    )
+    url = effective_crawl_url(
+        cfg.targets[0],
+        cfg,
+        release_date_text="Opens Jul 17",
+    )
+    assert "date=2026-07-17" in url
+
+
+def test_target_uses_any_format_for_disclosed_overview_only() -> None:
+    overview = TargetConfig(
+        name="odyssey-overview",
+        url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview",
+    )
+    imax = TargetConfig(
+        name="odyssey-imax-70mm",
+        url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview?format=IMAX%2070MM",
+    )
+    assert target_uses_any_format_for_disclosed(overview) is True
+    assert target_uses_any_format_for_disclosed(imax) is False

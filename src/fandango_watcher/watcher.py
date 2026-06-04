@@ -28,7 +28,8 @@ from typing import Any
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
-from .config import BrowserConfig, TargetConfig
+from .config import BrowserConfig, TargetConfig, WatcherConfig
+from .showtime_dates import effective_crawl_url
 from .detect import (
     ExtractedFormatSection,
     ExtractedShowtime,
@@ -222,10 +223,17 @@ def crawl_open_page(
     citywalk_anchor: str,
     screenshot_dir: Path | None,
     extra_wait_ms: int = 2500,
+    cfg: WatcherConfig | None = None,
+    release_date_text: str | None = None,
 ) -> ParsedPageData:
     """Navigate ``page`` to ``target`` and return classified data (no browser launch)."""
+    crawl_url = (
+        effective_crawl_url(target, cfg, release_date_text=release_date_text)
+        if cfg is not None
+        else target.url
+    )
     page.goto(
-        target.url,
+        crawl_url,
         wait_until=target.wait_until,
         timeout=target.timeout_ms,
     )
@@ -240,7 +248,7 @@ def crawl_open_page(
         page.screenshot(path=str(screenshot_path), full_page=True)
 
     snapshot = _build_snapshot(
-        page=page, url=target.url, screenshot_path=screenshot_path
+        page=page, url=crawl_url, screenshot_path=screenshot_path
     )
     parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
     if (
@@ -254,7 +262,7 @@ def crawl_open_page(
         )
         page.wait_for_timeout(4000)
         snapshot = _build_snapshot(
-            page=page, url=target.url, screenshot_path=screenshot_path
+            page=page, url=crawl_url, screenshot_path=screenshot_path
         )
         parsed = classify(snapshot, citywalk_anchor=citywalk_anchor)
     return parsed
@@ -326,6 +334,8 @@ def crawl_target(
     citywalk_anchor: str,
     screenshot_dir: Path | None = None,
     extra_wait_ms: int = 2500,
+    cfg: WatcherConfig | None = None,
+    release_date_text: str | None = None,
 ) -> ParsedPageData:
     """Crawl one Fandango target and return a validated ``ParsedPageData``.
 
@@ -351,6 +361,8 @@ def crawl_target(
                 citywalk_anchor=citywalk_anchor,
                 screenshot_dir=screenshot_dir,
                 extra_wait_ms=extra_wait_ms,
+                cfg=cfg,
+                release_date_text=release_date_text,
             )
         finally:
             if trace_dir is not None:
