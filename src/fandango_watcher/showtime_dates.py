@@ -172,6 +172,33 @@ def merge_scan_dates(
     return ordered
 
 
+def should_browser_confirm_overview(
+    target: TargetConfig,
+    cfg: WatcherConfig,
+    parsed: object,
+    *,
+    release_date_text: str | None = None,
+) -> bool:
+    """Overview pages list regional showtimes the theater API may not return yet."""
+    from .models import ReleaseSchema
+
+    if not target_uses_any_format_for_disclosed(target):
+        return False
+    schema = getattr(parsed, "release_schema", None)
+    schema_value = schema.value if hasattr(schema, "value") else schema
+    if schema_value != ReleaseSchema.NOT_ON_SALE.value:
+        return False
+    if (getattr(parsed, "showtime_count", None) or 0) > 0:
+        return False
+    return bool(
+        priority_showtime_dates(
+            target,
+            cfg,
+            release_date_text=release_date_text,
+        )
+    )
+
+
 def target_uses_any_format_for_disclosed(target: TargetConfig) -> bool:
     """Overview movie pages list all formats; only format-specific URLs are filtered."""
     if "format=" in target.url.lower():

@@ -1,8 +1,19 @@
 () => {
   const text = (el) => (el && el.textContent ? el.textContent.trim() : "");
+  const isShowtimeLabel = (label) =>
+    /\d{1,2}:\d{2}(\s*[ap]\.?m?\.?|[ap])/i.test(label || "");
+
   const isShowtimeBuyable = (el, label) => {
     if (!el) return false;
     if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+    if (
+      el.classList &&
+      (el.classList.contains("showtime-btn--restricted") ||
+        el.classList.contains("showtime-btn--sold-out") ||
+        el.classList.contains("showtime-btn--unavailable"))
+    ) {
+      return false;
+    }
     const labelText = label || text(el);
     const hint = (
       labelText +
@@ -29,6 +40,78 @@
     }
     return true;
   };
+
+  const collectShowtimeElements = (root) => {
+    if (!root) return [];
+    const selector = [
+      "span.showtime-btn",
+      "button.showtime-btn",
+      "a.showtime-btn",
+      'a[href*="ticketing"]',
+      'a[href*="buy"]',
+      'a[class*="showtime" i]',
+      'button[class*="showtime" i]',
+      '[data-testid*="showtime"]',
+    ].join(", ");
+    return Array.from(root.querySelectorAll(selector));
+  };
+
+  const showtimesFromElements = (elements) => {
+    const showtimes = [];
+    elements.forEach((el) => {
+      const label = text(el);
+      if (!label || !isShowtimeLabel(label)) return;
+      showtimes.push({
+        label,
+        ticket_url: el.href || el.getAttribute("href") || null,
+        is_buyable: isShowtimeBuyable(el, label),
+        date_label: null,
+      });
+    });
+    return showtimes;
+  };
+
+  const showtimeCountForTheaters = (theaterList) =>
+    theaterList.reduce(
+      (sum, theater) =>
+        sum +
+        theater.format_sections.reduce(
+          (sectionSum, section) => sectionSum + section.showtimes.length,
+          0
+        ),
+      0
+    );
+
+  const extractSharedShowtimesTheaters = () => {
+    const shared = [];
+    document
+      .querySelectorAll(
+        "h2.shared-theater-header__name, h3.shared-theater-header__name"
+      )
+      .forEach((heading) => {
+        const name = text(heading);
+        if (!name) return;
+        const container =
+          heading.closest(".shared-showtimes__container") ||
+          heading.closest('[class*="shared-showtimes"]');
+        if (!container) return;
+        const showtimes = showtimesFromElements(collectShowtimeElements(container));
+        shared.push({
+          name,
+          address: null,
+          distance_miles: null,
+          format_sections: [
+            {
+              label: "Standard",
+              attributes: [],
+              showtimes,
+            },
+          ],
+        });
+      });
+    return shared;
+  };
+
   const bodyText = (document.body && document.body.innerText) || "";
   const metaContent = (selector) => {
     const el = document.querySelector(selector);
@@ -160,23 +243,9 @@
           '[class*="format-section" i], [class*="FormatSection"], [class*="showtimes-section" i]'
         ) || hdr.parentElement;
 
-      const showtimes = [];
-      if (container) {
-        const showtimeEls = container.querySelectorAll(
-          'a[href*="ticketing"], a[href*="buy"], a[class*="showtime" i], button[class*="showtime" i], [data-testid*="showtime"]'
-        );
-        showtimeEls.forEach((el) => {
-          const label = text(el);
-          if (!label) return;
-          if (!/\d{1,2}:\d{2}/.test(label)) return;
-          showtimes.push({
-            label,
-            ticket_url: el.href || null,
-            is_buyable: isShowtimeBuyable(el, label),
-            date_label: null,
-          });
-        });
-      }
+      const showtimes = container
+        ? showtimesFromElements(collectShowtimeElements(container))
+        : [];
 
       sections.push({
         label,
@@ -194,49 +263,18 @@
   });
 
   // --- Fandango "shared showtimes" layout (2025+) -------------------------
-  // Many movie-times pages use h2.shared-theater-header__name inside
-  // .shared-showtimes__container. Those pages often have **no** elements
-  // matching theater-card data-testids, so the legacy loop above yields
-  // zero theaters and we mis-classify ticketed pages as not_on_sale.
-  if (theaters.length === 0) {
-    document
-      .querySelectorAll(
-        'h2.shared-theater-header__name, h3.shared-theater-header__name'
-      )
-      .forEach((heading) => {
-        const name = text(heading);
-        if (!name) return;
-        const container =
-          heading.closest('.shared-showtimes__container') ||
-          heading.closest('[class*="shared-showtimes"]');
-        if (!container) return;
-        const showtimes = [];
-        container.querySelectorAll('a').forEach((el) => {
-          const lbl = text(el);
-          if (!lbl) return;
-          if (!/\d{1,2}:\d{2}/.test(lbl)) return;
-          showtimes.push({
-            label: lbl,
-            ticket_url: el.href || null,
-            is_buyable: isShowtimeBuyable(el, lbl),
-            date_label: null,
-          });
-        });
-        // One theater with zero parsed times still yields partial_release
-        // (theater_count > 0) vs not_on_sale; prefer real showtime rows when present.
-        theaters.push({
-          name,
-          address: null,
-          distance_miles: null,
-          format_sections: [
-            {
-              label: 'Standard',
-              attributes: [],
-              showtimes,
-            },
-          ],
-        });
-      });
+  // Movie-overview pages render span.showtime-btn (e.g. "7:00p") inside
+  // .shared-showtimes__container. Legacy theater-card heuristics can match
+  // wrapper nodes with zero parsed times; prefer shared extraction when it
+  // finds more showtimes.
+  const sharedTheaters = extractSharedShowtimesTheaters();
+  if (sharedTheaters.length > 0) {
+    const legacyCount = showtimeCountForTheaters(theaters);
+    const sharedCount = showtimeCountForTheaters(sharedTheaters);
+    if (sharedCount > legacyCount) {
+      theaters.length = 0;
+      sharedTheaters.forEach((theater) => theaters.push(theater));
+    }
   }
 
   return {

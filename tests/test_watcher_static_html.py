@@ -98,3 +98,71 @@ def test_crawl_target_local_static_theater_card(tmp_path: Path) -> None:
         "https://images.fandango.com/ImageRenderer/200/0/redesign/static/img/"
         "default_poster--dark-mode.png/0/images/masterrepository/Fandango/241283/poster.jpg"
     )
+
+
+_SHARED_SHOWTIMES_PAGE = """<!DOCTYPE html>
+<html><body>
+<div class="shared-showtimes__container">
+  <h2 class="shared-theater-header__name">AMC Universal CityWalk 19 + IMAX</h2>
+  <ul class="showtimes-btn-list">
+    <li class="showtimes-btn-list__item">
+      <span class="btn showtime-btn showtime-btn--restricted">7:00p</span>
+    </li>
+    <li class="showtimes-btn-list__item">
+      <span class="btn showtime-btn showtime-btn--restricted">10:30p</span>
+    </li>
+  </ul>
+</div>
+<div data-testid="theater-card">
+  <h3 class="theater-name">AMC Universal CityWalk 19 + IMAX</h3>
+  <div class="format-section"><div class="format-header">IMAX 70MM</div></div>
+</div>
+</body></html>
+"""
+
+
+class _SharedShowtimesHandler(BaseHTTPRequestHandler):
+    body: ClassVar[bytes] = _SHARED_SHOWTIMES_PAGE.encode("utf-8")
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def log_message(self, fmt: str, *args: object) -> None:  # noqa: A002
+        pass
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(300, method="thread")
+def test_crawl_target_shared_showtime_spans(tmp_path: Path) -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _SharedShowtimesHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        url = f"http://{host}:{port}/movie-overview"
+        target = TargetConfig(name="shared-fixture", url=url)
+        browser_cfg = BrowserConfig(
+            headless=True,
+            user_data_dir=str(tmp_path / "pw-profile-shared"),
+            viewport=ViewportConfig(),
+        )
+        result = crawl_target(
+            target,
+            browser_cfg=browser_cfg,
+            citywalk_anchor="AMC Universal CityWalk",
+            screenshot_dir=None,
+            extra_wait_ms=200,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5.0)
+
+    assert result.release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+    assert result.showtime_count == 2
+    assert result.buyable_showtime_count == 0
+    assert result.citywalk_showtime_count == 2

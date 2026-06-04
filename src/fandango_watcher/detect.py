@@ -383,3 +383,43 @@ def classify(
     if release_schema is ReleaseSchema.PARTIAL_RELEASE:
         return PartialReleasePageData.model_validate(payload)
     return FullReleasePageData.model_validate(payload)
+
+
+_SCHEMA_RANK: dict[str, int] = {
+    ReleaseSchema.NOT_ON_SALE.value: 1,
+    ReleaseSchema.SHOWTIMES_DISCLOSED.value: 2,
+    ReleaseSchema.PARTIAL_RELEASE.value: 3,
+    ReleaseSchema.FULL_RELEASE.value: 4,
+}
+
+
+def _schema_rank_value(schema: ReleaseSchema | str) -> int:
+    value = schema.value if isinstance(schema, ReleaseSchema) else str(schema)
+    return _SCHEMA_RANK.get(value, 0)
+
+
+def prefer_stronger_parsed(
+    primary: ParsedPageData,
+    secondary: ParsedPageData,
+) -> ParsedPageData:
+    """Pick the parse with stronger on-sale evidence (direct API vs browser)."""
+    primary_rank = _schema_rank_value(primary.release_schema)
+    secondary_rank = _schema_rank_value(secondary.release_schema)
+    primary_st = primary.showtime_count or 0
+    secondary_st = secondary.showtime_count or 0
+    pick_secondary = secondary_rank > primary_rank or (
+        secondary_rank == primary_rank and secondary_st > primary_st
+    )
+    chosen = secondary if pick_secondary else primary
+    other = primary if pick_secondary else secondary
+    evidence = list(getattr(chosen, "schema_evidence", []) or [])
+    for item in getattr(other, "schema_evidence", []) or []:
+        tagged = f"alt_parse:{item}"
+        if tagged not in evidence:
+            evidence.append(tagged)
+    evidence.append(
+        "browser_overview_confirm"
+        if pick_secondary
+        else "browser_overview_confirm_kept_direct"
+    )
+    return chosen.model_copy(update={"schema_evidence": evidence})

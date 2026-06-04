@@ -13,11 +13,14 @@ from fandango_watcher.config import (
     TheaterConfig,
     WatcherConfig,
 )
+from fandango_watcher.detect import prefer_stronger_parsed
+from fandango_watcher.models import NotOnSalePageData, ReleaseSchema, ShowtimesDisclosedPageData
 from fandango_watcher.showtime_dates import (
     effective_crawl_url,
     merge_scan_dates,
     parse_release_date_iso,
     priority_showtime_dates,
+    should_browser_confirm_overview,
     target_uses_any_format_for_disclosed,
 )
 
@@ -105,3 +108,65 @@ def test_target_uses_any_format_for_disclosed_overview_only() -> None:
     )
     assert target_uses_any_format_for_disclosed(overview) is True
     assert target_uses_any_format_for_disclosed(imax) is False
+
+
+def test_should_browser_confirm_overview_when_opening_day_known() -> None:
+    cfg = WatcherConfig(
+        targets=[
+            TargetConfig(
+                name="odyssey-overview",
+                url="https://www.fandango.com/the-odyssey-2026-241283/movie-overview",
+            )
+        ],
+        theater=TheaterConfig(display_name="CW", fandango_theater_anchor="CW"),
+        formats=FormatsConfig(require=[], include=[]),
+        poll=PollConfig(min_seconds=30, max_seconds=30),
+        purchase=PurchaseConfig(enabled=False),
+        notify=NotifyConfig(channels=[], on_events=[]),
+        movies=[
+            MovieConfig(
+                key="odyssey",
+                title="The Odyssey (2026)",
+                fandango_movie_id=241283,
+                release_date="2026-07-17",
+                fandango_targets=["odyssey-overview"],
+            )
+        ],
+    )
+    target = cfg.targets[0]
+    parsed = NotOnSalePageData(
+        url=target.url,
+        page_title="The Odyssey (2026)",
+        theater_count=0,
+        showtime_count=0,
+    )
+    assert (
+        should_browser_confirm_overview(
+            target,
+            cfg,
+            parsed,
+            release_date_text="Opens Jul 17",
+        )
+        is True
+    )
+
+
+def test_prefer_stronger_parsed_promotes_disclosed() -> None:
+    api = NotOnSalePageData(
+        url="https://example.com/movie-overview",
+        page_title="Example",
+        theater_count=0,
+        showtime_count=0,
+    )
+    browser = ShowtimesDisclosedPageData(
+        url="https://example.com/movie-overview",
+        page_title="Example",
+        showtime_count=12,
+        buyable_showtime_count=0,
+        theater_count=3,
+        buyable_theater_count=0,
+    )
+    merged = prefer_stronger_parsed(api, browser)
+    assert merged.release_schema == ReleaseSchema.SHOWTIMES_DISCLOSED
+    assert merged.showtime_count == 12
+    assert any("browser_overview_confirm" in e for e in merged.schema_evidence)

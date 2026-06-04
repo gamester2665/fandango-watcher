@@ -47,11 +47,13 @@ from .config import (
     plain_secret,
 )
 from .dashboard import DashboardData, DashboardPaths
+from .detect import prefer_stronger_parsed
 from .direct_api_detect import (
     DirectApiDetectionMeta,
     _wanted_formats,
     detect_target_direct_api,
 )
+from .showtime_dates import should_browser_confirm_overview
 from .fandango_api import FandangoApiClient
 from .fandango_api import FandangoApiError
 from .healthz import HealthzContext, Heartbeat, start_healthz_server
@@ -1044,6 +1046,38 @@ def run_watch(
                             )
                             parsed = direct_result.parsed
                             direct_meta = direct_result.meta
+                            if should_browser_confirm_overview(
+                                target,
+                                cfg,
+                                parsed,
+                                release_date_text=prev.last_release_date_text,
+                            ):
+                                logger.info(
+                                    "browser overview confirm target=%s "
+                                    "(direct API not_on_sale, opening day known)",
+                                    target.name,
+                                )
+                                browser_parsed = crawl_target(
+                                    target,
+                                    browser_cfg=cfg.browser,
+                                    citywalk_anchor=cfg.theater.fandango_theater_anchor,
+                                    screenshot_dir=screenshot_dir,
+                                    cfg=cfg,
+                                    release_date_text=prev.last_release_date_text,
+                                )
+                                parsed = prefer_stronger_parsed(
+                                    parsed,
+                                    browser_parsed,
+                                )
+                                direct_meta = direct_meta.model_copy(
+                                    update={
+                                        "used_browser_fallback": True,
+                                        "drift_warning": (
+                                            direct_meta.drift_warning
+                                            or "overview browser confirm"
+                                        ),
+                                    }
+                                )
                             tick_had_successful_crawl = True
                         except Exception as e:  # noqa: BLE001
                             if not cfg.direct_api.fallback_to_browser:
