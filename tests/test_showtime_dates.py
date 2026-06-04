@@ -151,7 +151,7 @@ def test_should_browser_confirm_overview_throttled_far_from_release() -> None:
             MovieConfig(
                 key="odyssey",
                 title="The Odyssey (2026)",
-                release_date="2099-01-01",
+                release_date="2099-06-01",
                 fandango_targets=["odyssey-overview"],
             )
         ],

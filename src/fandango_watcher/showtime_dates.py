@@ -21,7 +21,8 @@ _MONTH_DAY_YEAR_RE = re.compile(
     r"\b(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})\b"
 )
 _TITLE_YEAR_RE = re.compile(r"\((\d{4})\)\s*$")
-OVERVIEW_BROWSER_CONFIRM_DAYS_BEFORE = 14
+# Blockbusters often list regional showtimes months before CityWalk API rows appear.
+OVERVIEW_BROWSER_CONFIRM_DAYS_BEFORE = 60
 OVERVIEW_BROWSER_CONFIRM_DAYS_AFTER = 7
 
 _MONTHS = {
